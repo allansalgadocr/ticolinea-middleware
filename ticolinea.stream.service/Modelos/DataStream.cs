@@ -8,6 +8,8 @@
         public string Categoria { get; set; }
         public string Fuente { get; set; }
         public int Ejecutando { get; set; }
+        public int Habilitado { get; set; } = 0;
+        public int Iniciado { get; set; } = 0;
         public DataStream()
         {
             Nombre = "";

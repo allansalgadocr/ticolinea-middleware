@@ -57,6 +57,7 @@ namespace ticolinea.stream.service
 
         }
 
+
         public static void DetenerStreamsSinUso()
         {
             List<StreamDb> streams = new();
@@ -145,6 +146,27 @@ namespace ticolinea.stream.service
             return null;
         }
 
+        public static void ReiniciarStream(StreamDb stream)
+        {
+            DetenerProceso(stream.ProcesoId);
+            IniciarStream(stream);
+        }
+
+        public static void DetenerProceso(int procesoId)
+        {
+            try
+            {
+                if (procesoId > -1)
+                {
+                    var proceso = ObtenerProcesoEjecutando(procesoId);
+                    if (proceso != null)
+                        proceso.Kill();
+                }
+
+            }
+            catch (Exception ex) { }
+        }
+
         public static void IniciarStream(StreamDb stream)
         {
             string ubicacionStreams = Constantes.Global.STREAMS_FOLDER;
@@ -153,19 +175,19 @@ namespace ticolinea.stream.service
 
             //if (stream.Transcode == 1)
             //{
-                //string transcodeStreamCmd = "-y -nostdin -loglevel quiet -err_detect ignore_err -i \"[INPUT]\" -codec:v libx264 -r [FRAMERATE] -pix_fmt yuv420p -profile:v baseline -level 3 -b:v [BITRATE] -s [RESOLUCION] -codec:a aac -strict experimental -ac 2 -b:a 128k -movflags faststart -flags -global_header -hls_allow_cache 0 -sc_threshold 0 -hls_flags delete_segments -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_segment_filename [UBICACIONSTREAM][STREAMID]_%d.ts [UBICACIONSTREAM][STREAMID]_.m3u8";
-                /*string transcodeStreamCmd = "-y -nostdin -loglevel quiet -err_detect ignore_err -i \"[INPUT]\" -pix_fmt yuv420p -vsync 1 -vcodec libx264 -r 23.976 -threads 0 -b:v: 1024k -bufsize 1216k -maxrate 1280k -preset medium -profile:v high -tune film -g 48 -x264opts no-scenecut -pass 1 -acodec aac -b:a 128k -ac 2 -ar 48000 -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_segment_filename [UBICACIONSTREAM][STREAMID]_%d.ts [UBICACIONSTREAM][STREAMID]_.m3u8";
-                transcodeStreamCmd = transcodeStreamCmd.Replace("[INPUT]", stream.Fuente)
-                                    .Replace("[FRAMERATE]", stream.Framerate == 0 ? "29.97" : stream.Framerate.ToString())
-                                    .Replace("[BITRATE]", string.IsNullOrWhiteSpace(stream.Bitrate) ? "500K" : stream.Bitrate)
-                                    .Replace("[RESOLUCION]", string.IsNullOrWhiteSpace(stream.Resolucion) ? "1280:720" : stream.Resolucion)
-                                    .Replace("[INTERVALO]", stream.Intervalo.ToString())
-                                    .Replace("[UBICACIONSTREAM]", ubicacionStreams)
-                                    .Replace("[SEGMENTOS]", stream.Segmentos.ToString())
-                                    .Replace("[STREAMID]", stream.StreamId.ToString());
+            //string transcodeStreamCmd = "-y -nostdin -loglevel quiet -err_detect ignore_err -i \"[INPUT]\" -codec:v libx264 -r [FRAMERATE] -pix_fmt yuv420p -profile:v baseline -level 3 -b:v [BITRATE] -s [RESOLUCION] -codec:a aac -strict experimental -ac 2 -b:a 128k -movflags faststart -flags -global_header -hls_allow_cache 0 -sc_threshold 0 -hls_flags delete_segments -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_segment_filename [UBICACIONSTREAM][STREAMID]_%d.ts [UBICACIONSTREAM][STREAMID]_.m3u8";
+            /*string transcodeStreamCmd = "-y -nostdin -loglevel quiet -err_detect ignore_err -i \"[INPUT]\" -pix_fmt yuv420p -vsync 1 -vcodec libx264 -r 23.976 -threads 0 -b:v: 1024k -bufsize 1216k -maxrate 1280k -preset medium -profile:v high -tune film -g 48 -x264opts no-scenecut -pass 1 -acodec aac -b:a 128k -ac 2 -ar 48000 -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_segment_filename [UBICACIONSTREAM][STREAMID]_%d.ts [UBICACIONSTREAM][STREAMID]_.m3u8";
+            transcodeStreamCmd = transcodeStreamCmd.Replace("[INPUT]", stream.Fuente)
+                                .Replace("[FRAMERATE]", stream.Framerate == 0 ? "29.97" : stream.Framerate.ToString())
+                                .Replace("[BITRATE]", string.IsNullOrWhiteSpace(stream.Bitrate) ? "500K" : stream.Bitrate)
+                                .Replace("[RESOLUCION]", string.IsNullOrWhiteSpace(stream.Resolucion) ? "1280:720" : stream.Resolucion)
+                                .Replace("[INTERVALO]", stream.Intervalo.ToString())
+                                .Replace("[UBICACIONSTREAM]", ubicacionStreams)
+                                .Replace("[SEGMENTOS]", stream.Segmentos.ToString())
+                                .Replace("[STREAMID]", stream.StreamId.ToString());
 
-                process.StartInfo.Arguments = transcodeStreamCmd;
-                process.Start();*/
+            process.StartInfo.Arguments = transcodeStreamCmd;
+            process.Start();*/
             //}
 
             string pixFmt = "";
@@ -206,16 +228,32 @@ namespace ticolinea.stream.service
             //ObtenerInfoCodec(stream.StreamId, stream.Fuente);
         }
 
-        public static void ActualizarCanalEstado(int streamId, bool estaCaido)
+        public static void ActualizarCanalEstado(int streamId, bool estaCaido, int procesoId)
         {
-            using (Mariadb mariadb=new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
             {
                 var cmd = mariadb.Conexion.CreateCommand();
                 if (estaCaido)
-                    cmd.CommandText = "UPDATE streams_info SET ejecutando=0,proceso_id=-1 " +
+                {
+                    if (procesoId > -1)
+                    {
+                        try
+                        {
+                            var proceso = ObtenerProcesoEjecutando(procesoId);
+                            if (proceso != null)
+                                proceso.Kill();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine(ex);
+                        }
+                    }
+
+                    cmd.CommandText = "UPDATE streams_info SET ejecutando=0,proceso_id=-1,reportado_caido=1 " +
                                "WHERE stream_id=@id";
+                }
                 else
-                    cmd.CommandText = "UPDATE streams_info SET ejecutando=1 " +
+                    cmd.CommandText = "UPDATE streams_info SET ejecutando=1,reportado_caido=0 " +
                               "WHERE stream_id=@id";
 
                 cmd.Parameters.AddWithValue("@id", streamId);
@@ -236,8 +274,10 @@ namespace ticolinea.stream.service
                 using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
                 {
                     var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "SELECT fuente_stream, id, nombre_stream FROM streams_tl " +
-                                                              "WHERE habilitado = 1 AND omitir_verificacion=0 and tipo=1;";
+                    cmd.CommandText = "SELECT fuente_stream, id, nombre_stream,proceso_id FROM streams_tl a " +
+                                        "inner join streams_info b " +
+                                        "on a.id = b.stream_id " +
+                                        "WHERE habilitado = 1 AND iniciado = 1 AND omitir_verificacion = 0 and tipo = 1; ";
 
                     using (var reader = cmd.ExecuteReader())
                         while (reader.Read())
@@ -246,17 +286,18 @@ namespace ticolinea.stream.service
                             {
                                 Fuente = reader.GetString(0),
                                 StreamId = reader.GetInt32(1),
-                                TranscodeAudio = reader.GetString(2)
+                                TranscodeAudio = reader.GetString(2),
+                                ProcesoId = reader.GetInt32(3)
                             });
                         }
                 }
-                    
+
 
                 foreach (StreamDb stream in streams)
                 {
                     try
                     {
-                        var args = $"-i {stream.Fuente} -analyzeduration 512000 -probesize 512000 -v quiet -print_format json -show_streams -show_format";
+                        var args = $"-i {stream.Fuente} -analyzeduration 1000000 -probesize 1000000 -v quiet -print_format json -show_streams -show_format";
                         Process probe = new();
                         probe.StartInfo.FileName = Constantes.Global.FFPROBE_PATH;
                         probe.StartInfo.Arguments = args;
@@ -267,14 +308,15 @@ namespace ticolinea.stream.service
 
                         string output = probe.StandardOutput.ReadToEnd();
                         var probeData = Modelos.ProbeData.FromJson(output);
-
+                        bool estaCaido = false;
                         if (probeData.Streams == null)
                         {
                             streamsCaidos++;
+                            estaCaido = true;
                             sb.AppendLine($"• {stream.StreamId} - {stream.TranscodeAudio}");
                         }
 
-                        ActualizarCanalEstado(stream.StreamId, probeData.Streams == null);
+                        ActualizarCanalEstado(stream.StreamId, estaCaido, stream.ProcesoId);
                     }
                     catch (Exception ex)
                     {
@@ -295,6 +337,46 @@ namespace ticolinea.stream.service
                     using (var webClient = new WebClient())
                     {
                         retval = webClient.DownloadString(url);
+                    }
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+            }
+        }
+
+        public static void VerificarStream(StreamDb stream)
+        {
+            try
+            {
+                if (stream != null)
+                {
+                    try
+                    {
+                        var args = $"-i {stream.Fuente} -analyzeduration 1000000 -probesize 1000000 -v quiet -print_format json -show_streams -show_format";
+                        Process probe = new();
+                        probe.StartInfo.FileName = Constantes.Global.FFPROBE_PATH;
+                        probe.StartInfo.Arguments = args;
+                        probe.StartInfo.UseShellExecute = false;
+                        probe.StartInfo.RedirectStandardOutput = true;
+                        probe.StartInfo.RedirectStandardError = true;
+                        probe.Start();
+
+                        string output = probe.StandardOutput.ReadToEnd();
+                        var probeData = Modelos.ProbeData.FromJson(output);
+                        bool estaCaido = false;
+                        if (probeData.Streams == null)
+                        {
+                            estaCaido = true;
+                        }
+
+                        ActualizarCanalEstado(stream.StreamId, estaCaido, stream.ProcesoId);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("ERROR AL OBTENER INFO DE CANAL." + ex.Message);
                     }
                 }
 
@@ -351,36 +433,13 @@ namespace ticolinea.stream.service
             }
         }
 
-        public static void DetenerStream(int chnId, int procesoId, Mariadb mariadb)
-        {
-            try
-            {
-                var proc = ObtenerProcesoEjecutando(procesoId);
-                if (proc != null)
-                {
-                    proc.Kill();
-                }
-                var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "UPDATE streams_info SET proceso_id=-1 " +
-                                   "WHERE stream_id=@id";
-
-                cmd.Parameters.AddWithValue("@id", chnId);
-
-                cmd.ExecuteNonQuery();
-                cmd.Connection?.Close();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"ERROR AL DETENER STREAM.{chnId}.{ex.Message}");
-            }
-        }
 
         public static void MataConexionesSinUso()
         {
             try
             {
                 var fechaFinMaxima = DateTimeOffset.Now.AddMinutes(-25).ToUnixTimeSeconds();
-                using(Mariadb mariadb= new Mariadb(Constantes.Global.MARIADB_CONN))
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
                 {
                     var cmd = mariadb.Conexion.CreateCommand();
                     cmd.CommandText = "DELETE FROM actividad_usuario_actualmente where fecha_inicio < @fechaFinMaxima;";
