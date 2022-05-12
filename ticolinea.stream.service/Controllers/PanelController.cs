@@ -39,8 +39,8 @@ namespace ticolinea.stream.service.Controllers
                                 Categoria = reader.GetString(3),
                                 Fuente = reader.GetString(4),
                                 Ejecutando = reader.GetInt32(5),
-                                Habilitado= reader.GetInt32(6),
-                                Iniciado= reader.GetInt32(7)
+                                Habilitado = reader.GetInt32(6),
+                                Iniciado = reader.GetInt32(7)
                             });
                         }
                 }
@@ -192,8 +192,165 @@ namespace ticolinea.stream.service.Controllers
             return Ok(streams);
         }
 
+        [HttpPost("{usuario}/{password}")]
+        public IActionResult AgregarUsuario([FromBody] PanelUsuario panelUsuario, string usuario, string password)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+
+                    long fechaVencimiento = 0;
+                    int.TryParse(panelUsuario.FechaVencimiento, out int meses);
+                    if (meses > 0)
+                        fechaVencimiento = DateTimeOffset.Now.AddMonths(meses).ToUnixTimeSeconds();
+
+                    var now = DateTimeOffset.Now.ToUnixTimeSeconds();
+                    cmd.CommandText = "INSERT INTO `usuarios_ticolinea` " +
+                                      "(`usuario`,`clave`,`fecha_vencimiento`,`habilitado`,`conexiones_maximas`,`es_restreamer`,`fecha_creacion`,`creado_por`,`bouquet`) " +
+                                      "VALUES(@usuario,@clave,@fecha_vencimiento,@habilitado,1,0,@fecha_creacion,0,''); ";
+                    cmd.Parameters.AddWithValue("@usuario", panelUsuario.Usuario);
+                    cmd.Parameters.AddWithValue("@clave", panelUsuario.Clave);
+                    cmd.Parameters.AddWithValue("@fecha_vencimiento", fechaVencimiento);
+                    cmd.Parameters.AddWithValue("@habilitado", panelUsuario.Habilitado);
+                    cmd.Parameters.AddWithValue("@fecha_creacion", now);
+
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
+        [HttpPost("{usuario}/{password}/{usuarioId}")]
+        public IActionResult ActualizarUsuario([FromBody] PanelUsuario panelUsuario, string usuario, string password, int usuarioId)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+
+                    long fechaVencimiento = 0;
+                    int.TryParse(panelUsuario.FechaVencimiento, out int meses);
+                    if (meses > 0)
+                        fechaVencimiento = DateTimeOffset.Now.AddMonths(meses).ToUnixTimeSeconds();
+
+                    var now = DateTimeOffset.Now.ToUnixTimeSeconds();
+
+                    cmd.CommandText = "UPDATE `usuarios_ticolinea` " +
+                                      "SET usuario=@usuario, clave=@clave, habilitado=@habilitado, fecha_vencimiento=@fecha_vencimiento " +
+                                      "WHERE id=@id; ";
+
+                    cmd.Parameters.AddWithValue("@usuario", panelUsuario.Usuario);
+                    cmd.Parameters.AddWithValue("@clave", panelUsuario.Clave);
+                    cmd.Parameters.AddWithValue("@fecha_vencimiento", panelUsuario.FechaVencimiento);
+                    cmd.Parameters.AddWithValue("@habilitado", panelUsuario.Habilitado);
+                    cmd.Parameters.AddWithValue("@id", usuarioId);
+
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
+        [HttpGet("{usuario}/{password}")]
+        public IActionResult ObtenerUsuarios(string usuario, string password)
+        {
+            List<PanelUsuario> usuarios = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado FROM usuarios_ticolinea;";
+
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read())
+                        {
+                            usuarios.Add(new PanelUsuario
+                            {
+                                Id = reader.GetInt32(0),
+                                Usuario = reader.GetString(1),
+                                Clave = reader.GetString(2),
+                                FechaVencimiento = !reader.IsDBNull(3) ? UnixTimeStampToDateTime(reader.GetInt32(3)) : "",
+                                Habilitado = reader.GetInt32(4)
+                            });
+                        }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(usuarios);
+        }
+
+        [HttpGet("{usuario}/{password}/{usuarioId}")]
+        public IActionResult ObtenerUsuario(string usuario, string password,int usuarioId)
+        {
+            List<PanelUsuario> usuarios = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado FROM usuarios_ticolinea WHERE id=@id;";
+                    cmd.Parameters.AddWithValue("@id", usuarioId);
+
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read())
+                        {
+                            usuarios.Add(new PanelUsuario
+                            {
+                                Id = reader.GetInt32(0),
+                                Usuario = reader.GetString(1),
+                                Clave = reader.GetString(2),
+                                FechaVencimiento = !reader.IsDBNull(3) ? UnixTimeStampToDateTime(reader.GetInt32(3)) : "",
+                                Habilitado = reader.GetInt32(4)
+                            });
+                        }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(usuarios.FirstOrDefault());
+        }
+
         [HttpPost("{usuario}/{password}/{chnId}")]
-        public IActionResult ActualizarStream([FromBody] PanelStream panelStream, string usuario, string password,int chnId)
+        public IActionResult ActualizarStream([FromBody] PanelStream panelStream, string usuario, string password, int chnId)
         {
             if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
 
@@ -306,7 +463,7 @@ namespace ticolinea.stream.service.Controllers
         }
 
         [HttpGet("{usuario}/{password}/{chnId}")]
-        public IActionResult DetenerStream(string usuario, string password,int chnId)
+        public IActionResult DetenerStream(string usuario, string password, int chnId)
         {
             List<PanelCategoria> categorias = new();
 
@@ -495,6 +652,16 @@ namespace ticolinea.stream.service.Controllers
             }
 
             return Ok(categorias);
+        }
+
+        public static string UnixTimeStampToDateTime(double unixTimeStamp)
+        {
+            if (unixTimeStamp == 0) return "";
+
+            // Unix timestamp is seconds past epoch
+            DateTime dateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
+            dateTime = dateTime.AddSeconds(unixTimeStamp).ToLocalTime();
+            return dateTime.ToString("dd/MM/yyyy");
         }
     }
 }

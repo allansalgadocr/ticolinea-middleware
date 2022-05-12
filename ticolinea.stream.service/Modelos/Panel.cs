@@ -15,6 +15,15 @@
         public int Habilitado { get; set; } = 0;
     }
 
+    public class PanelUsuario
+    {
+        public int Id { get; set; }
+        public string Usuario { get; set; } = "";
+        public string Clave { get; set; } = "";
+        public string FechaVencimiento { get; set; } = "";
+        public int Habilitado { get; set; }
+    }
+
     public class PanelCategoria
     {
         public int Id { get; set; } = 0;
