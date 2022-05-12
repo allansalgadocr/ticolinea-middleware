@@ -24,6 +24,12 @@
         public int Habilitado { get; set; }
     }
 
+    public class Proveedores
+    {
+        public string Fuente { get; set; } = "";
+        public int Cantidad { get; set; } = 0;
+    }
+
     public class PanelCategoria
     {
         public int Id { get; set; } = 0;

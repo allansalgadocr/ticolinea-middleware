@@ -241,20 +241,30 @@ namespace ticolinea.stream.service.Controllers
                 {
                     var cmd = mariadb.Conexion.CreateCommand();
 
-                    long fechaVencimiento = 0;
+                    long fechaVencimiento = -1;
                     int.TryParse(panelUsuario.FechaVencimiento, out int meses);
                     if (meses > 0)
                         fechaVencimiento = DateTimeOffset.Now.AddMonths(meses).ToUnixTimeSeconds();
+                    else if (meses == 0) fechaVencimiento = 0;
 
                     var now = DateTimeOffset.Now.ToUnixTimeSeconds();
 
-                    cmd.CommandText = "UPDATE `usuarios_ticolinea` " +
-                                      "SET usuario=@usuario, clave=@clave, habilitado=@habilitado, fecha_vencimiento=@fecha_vencimiento " +
-                                      "WHERE id=@id; ";
+                    if (fechaVencimiento == -1)
+                    {
+                        cmd.CommandText = "UPDATE `usuarios_ticolinea` " +
+                                          "SET usuario=@usuario, clave=@clave, habilitado=@habilitado " +
+                                          "WHERE id=@id; ";
+                    }
+                    else
+                        cmd.CommandText = "UPDATE `usuarios_ticolinea` " +
+                                          "SET usuario=@usuario, clave=@clave, habilitado=@habilitado, fecha_vencimiento=@fecha_vencimiento " +
+                                          "WHERE id=@id; ";
 
                     cmd.Parameters.AddWithValue("@usuario", panelUsuario.Usuario);
                     cmd.Parameters.AddWithValue("@clave", panelUsuario.Clave);
-                    cmd.Parameters.AddWithValue("@fecha_vencimiento", panelUsuario.FechaVencimiento);
+                    if (fechaVencimiento > -1)
+                        cmd.Parameters.AddWithValue("@fecha_vencimiento", fechaVencimiento);
+
                     cmd.Parameters.AddWithValue("@habilitado", panelUsuario.Habilitado);
                     cmd.Parameters.AddWithValue("@id", usuarioId);
 
@@ -309,8 +319,54 @@ namespace ticolinea.stream.service.Controllers
             return Ok(usuarios);
         }
 
+        [HttpGet("{usuario}/{password}")]
+        public IActionResult ObtenerProveedores(string usuario, string password)
+        {
+            List<String> fuentes = new();
+            List<Proveedores> proveedores = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "select fuente_stream from streams_tl where habilitado=1;";
+
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read())
+                        {
+                            string host = ObtenerHost(reader.GetString(0));
+                            var proveedor = proveedores.Where(x => x.Fuente == host).FirstOrDefault();
+                            if (proveedor != null)
+                            {
+                                proveedor.Cantidad++;
+                            }
+                            else
+                            {
+                                proveedores.Add(new Proveedores
+                                {
+                                    Fuente = host,
+                                    Cantidad = 1
+                                });
+                            }
+                        }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(proveedores);
+        }
+
         [HttpGet("{usuario}/{password}/{usuarioId}")]
-        public IActionResult ObtenerUsuario(string usuario, string password,int usuarioId)
+        public IActionResult ObtenerUsuario(string usuario, string password, int usuarioId)
         {
             List<PanelUsuario> usuarios = new();
 
@@ -662,6 +718,14 @@ namespace ticolinea.stream.service.Controllers
             DateTime dateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
             dateTime = dateTime.AddSeconds(unixTimeStamp).ToLocalTime();
             return dateTime.ToString("dd/MM/yyyy");
+        }
+
+        private static string ObtenerHost(string fuente)
+        {
+            if (!fuente.Contains("://")) return fuente;
+
+            System.Uri url = new System.Uri(fuente);
+            return url.Host;
         }
     }
 }
