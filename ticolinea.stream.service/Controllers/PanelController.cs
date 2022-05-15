@@ -332,7 +332,7 @@ namespace ticolinea.stream.service.Controllers
                 using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
                 {
                     var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "select fuente_stream from streams_tl where habilitado=1;";
+                    cmd.CommandText = "select fuente_stream from streams_tl where habilitado=1 and tipo=1;";
 
                     using (var reader = cmd.ExecuteReader())
                         while (reader.Read())
