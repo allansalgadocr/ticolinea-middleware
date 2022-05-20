@@ -59,10 +59,8 @@ namespace ticolinea.stream.service.Controllers
             {
                 var cmd = mariadb.Conexion.CreateCommand();
 
-                cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id FROM streams_tl a " +
-                                    "INNER JOIN streams_info b " +
-                                    "on a.id = b.stream_id " +
-                                    $"WHERE stream_id = {chnId};";
+                cmd.CommandText = "SELECT fuente_stream,id FROM streams_tl " +
+                                    $"WHERE id = {chnId};";
 
                 using (var reader = cmd.ExecuteReader())
                     while (reader.Read())
@@ -71,9 +69,6 @@ namespace ticolinea.stream.service.Controllers
                         {
                             Fuente = reader.GetString(0),
                             StreamId = reader.GetInt32(1),
-                            ProbeSize = reader.GetInt32(2),
-                            EsBajoDemanda = reader.GetInt32(3),
-                            ProcesoId = reader.GetInt32(4),
                         });
                     }
                 cmd.Connection?.Close();

@@ -125,7 +125,7 @@ namespace ticolinea.stream.service.Controllers
                     cmd.CommandText = "INSERT INTO `streams_tl` " +
                                       "(`id`,`id_categoria`,`nombre_stream`,`fuente_stream`,`imagen_stream`,`orden`,`agregado`,`probesize_ondemand`,`es_bajodemanda`,`tipo`,`contenedor`,`habilitado`,`transcode_audio`,`video_info`," +
                                       "`audio_info`,`intervalo`,`segmentos`,`omitir_verificacion`,`framerate`,`transcode`,`resolucion`,`bitrate`) " +
-                                      "VALUES(@id,@id_categoria,@nombre_stream,@fuente_stream,@imagen_stream,@orden,@agregado,512000,@es_bajodemanda,@habilitado,'',1,'','', " +
+                                      "VALUES(@id,@id_categoria,@nombre_stream,@fuente_stream,@imagen_stream,@orden,@agregado,512000,@es_bajodemanda,1,'',@habilitado,'aac','', " +
                                       "'',6,5,0,25,@transcode,'','1500k'); ";
                     cmd.Parameters.AddWithValue("@id", maxId + 1);
                     cmd.Parameters.AddWithValue("@id_categoria", panelStream.Categoria);
@@ -210,13 +210,14 @@ namespace ticolinea.stream.service.Controllers
 
                     var now = DateTimeOffset.Now.ToUnixTimeSeconds();
                     cmd.CommandText = "INSERT INTO `usuarios_ticolinea` " +
-                                      "(`usuario`,`clave`,`fecha_vencimiento`,`habilitado`,`conexiones_maximas`,`es_restreamer`,`fecha_creacion`,`creado_por`,`bouquet`) " +
-                                      "VALUES(@usuario,@clave,@fecha_vencimiento,@habilitado,1,0,@fecha_creacion,0,''); ";
+                                      "(`usuario`,`clave`,`fecha_vencimiento`,`habilitado`,`conexiones_maximas`,`es_restreamer`,`fecha_creacion`,`creado_por`,`bouquet`,`notas`) " +
+                                      "VALUES(@usuario,@clave,@fecha_vencimiento,@habilitado,1,0,@fecha_creacion,0,'',@notas); ";
                     cmd.Parameters.AddWithValue("@usuario", panelUsuario.Usuario);
                     cmd.Parameters.AddWithValue("@clave", panelUsuario.Clave);
                     cmd.Parameters.AddWithValue("@fecha_vencimiento", fechaVencimiento);
                     cmd.Parameters.AddWithValue("@habilitado", panelUsuario.Habilitado);
                     cmd.Parameters.AddWithValue("@fecha_creacion", now);
+                    cmd.Parameters.AddWithValue("@notas", panelUsuario.Notas);
 
                     cmd.ExecuteNonQuery();
                 }
@@ -252,12 +253,12 @@ namespace ticolinea.stream.service.Controllers
                     if (fechaVencimiento == -1)
                     {
                         cmd.CommandText = "UPDATE `usuarios_ticolinea` " +
-                                          "SET usuario=@usuario, clave=@clave, habilitado=@habilitado " +
+                                          "SET usuario=@usuario, clave=@clave, habilitado=@habilitado,notas=@notas " +
                                           "WHERE id=@id; ";
                     }
                     else
                         cmd.CommandText = "UPDATE `usuarios_ticolinea` " +
-                                          "SET usuario=@usuario, clave=@clave, habilitado=@habilitado, fecha_vencimiento=@fecha_vencimiento " +
+                                          "SET usuario=@usuario, clave=@clave, habilitado=@habilitado, fecha_vencimiento=@fecha_vencimiento,notas=@notas " +
                                           "WHERE id=@id; ";
 
                     cmd.Parameters.AddWithValue("@usuario", panelUsuario.Usuario);
@@ -266,6 +267,7 @@ namespace ticolinea.stream.service.Controllers
                         cmd.Parameters.AddWithValue("@fecha_vencimiento", fechaVencimiento);
 
                     cmd.Parameters.AddWithValue("@habilitado", panelUsuario.Habilitado);
+                    cmd.Parameters.AddWithValue("@notas", panelUsuario.Notas);
                     cmd.Parameters.AddWithValue("@id", usuarioId);
 
                     cmd.ExecuteNonQuery();
@@ -292,7 +294,7 @@ namespace ticolinea.stream.service.Controllers
                 using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
                 {
                     var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado FROM usuarios_ticolinea;";
+                    cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado,notas FROM usuarios_ticolinea;";
 
                     using (var reader = cmd.ExecuteReader())
                         while (reader.Read())
@@ -303,7 +305,8 @@ namespace ticolinea.stream.service.Controllers
                                 Usuario = reader.GetString(1),
                                 Clave = reader.GetString(2),
                                 FechaVencimiento = !reader.IsDBNull(3) ? UnixTimeStampToDateTime(reader.GetInt32(3)) : "",
-                                Habilitado = reader.GetInt32(4)
+                                Habilitado = reader.GetInt32(4),
+                                Notas = reader.GetString(5),
                             });
                         }
                 }
@@ -377,7 +380,7 @@ namespace ticolinea.stream.service.Controllers
                 using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
                 {
                     var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado FROM usuarios_ticolinea WHERE id=@id;";
+                    cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado,notas FROM usuarios_ticolinea WHERE id=@id;";
                     cmd.Parameters.AddWithValue("@id", usuarioId);
 
                     using (var reader = cmd.ExecuteReader())
@@ -389,7 +392,8 @@ namespace ticolinea.stream.service.Controllers
                                 Usuario = reader.GetString(1),
                                 Clave = reader.GetString(2),
                                 FechaVencimiento = !reader.IsDBNull(3) ? UnixTimeStampToDateTime(reader.GetInt32(3)) : "",
-                                Habilitado = reader.GetInt32(4)
+                                Habilitado = reader.GetInt32(4),
+                                Notas = reader.GetString(5)
                             });
                         }
                 }
@@ -709,6 +713,173 @@ namespace ticolinea.stream.service.Controllers
 
             return Ok(categorias);
         }
+
+        #region Peliculas
+        [HttpGet("{usuario}/{password}")]
+        public IActionResult ObtenerCategoriasPeliculas(string usuario, string password)
+        {
+            List<PanelCategoria> categorias = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "select id,category_name from stream_categories " +
+                                      "where category_type = 'movie';";
+
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read())
+                        {
+                            categorias.Add(new PanelCategoria
+                            {
+                                Id = reader.GetInt32(0),
+                                Texto = reader.GetString(1),
+                            });
+                        }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(categorias);
+        }
+
+        [HttpGet("{usuario}/{password}")]
+        public IActionResult ObtenerPeliculas(string usuario, string password)
+        {
+            List<PanelMovies> movies = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "SELECT a.id,imagen_stream,nombre_stream,category_name,fuente_stream,habilitado FROM streams_tl " +
+                                                          "INNER JOIN " +
+                                                          "stream_categories c " +
+                                                          "ON a.id_categoria = c.id and tipo=2 order by orden;";
+
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read())
+                        {
+                            movies.Add(new PanelMovies
+                            {
+                                Id = reader.GetInt32(0),
+                                Imagen = reader.GetString(1),
+                                Nombre = reader.GetString(2),
+                                Categoria = reader.GetString(3),
+                                Fuente = reader.GetString(4),
+                                Habilitado = reader.GetInt32(5),
+                            });
+                        }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(movies);
+        }
+
+        [HttpPost("{usuario}/{password}")]
+        public IActionResult AgregarPelicula([FromBody] PanelPelicula panelPelicula, string usuario, string password)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    int maxId = 0;
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "select max(id) from streams_tl;";
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read())
+                        {
+                            maxId = reader.GetInt32(0);
+                        }
+
+                    if (maxId == 0) throw new Exception("Error al obtener maxID");
+
+                    var now = DateTimeOffset.Now.ToUnixTimeSeconds();
+                    cmd.CommandText = "INSERT INTO `streams_tl` " +
+                                      "(`id`,`id_categoria`,`nombre_stream`,`fuente_stream`,`imagen_stream`,`orden`,`agregado`,`probesize_ondemand`,`es_bajodemanda`,`tipo`,`contenedor`,`habilitado`,`transcode_audio`,`video_info`," +
+                                      "`audio_info`,`intervalo`,`segmentos`,`omitir_verificacion`,`framerate`,`transcode`,`resolucion`,`bitrate`) " +
+                                      "VALUES(@id,@id_categoria,@nombre_stream,@fuente_stream,@imagen_stream,@orden,@agregado,512000,0,2,@contenedor,@habilitado,'','', " +
+                                      "'',0,0,0,0,0,'',''); ";
+                    cmd.Parameters.AddWithValue("@id", maxId + 1);
+                    cmd.Parameters.AddWithValue("@id_categoria", panelPelicula.Categoria);
+                    cmd.Parameters.AddWithValue("@nombre_stream", panelPelicula.NombrePelicula);
+                    cmd.Parameters.AddWithValue("@fuente_stream", panelPelicula.UrlPelicula);
+                    cmd.Parameters.AddWithValue("@imagen_stream", panelPelicula.UrlLogo);
+                    cmd.Parameters.AddWithValue("@orden", maxId + 1);
+                    cmd.Parameters.AddWithValue("@agregado", now);
+                    cmd.Parameters.AddWithValue("@habilitado", panelPelicula.Habilitado);
+                    cmd.Parameters.AddWithValue("@contenedor", panelPelicula.Contenedor);
+
+                    cmd.ExecuteNonQuery();
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+        [HttpPost("{usuario}/{password}/{chnId}")]
+        public IActionResult ActualizarPelicula([FromBody] PanelPelicula panelPelicula, string usuario, string password, int chnId)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    List<StreamDb> streams = new();
+                    var cmd = mariadb.Conexion.CreateCommand();
+
+                    cmd.CommandText = "UPDATE `streams_tl` " +
+                                      "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,fuente_stream=@fuente_stream,imagen_stream=@imagen_stream,habilitado=@habilitado,contenedor=@contenedor " +
+                                      "WHERE id=@id; ";
+                    cmd.Parameters.AddWithValue("@id", chnId);
+                    cmd.Parameters.AddWithValue("@id_categoria", panelPelicula.Categoria);
+                    cmd.Parameters.AddWithValue("@nombre_stream", panelPelicula.NombrePelicula);
+                    cmd.Parameters.AddWithValue("@fuente_stream", panelPelicula.UrlPelicula);
+                    cmd.Parameters.AddWithValue("@imagen_stream", panelPelicula.UrlLogo);
+                    cmd.Parameters.AddWithValue("@contenedor", panelPelicula.Contenedor);
+                    cmd.Parameters.AddWithValue("@habilitado", panelPelicula.Habilitado);
+
+                    cmd.ExecuteNonQuery();
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+        #endregion
 
         public static string UnixTimeStampToDateTime(double unixTimeStamp)
         {

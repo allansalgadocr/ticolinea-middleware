@@ -76,7 +76,7 @@ namespace ticolinea.stream.service.Helpers
             {
                 var cmd = mariadb.Conexion.CreateCommand();
                 cmd.CommandText = "SELECT id,conexiones_maximas, habilitado FROM usuarios_ticolinea " +
-                                                      "WHERE usuario = @usuario and clave = @clave;";
+                                                      "WHERE usuario = @usuario and clave = @clave and habilitado=1;";
 
                 cmd.Parameters.AddWithValue("@usuario", usuario);
                 cmd.Parameters.AddWithValue("@clave", password);
