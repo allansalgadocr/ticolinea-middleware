@@ -61,7 +61,7 @@ namespace ticolinea.stream.service.Controllers
             using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
             {
                 var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor FROM streams_tl a " +
+                cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
                                                         "INNER JOIN stream_categories b " +
                                                         "on a.id_categoria = b.id " +
                                                         "WHERE habilitado=1 " +
@@ -77,7 +77,8 @@ namespace ticolinea.stream.service.Controllers
                             Imagen = reader.GetString(2),
                             Categoria = reader.GetString(3),
                             Tipo = reader.GetInt32(4),
-                            Contenedor = reader.GetString(5)
+                            Contenedor = reader.GetString(5),
+                            CanalEPG= reader.GetString(6),
                         });
                     }
 
@@ -86,7 +87,7 @@ namespace ticolinea.stream.service.Controllers
 
             foreach (var chn in bouquet)
             {
-                sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.Id}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
                 if (chn.Tipo == 1)
                     sb.AppendLine($"http://15.235.50.124:27701/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
                 if (chn.Tipo == 2)
@@ -96,5 +97,41 @@ namespace ticolinea.stream.service.Controllers
             return File(Encoding.UTF8.GetBytes(sb.ToString()), "application/x-mpegurl", $"ticolineaplay_{usuario}.m3u");
         }
 
+        [HttpGet("{usuario}/{password}/{anno}/{mes}/{dia}")]
+        public IActionResult Informacion(string usuario, string password, int anno, int mes, int dia)
+        {
+            var usuariodb = Helpers.Usuario.VerificarUsuario(usuario, password);
+            if (usuariodb == null) return Unauthorized();
+
+            List<Modelos.InfoStream> infoStreams = new();
+            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            {
+                string fechaHoraActual = new DateTime(anno, mes, dia).ToString("yyyyMMdd");
+                string fechaHoraDiaSiguiente = new DateTime(anno, mes, dia).AddDays(1).ToString("yyyyMMdd");
+                string fechaHoraInicio = fechaHoraActual + "0000";
+                string fechaHoraFin = fechaHoraDiaSiguiente + "0000";
+                var cmd = mariadb.Conexion.CreateCommand();
+
+                cmd.CommandText = "select canal_epg,titulo,descripcion,anno,fecha_hora_inicio,fecha_hora_fin from epg_tl " +
+                                  $"where fecha_hora_inicio>= {fechaHoraInicio} and fecha_hora_fin<= {fechaHoraFin}; ";
+
+                using (var reader = cmd.ExecuteReader())
+                    while (reader.Read())
+                    {
+                        infoStreams.Add(new Modelos.InfoStream
+                        {
+                            CanalEpg = reader.GetString(0),
+                            Titulo = reader.GetString(1),
+                            Descripcion = reader.GetString(2),
+                            Anno = reader.GetString(3),
+                            Inicio = reader.GetInt64(4),
+                            Fin = reader.GetInt64(5)
+                        });
+                    }
+                cmd.Connection?.Close();
+            }
+
+            return Ok(infoStreams);
+        }
     }
 }

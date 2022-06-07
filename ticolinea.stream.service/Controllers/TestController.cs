@@ -35,5 +35,12 @@ namespace ticolinea.stream.service.Controllers
             Jobs.VerificarStreamsCaidos();
             return Ok();
         }
+
+        [HttpGet]
+        public IActionResult ObtenerEPG()
+        {
+            Helpers.xmlHelper.Deserializar();
+            return Ok();
+        }
     }
 }

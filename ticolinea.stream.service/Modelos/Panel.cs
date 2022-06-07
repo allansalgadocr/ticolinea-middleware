@@ -13,6 +13,7 @@
         public int EsBajoDemanda { get; set; } = 0;
         public int Optimizar { get; set; } = 0;
         public int Habilitado { get; set; } = 0;
+        public string CanalEPG { get; set; } = "";
     }
 
     public class PanelPelicula
@@ -23,6 +24,14 @@
         public int Categoria { get; set; }
         public string Contenedor { get; set; } = "";
         public int Habilitado { get; set; } = 0;
+    }
+
+    public class PanelInfoPelicula
+    {
+        public string Anno { get; set; } = "";
+        public string Resena { get; set; } = "";
+        public string PG { get; set; } = "";
+        public string Duracion { get; set; } = "";
     }
 
     public class PanelUsuario
@@ -45,6 +54,13 @@
     {
         public int Id { get; set; } = 0;
         public string Texto { get; set; } = "";
+    }
+
+    public class PanelUsuariosEnLinea
+    {
+        public string Usuario { get; set; } = "";
+        public string Notas { get; set; } = "";
+        public string Canal { get; set; } = "";
     }
 
     public class PanelMovies

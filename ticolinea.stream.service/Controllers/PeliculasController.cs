@@ -36,6 +36,17 @@ namespace ticolinea.stream.service.Controllers
             return PhysicalFile(peliculaData.Fuente, ObtenerExtension(ext), enableRangeProcessing: true);
         }
 
+        [HttpGet("{chID}/{usuario}/{password}")]
+        public IActionResult Informacion(int chID, string usuario, string password)
+        {
+            var usuariodb = Helpers.Usuario.VerificarUsuario(usuario, password);
+            if (usuariodb == null) return Unauthorized();
+
+            var peliculaData = ObtieneInfoPelicula(chID);
+
+            return Ok(peliculaData);
+        }
+
         private static string ObtenerExtension(string ext)
         {
             return ext switch
@@ -76,6 +87,32 @@ namespace ticolinea.stream.service.Controllers
 
 
             return streams.FirstOrDefault();
+        }
+
+        private PeliculaInfo ObtieneInfoPelicula(int chnId)
+        {
+            List<PeliculaInfo> peliculaInfo = new();
+            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            {
+                var cmd = mariadb.Conexion.CreateCommand();
+
+                cmd.CommandText = "SELECT anno,resena,pg FROM pelicula_info " +
+                                    $"WHERE stream_id = {chnId};";
+
+                using (var reader = cmd.ExecuteReader())
+                    while (reader.Read())
+                    {
+                        peliculaInfo.Add(new PeliculaInfo
+                        {
+                            anno = reader.GetString(0),
+                            resena = reader.GetString(1),
+                            PG = reader.GetString(2),
+                        });
+                    }
+                cmd.Connection?.Close();
+            }
+
+            return peliculaInfo.FirstOrDefault();
         }
     }
 }

@@ -10,6 +10,7 @@
         public int Ejecutando { get; set; }
         public int Habilitado { get; set; } = 0;
         public int Iniciado { get; set; } = 0;
+        public string CanalEPG { get; set; } = "";
         public DataStream()
         {
             Nombre = "";

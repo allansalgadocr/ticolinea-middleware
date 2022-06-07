@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using System.Diagnostics;
 using ticolinea.stream.service.Db;
 using ticolinea.stream.service.Modelos;
 
@@ -22,7 +23,7 @@ namespace ticolinea.stream.service.Controllers
                 using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
                 {
                     var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "SELECT a.id,imagen_stream,nombre_stream,category_name,fuente_stream,reportado_caido, habilitado, iniciado FROM streams_tl a INNER JOIN " +
+                    cmd.CommandText = "SELECT a.id,imagen_stream,nombre_stream,category_name,fuente_stream,reportado_caido, habilitado, iniciado, canal_epg FROM streams_tl a INNER JOIN " +
                                                           "streams_info b " +
                                                           "ON a.id = b.stream_id INNER JOIN " +
                                                           "stream_categories c " +
@@ -40,7 +41,8 @@ namespace ticolinea.stream.service.Controllers
                                 Fuente = reader.GetString(4),
                                 Ejecutando = reader.GetInt32(5),
                                 Habilitado = reader.GetInt32(6),
-                                Iniciado = reader.GetInt32(7)
+                                Iniciado = reader.GetInt32(7),
+                                CanalEPG = reader.GetString(8)
                             });
                         }
                 }
@@ -68,7 +70,7 @@ namespace ticolinea.stream.service.Controllers
                 using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
                 {
                     var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "select nombre_stream,fuente_stream,imagen_stream,id_categoria,es_bajodemanda,transcode,habilitado from streams_tl " +
+                    cmd.CommandText = "select nombre_stream,fuente_stream,imagen_stream,id_categoria,es_bajodemanda,transcode,habilitado, canal_epg from streams_tl " +
                                       "where id=@id;";
                     cmd.Parameters.AddWithValue("@id", chnId);
 
@@ -84,6 +86,7 @@ namespace ticolinea.stream.service.Controllers
                                 EsBajoDemanda = reader.GetInt32(4),
                                 Optimizar = reader.GetInt32(5),
                                 Habilitado = reader.GetInt32(6),
+                                CanalEPG = reader.GetString(7)
                             });
                         }
                 }
@@ -124,9 +127,9 @@ namespace ticolinea.stream.service.Controllers
                     var now = DateTimeOffset.Now.ToUnixTimeSeconds();
                     cmd.CommandText = "INSERT INTO `streams_tl` " +
                                       "(`id`,`id_categoria`,`nombre_stream`,`fuente_stream`,`imagen_stream`,`orden`,`agregado`,`probesize_ondemand`,`es_bajodemanda`,`tipo`,`contenedor`,`habilitado`,`transcode_audio`,`video_info`," +
-                                      "`audio_info`,`intervalo`,`segmentos`,`omitir_verificacion`,`framerate`,`transcode`,`resolucion`,`bitrate`) " +
+                                      "`audio_info`,`intervalo`,`segmentos`,`omitir_verificacion`,`framerate`,`transcode`,`resolucion`,`bitrate`,`canal_epg`) " +
                                       "VALUES(@id,@id_categoria,@nombre_stream,@fuente_stream,@imagen_stream,@orden,@agregado,512000,@es_bajodemanda,1,'',@habilitado,'aac','', " +
-                                      "'',6,5,0,25,@transcode,'','1500k'); ";
+                                      "'',6,5,0,25,@transcode,'','1500k', @canal_epg); ";
                     cmd.Parameters.AddWithValue("@id", maxId + 1);
                     cmd.Parameters.AddWithValue("@id_categoria", panelStream.Categoria);
                     cmd.Parameters.AddWithValue("@nombre_stream", panelStream.NombreStream);
@@ -137,6 +140,7 @@ namespace ticolinea.stream.service.Controllers
                     cmd.Parameters.AddWithValue("@es_bajodemanda", panelStream.EsBajoDemanda);
                     cmd.Parameters.AddWithValue("@transcode", panelStream.Optimizar);
                     cmd.Parameters.AddWithValue("@habilitado", panelStream.Habilitado);
+                    cmd.Parameters.AddWithValue("@canal_epg", panelStream.CanalEPG);
 
                     cmd.ExecuteNonQuery();
 
@@ -422,7 +426,7 @@ namespace ticolinea.stream.service.Controllers
                     var cmd = mariadb.Conexion.CreateCommand();
 
                     cmd.CommandText = "UPDATE `streams_tl` " +
-                                      "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,fuente_stream=@fuente_stream,imagen_stream=@imagen_stream,es_bajodemanda=@es_bajodemanda,habilitado=@habilitado,transcode=@transcode " +
+                                      "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,fuente_stream=@fuente_stream,imagen_stream=@imagen_stream,es_bajodemanda=@es_bajodemanda,habilitado=@habilitado,transcode=@transcode,canal_epg=@canal_epg " +
                                       "WHERE id=@id; ";
                     cmd.Parameters.AddWithValue("@id", chnId);
                     cmd.Parameters.AddWithValue("@id_categoria", panelStream.Categoria);
@@ -432,6 +436,7 @@ namespace ticolinea.stream.service.Controllers
                     cmd.Parameters.AddWithValue("@es_bajodemanda", panelStream.EsBajoDemanda);
                     cmd.Parameters.AddWithValue("@transcode", panelStream.Optimizar);
                     cmd.Parameters.AddWithValue("@habilitado", panelStream.Habilitado);
+                    cmd.Parameters.AddWithValue("@canal_epg", panelStream.CanalEPG);
 
                     cmd.ExecuteNonQuery();
 
@@ -693,12 +698,12 @@ namespace ticolinea.stream.service.Controllers
                     {
                         Jobs.DetenerProceso(stream.ProcesoId);
 
-                        cmd.CommandText = "DELETE `streams_info` " +
+                        cmd.CommandText = "DELETE FROM streams_info " +
                                       "WHERE stream_id=@id; ";
                         cmd.Parameters.AddWithValue("@id", chnId);
                         cmd.ExecuteNonQuery();
 
-                        cmd.CommandText = "DELETE `streams_tl` " +
+                        cmd.CommandText = "DELETE FROM streams_tl " +
                                       "WHERE id=@stream_id; ";
                         cmd.Parameters.AddWithValue("@stream_id", chnId);
                         cmd.ExecuteNonQuery();
@@ -753,6 +758,47 @@ namespace ticolinea.stream.service.Controllers
         }
 
         [HttpGet("{usuario}/{password}")]
+        public IActionResult ObtenerUsuariosLinea(string usuario, string password)
+        {
+            List<PanelUsuariosEnLinea> usuarioEnLinea = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "select usuario,notas,nombre_stream from actividad_usuario_actualmente a " +
+                                        "inner join usuarios_ticolinea b " +
+                                        "on a.usuario_id = b.id " +
+                                        "inner join streams_tl c " +
+                                        "on a.stream_id = c.id; ";
+
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read())
+                        {
+                            usuarioEnLinea.Add(new PanelUsuariosEnLinea
+                            {
+                                Usuario = reader.GetString(0),
+                                Canal = reader.GetString(1),
+                                Notas = reader.GetString(2),
+                            });
+                        }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(usuarioEnLinea);
+        }
+
+        [HttpGet("{usuario}/{password}")]
         public IActionResult ObtenerPeliculas(string usuario, string password)
         {
             List<PanelMovies> movies = new();
@@ -795,6 +841,29 @@ namespace ticolinea.stream.service.Controllers
             return Ok(movies);
         }
 
+        [HttpGet("{usuario}/{password}")]
+        public IActionResult ObtenerArchivosPeliculas(string usuario, string password)
+        {
+            List<string> filePaths = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                filePaths = Directory.GetFiles(Constantes.Global.MOVIES_RAW, "*.*",
+                                          SearchOption.TopDirectoryOnly).ToList();
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(filePaths);
+        }
+
         [HttpPost("{usuario}/{password}")]
         public IActionResult AgregarPelicula([FromBody] PanelPelicula panelPelicula, string usuario, string password)
         {
@@ -815,6 +884,17 @@ namespace ticolinea.stream.service.Controllers
 
                     if (maxId == 0) throw new Exception("Error al obtener maxID");
 
+                    //Convierte la película a un formato compatible para caja
+                    Process process = new();
+                    process.StartInfo.FileName = Constantes.Global.FFMPEG_PATH;
+
+                    //string ffmpegOutput = $"-codec copy -c:a aac -b:a 128k -map 0 -threads 2";
+                    string ffmpegOutput = "-vcodec libx264 -crf 23 -preset veryfast -b:v 3M -maxrate 4M -bufsize 5M -c:a aac -strict experimental -b:a 192k -c:s copy -map 0 -movflags faststart -map 0 -threads 2";
+                    //string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
+
+                    process.StartInfo.Arguments = $"-y -i \"{panelPelicula.UrlPelicula}\" {ffmpegOutput} \"{Constantes.Global.MOVIES_FOLDER}{panelPelicula.NombrePelicula}.{panelPelicula.Contenedor}\" ";
+                    process.Start();
+
                     var now = DateTimeOffset.Now.ToUnixTimeSeconds();
                     cmd.CommandText = "INSERT INTO `streams_tl` " +
                                       "(`id`,`id_categoria`,`nombre_stream`,`fuente_stream`,`imagen_stream`,`orden`,`agregado`,`probesize_ondemand`,`es_bajodemanda`,`tipo`,`contenedor`,`habilitado`,`transcode_audio`,`video_info`," +
@@ -824,7 +904,7 @@ namespace ticolinea.stream.service.Controllers
                     cmd.Parameters.AddWithValue("@id", maxId + 1);
                     cmd.Parameters.AddWithValue("@id_categoria", panelPelicula.Categoria);
                     cmd.Parameters.AddWithValue("@nombre_stream", panelPelicula.NombrePelicula);
-                    cmd.Parameters.AddWithValue("@fuente_stream", panelPelicula.UrlPelicula);
+                    cmd.Parameters.AddWithValue("@fuente_stream", $"{Constantes.Global.MOVIES_FOLDER}{panelPelicula.NombrePelicula}.{panelPelicula.Contenedor}");
                     cmd.Parameters.AddWithValue("@imagen_stream", panelPelicula.UrlLogo);
                     cmd.Parameters.AddWithValue("@orden", maxId + 1);
                     cmd.Parameters.AddWithValue("@agregado", now);
@@ -833,7 +913,6 @@ namespace ticolinea.stream.service.Controllers
 
                     cmd.ExecuteNonQuery();
                 }
-
 
             }
             catch (Exception ex)
@@ -844,6 +923,41 @@ namespace ticolinea.stream.service.Controllers
 
             return Ok();
         }
+
+        [HttpPost("{usuario}/{password}/{chnId}")]
+        public IActionResult AgregarInfoPelicula([FromBody] PanelInfoPelicula panelInfoPelicula, string usuario, string password, int chnId)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+
+                    var now = DateTimeOffset.Now.ToUnixTimeSeconds();
+                    cmd.CommandText = "INSERT INTO `pelicula_info` " +
+                                      "(anno,resena,PG,stream_id,duracion) " +
+                                      "VALUES(@anno,@resena,@PG,@stream_id,@duracion); ";
+                    cmd.Parameters.AddWithValue("@anno", panelInfoPelicula.Anno);
+                    cmd.Parameters.AddWithValue("@resena", panelInfoPelicula.Resena);
+                    cmd.Parameters.AddWithValue("@PG", panelInfoPelicula.PG);
+                    cmd.Parameters.AddWithValue("@stream_id", chnId);
+                    cmd.Parameters.AddWithValue("@duracion", panelInfoPelicula.Duracion);
+
+                    cmd.ExecuteNonQuery();
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
         [HttpPost("{usuario}/{password}/{chnId}")]
         public IActionResult ActualizarPelicula([FromBody] PanelPelicula panelPelicula, string usuario, string password, int chnId)
         {
