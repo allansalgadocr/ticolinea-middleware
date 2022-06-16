@@ -6,7 +6,7 @@
         public const string STREAMS_FOLDER = "/home/ticolineaplay/streams/";
         public const string FFMPEG_PATH = "/home/ticolineaplay/tools/ffmpeg";
         public const string FFPROBE_PATH = "/home/ticolineaplay/tools/ffprobe";
-        public const string MARIADB_CONN= "server=127.0.0.1;Port=7999;uid=ticolineadb;pwd=Qawsedrf7852!;database=xtream_iptvpro;Allow User Variables=True;SSLMode=None;Max Pool Size=500;";
+        public const string MARIADB_CONN= "server=127.0.0.1;Port=7999;uid=ticolineadb;pwd=Qawsedrf7852!;database=xtream_iptvpro;Allow User Variables=True;SSLMode=None;Pooling=false;Max Pool Size=3000;";
         public const string MOVIES_FOLDER = "/home/ticolineapeliculas/stream/";
         public const string MOVIES_RAW = "/home/ticolineapeliculas/";
 #endif

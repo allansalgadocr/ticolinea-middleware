@@ -22,7 +22,10 @@
         public string UrlPelicula { get; set; } = string.Empty;
         public string UrlLogo { get; set; } = string.Empty;
         public int Categoria { get; set; }
-        public string Contenedor { get; set; } = "";
+        public string Anno { get; set; } = "";
+        public string Resena { get; set; } = "";
+        public string PG { get; set; } = "";
+        public string Duracion { get; set; } = "";
         public int Habilitado { get; set; } = 0;
     }
 

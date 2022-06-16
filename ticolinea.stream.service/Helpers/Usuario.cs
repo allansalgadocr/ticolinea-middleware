@@ -91,6 +91,8 @@ namespace ticolinea.stream.service.Helpers
                             Habilitado = reader.GetInt32(2),
                         });
                     }
+
+                mariadb.Conexion.Close();
             }
 
             return usuarios.FirstOrDefault();

@@ -810,7 +810,7 @@ namespace ticolinea.stream.service.Controllers
                 using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
                 {
                     var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "SELECT a.id,imagen_stream,nombre_stream,category_name,fuente_stream,habilitado FROM streams_tl " +
+                    cmd.CommandText = "SELECT a.id,imagen_stream,nombre_stream,category_name,fuente_stream,habilitado FROM streams_tl a " +
                                                           "INNER JOIN " +
                                                           "stream_categories c " +
                                                           "ON a.id_categoria = c.id and tipo=2 order by orden;";
@@ -851,7 +851,7 @@ namespace ticolinea.stream.service.Controllers
             try
             {
                 filePaths = Directory.GetFiles(Constantes.Global.MOVIES_RAW, "*.*",
-                                          SearchOption.TopDirectoryOnly).ToList();
+                                          SearchOption.TopDirectoryOnly).OrderByDescending(d => new FileInfo(d).CreationTime).ToList();
 
 
             }
@@ -871,6 +871,16 @@ namespace ticolinea.stream.service.Controllers
 
             try
             {
+                string nombreArchivo = RemoveSpecialCharacters(panelPelicula.NombrePelicula.Trim());
+                string ext = panelPelicula.UrlPelicula.Split('.').ToList().Last();
+                if (!string.IsNullOrEmpty(ext))
+                {
+                    ext = ext.ToLower();
+                }
+                else
+                {
+                    throw new Exception($"Extensión {ext} no valida");
+                }
                 using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
                 {
                     int maxId = 0;
@@ -889,10 +899,10 @@ namespace ticolinea.stream.service.Controllers
                     process.StartInfo.FileName = Constantes.Global.FFMPEG_PATH;
 
                     //string ffmpegOutput = $"-codec copy -c:a aac -b:a 128k -map 0 -threads 2";
-                    string ffmpegOutput = "-vcodec libx264 -crf 23 -preset veryfast -b:v 3M -maxrate 4M -bufsize 5M -c:a aac -strict experimental -b:a 192k -c:s copy -map 0 -movflags faststart -map 0 -threads 2";
+                    string ffmpegOutput = "-vcodec libx264 -crf 23 -preset veryfast -b:v 3M -maxrate 4M -bufsize 4M -c:a aac -strict experimental -b:a 192k -c:s copy -map 0 -movflags faststart -map 0 -threads 2";
                     //string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
 
-                    process.StartInfo.Arguments = $"-y -i \"{panelPelicula.UrlPelicula}\" {ffmpegOutput} \"{Constantes.Global.MOVIES_FOLDER}{panelPelicula.NombrePelicula}.{panelPelicula.Contenedor}\" ";
+                    process.StartInfo.Arguments = $"-y -i \"{panelPelicula.UrlPelicula}\" {ffmpegOutput} \"{Constantes.Global.MOVIES_FOLDER}{nombreArchivo}.{ext}\" ";
                     process.Start();
 
                     var now = DateTimeOffset.Now.ToUnixTimeSeconds();
@@ -901,15 +911,16 @@ namespace ticolinea.stream.service.Controllers
                                       "`audio_info`,`intervalo`,`segmentos`,`omitir_verificacion`,`framerate`,`transcode`,`resolucion`,`bitrate`) " +
                                       "VALUES(@id,@id_categoria,@nombre_stream,@fuente_stream,@imagen_stream,@orden,@agregado,512000,0,2,@contenedor,@habilitado,'','', " +
                                       "'',0,0,0,0,0,'',''); ";
+
                     cmd.Parameters.AddWithValue("@id", maxId + 1);
                     cmd.Parameters.AddWithValue("@id_categoria", panelPelicula.Categoria);
                     cmd.Parameters.AddWithValue("@nombre_stream", panelPelicula.NombrePelicula);
-                    cmd.Parameters.AddWithValue("@fuente_stream", $"{Constantes.Global.MOVIES_FOLDER}{panelPelicula.NombrePelicula}.{panelPelicula.Contenedor}");
+                    cmd.Parameters.AddWithValue("@fuente_stream", $"{Constantes.Global.MOVIES_FOLDER}{nombreArchivo}.{ext}");
                     cmd.Parameters.AddWithValue("@imagen_stream", panelPelicula.UrlLogo);
                     cmd.Parameters.AddWithValue("@orden", maxId + 1);
                     cmd.Parameters.AddWithValue("@agregado", now);
                     cmd.Parameters.AddWithValue("@habilitado", panelPelicula.Habilitado);
-                    cmd.Parameters.AddWithValue("@contenedor", panelPelicula.Contenedor);
+                    cmd.Parameters.AddWithValue("@contenedor", ext);
 
                     cmd.ExecuteNonQuery();
                 }
@@ -965,10 +976,32 @@ namespace ticolinea.stream.service.Controllers
 
             try
             {
+                string nombreArchivo = RemoveSpecialCharacters(panelPelicula.NombrePelicula.Trim());
+                string ext = panelPelicula.UrlPelicula.Split('.').ToList().Last();
+                if (!string.IsNullOrEmpty(ext))
+                {
+                    ext = ext.ToLower();
+                }
+                else
+                {
+                    throw new Exception($"Extensión {ext} no valida");
+                }
+
                 using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
                 {
                     List<StreamDb> streams = new();
                     var cmd = mariadb.Conexion.CreateCommand();
+
+                    //Convierte la película a un formato compatible para caja
+                    Process process = new();
+                    process.StartInfo.FileName = Constantes.Global.FFMPEG_PATH;
+
+                    //string ffmpegOutput = $"-codec copy -c:a aac -b:a 128k -map 0 -threads 2";
+                    string ffmpegOutput = "-vcodec libx264 -crf 23 -preset veryfast -b:v 3M -maxrate 4M -bufsize 4M -c:a aac -strict experimental -b:a 192k -c:s copy -map 0 -movflags faststart -map 0 -threads 2";
+                    //string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
+
+                    process.StartInfo.Arguments = $"-y -i \"{panelPelicula.UrlPelicula}\" {ffmpegOutput} \"{Constantes.Global.MOVIES_FOLDER}{nombreArchivo}.{ext}\" ";
+                    process.Start();
 
                     cmd.CommandText = "UPDATE `streams_tl` " +
                                       "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,fuente_stream=@fuente_stream,imagen_stream=@imagen_stream,habilitado=@habilitado,contenedor=@contenedor " +
@@ -976,9 +1009,9 @@ namespace ticolinea.stream.service.Controllers
                     cmd.Parameters.AddWithValue("@id", chnId);
                     cmd.Parameters.AddWithValue("@id_categoria", panelPelicula.Categoria);
                     cmd.Parameters.AddWithValue("@nombre_stream", panelPelicula.NombrePelicula);
-                    cmd.Parameters.AddWithValue("@fuente_stream", panelPelicula.UrlPelicula);
+                    cmd.Parameters.AddWithValue("@fuente_stream", $"{Constantes.Global.MOVIES_FOLDER}{nombreArchivo}.{ext}");
                     cmd.Parameters.AddWithValue("@imagen_stream", panelPelicula.UrlLogo);
-                    cmd.Parameters.AddWithValue("@contenedor", panelPelicula.Contenedor);
+                    cmd.Parameters.AddWithValue("@contenedor", ext);
                     cmd.Parameters.AddWithValue("@habilitado", panelPelicula.Habilitado);
 
                     cmd.ExecuteNonQuery();
@@ -1011,6 +1044,11 @@ namespace ticolinea.stream.service.Controllers
 
             System.Uri url = new System.Uri(fuente);
             return url.Host;
+        }
+
+        public static string RemoveSpecialCharacters(string str)
+        {
+            return System.Text.RegularExpressions.Regex.Replace(str, @"[^0-9a-zA-Z\._]", string.Empty);
         }
     }
 }
