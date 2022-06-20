@@ -190,21 +190,17 @@ namespace ticolinea.stream.service
             process.Start();*/
             //}
 
-            string pixFmt = "";
-            if (stream.Transcode == 1)
-            {
-                pixFmt = "-pix_fmt yuv420p -vsync 1";
-            }
-
             string transcodeAudio = "";
-            string framerate = "";
             if (!string.IsNullOrEmpty(stream.TranscodeAudio))
                 transcodeAudio = $" -c:a {stream.TranscodeAudio}";
 
-            if (stream.Framerate > 0)
-                framerate = $"-r {stream.Framerate} ";
-
+            string pixFmt = "";
             string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
+            if (stream.Transcode == 1)
+            {
+                pixFmt = "-pix_fmt yuv420p -vsync 1 -threads 2";
+                ffmpegOutput = $"-c:v copy -pix_fmt yuv420p -vsync 1 -c:a aac -ar 44100 -ab 128k -ac 2 -strict -2 -flags +global_header -bsf:a aac_adtstoasc -bufsize 3000k{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
+            }
 
             ffmpegOutput = ffmpegOutput.Replace("[PROBESIZE]", stream.ProbeSize.ToString());
             ffmpegOutput = ffmpegOutput.Replace("[INTERVALO]", stream.Intervalo.ToString());

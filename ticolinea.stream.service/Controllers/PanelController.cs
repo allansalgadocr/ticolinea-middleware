@@ -923,6 +923,20 @@ namespace ticolinea.stream.service.Controllers
                     cmd.Parameters.AddWithValue("@contenedor", ext);
 
                     cmd.ExecuteNonQuery();
+
+                    //Agregar info pelicula
+                    var cmdInfo = mariadb.Conexion.CreateCommand();
+
+                    cmdInfo.CommandText = "INSERT INTO `pelicula_info` " +
+                                      "(anno,resena,PG,stream_id,duracion) " +
+                                      "VALUES(@anno,@resena,@PG,@stream_id,@duracion); ";
+                    cmdInfo.Parameters.AddWithValue("@anno", panelPelicula.Anno);
+                    cmdInfo.Parameters.AddWithValue("@resena", panelPelicula.Resena);
+                    cmdInfo.Parameters.AddWithValue("@PG", panelPelicula.PG);
+                    cmdInfo.Parameters.AddWithValue("@stream_id", maxId + 1);
+                    cmdInfo.Parameters.AddWithValue("@duracion", panelPelicula.Duracion);
+
+                    cmdInfo.ExecuteNonQuery();
                 }
 
             }
