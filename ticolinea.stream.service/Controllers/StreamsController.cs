@@ -89,7 +89,15 @@ namespace ticolinea.stream.service.Controllers
             {
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
                 if (chn.Tipo == 1)
+                {
+#if !DEBUG
                     sb.AppendLine($"http://15.235.50.124:27701/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
+#endif
+#if DEBUG
+                    sb.AppendLine($"http://192.168.100.8:5000/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
+#endif
+                }
+
                 if (chn.Tipo == 2)
                     sb.AppendLine($"http://15.235.50.124:27701/Peliculas/Reproducir/{chn.Id}/{usuario}/{password}.{chn.Contenedor}\r\n");
             }

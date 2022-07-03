@@ -190,23 +190,28 @@ namespace ticolinea.stream.service
             process.Start();*/
             //}
 
-            string transcodeAudio = "";
+            string transcodeAudio = " -acodec copy";
             if (!string.IsNullOrEmpty(stream.TranscodeAudio))
-                transcodeAudio = $" -c:a {stream.TranscodeAudio}";
+                transcodeAudio = $" -acodec {stream.TranscodeAudio} -strict experimental";
 
-            string pixFmt = "";
-            string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
+            string frameRate = "";
+            string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p -vsync 1" : "";
+            //string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
+            //string ffmpegOutput = $"-c copy {pixFmt} -map 0 -map -0:s -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -hls_segment_filename";
+            //string ffmpegOutput = $"-c copy {pixFmt} -map 0 -map -0:s {transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist+temp_file+append_list -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -hls_segment_filename";
+            string ffmpegOutput = $"{pixFmt} -vcodec copy {transcodeAudio} -map 0 -map -0:s -movflags faststart -b:v 5M -individual_header_trailer 0 -f segment -segment_format mpegts -segment_time [INTERVALO] -segment_list_size [SEGMENTOS] -segment_format_options mpegts_flags=+initial_discontinuity:mpegts_copyts=1 -segment_list_type m3u8 -segment_list_flags +live -segment_list";
             if (stream.Transcode == 1)
             {
-                pixFmt = "-pix_fmt yuv420p -vsync 1 -threads 2";
-                ffmpegOutput = $"-c:v copy -pix_fmt yuv420p -vsync 1 -c:a aac -ar 44100 -ab 128k -ac 2 -strict -2 -flags +global_header -bsf:a aac_adtstoasc -bufsize 3000k{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
+                //frameRate = " -r 25";
+                //pixFmt = "-pix_fmt yuv420p -vsync 1 -threads 2";
+                //ffmpegOutput = $"-c copy -bufsize 4000k{transcodeAudio} -movflags faststart  -threads 2 -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -hls_segment_filename";
             }
 
             ffmpegOutput = ffmpegOutput.Replace("[PROBESIZE]", stream.ProbeSize.ToString());
             ffmpegOutput = ffmpegOutput.Replace("[INTERVALO]", stream.Intervalo.ToString());
             ffmpegOutput = ffmpegOutput.Replace("[SEGMENTOS]", stream.Segmentos.ToString());
 
-            process.StartInfo.Arguments = $"-y -nostdin -loglevel quiet -err_detect ignore_err -i {stream.Fuente} {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_%d.ts {ubicacionStreams}{stream.StreamId}_.m3u8";
+            process.StartInfo.Arguments = $"-y{frameRate} -nostdin -loglevel quiet -err_detect ignore_err -fflags +genpts -async 1 -probesize 15000000 -analyzeduration 12000000 -i {stream.Fuente} {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_.m3u8 {ubicacionStreams}{stream.StreamId}_%d.ts";
             process.Start();
 
             using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))

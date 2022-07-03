@@ -13,7 +13,7 @@ namespace ticolinea.stream.service.Controllers
     {
 
         [HttpGet("{chID}/{usuario}/{password}.{ext}")]
-        public IActionResult Streaming(int chID, string usuario, string password, string ext)
+        public async Task<IActionResult> Streaming(int chID, string usuario, string password, string ext)
         {
             if (ext == null) return Unauthorized();
             if (ext != "m3u8") return Unauthorized();
@@ -43,7 +43,7 @@ namespace ticolinea.stream.service.Controllers
                     return Unauthorized();
             }*/
 
-            if (!playlistOutput.Contains("EXT-X-DISCONTINUITY"))
+            /*if (!playlistOutput.Contains("EXT-X-DISCONTINUITY"))
             {
                 string patternTest = @"(EXT-X-MEDIA-SEQUENCE:[0-9]*\n)";
                 Regex rgtest = new(patternTest);
@@ -52,7 +52,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     playlistOutput = playlistOutput.Replace(match.ToString(), $@"{match}#EXT-X-DISCONTINUITY{Environment.NewLine}");
                 }
-            }
+            }*/
 
             foreach (var match in matches)
             {
@@ -75,7 +75,7 @@ namespace ticolinea.stream.service.Controllers
         }
 
         [HttpGet("{usuario}/{password}/{token}/{segment}")]
-        public IActionResult Hls(string usuario, string password, string token, string segment)
+        public async Task<IActionResult> Hls(string usuario, string password, string token, string segment)
         {
             string tokenMatch = MD5($"{usuario}{password}zxcvbnm7852{segment}");
             if (token != tokenMatch) return Unauthorized();
@@ -138,7 +138,7 @@ namespace ticolinea.stream.service.Controllers
                     cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
                                     "INNER JOIN streams_info b " +
                                     "on a.id = b.stream_id " +
-                                    $"WHERE iniciado = 1 AND stream_id = {chnId};";
+                                    $"WHERE iniciado = 1 AND stream_id = {chnId} and Habilitado=1;";
 
                     using (var reader = cmd.ExecuteReader())
                         while (reader.Read())
@@ -180,7 +180,7 @@ namespace ticolinea.stream.service.Controllers
                         Console.WriteLine("Canal sin proceso, iniciando stream");
                         //Inicia stream
                         Jobs.IniciarStream(stream);
-                        System.Threading.Thread.Sleep(100);
+                        System.Threading.Thread.Sleep(500);
                         bool archivoExiste = false;
                         int ciclo = 0;
                         while (archivoExiste == false && ciclo < 35)

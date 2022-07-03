@@ -7,10 +7,10 @@ namespace ticolinea.stream.service.Helpers
 {
     public static class xmlHelper
     {
-        public static void Deserializar()
+        public static void Deserializar(string archivo)
         {
             HttpClient httpClient = new HttpClient();
-            string xml = httpClient.GetStringAsync("http://epg.best/1e773-cs7pib.xml").Result;
+            string xml = httpClient.GetStringAsync($"https://ticolineaexterno.s3.amazonaws.com/ticolineatv/{archivo}").Result;
 
             XmlSerializer serializer = new XmlSerializer(typeof(Tv));
             using (StringReader reader = new StringReader(xml))
