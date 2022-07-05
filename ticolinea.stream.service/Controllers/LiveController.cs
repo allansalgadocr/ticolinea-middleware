@@ -43,7 +43,7 @@ namespace ticolinea.stream.service.Controllers
                     return Unauthorized();
             }*/
 
-            /*if (!playlistOutput.Contains("EXT-X-DISCONTINUITY"))
+            if (!playlistOutput.Contains("EXT-X-DISCONTINUITY"))
             {
                 string patternTest = @"(EXT-X-MEDIA-SEQUENCE:[0-9]*\n)";
                 Regex rgtest = new(patternTest);
@@ -52,7 +52,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     playlistOutput = playlistOutput.Replace(match.ToString(), $@"{match}#EXT-X-DISCONTINUITY{Environment.NewLine}");
                 }
-            }*/
+            }
 
             foreach (var match in matches)
             {

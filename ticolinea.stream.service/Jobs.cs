@@ -195,11 +195,11 @@ namespace ticolinea.stream.service
                 transcodeAudio = $" -acodec {stream.TranscodeAudio} -strict experimental";
 
             string frameRate = "";
-            string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p -vsync 1" : "";
+            string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p -vsync 1 -r 30" : "";
             //string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
             //string ffmpegOutput = $"-c copy {pixFmt} -map 0 -map -0:s -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -hls_segment_filename";
-            //string ffmpegOutput = $"-c copy {pixFmt} -map 0 -map -0:s {transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist+temp_file+append_list -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -hls_segment_filename";
-            string ffmpegOutput = $"{pixFmt} -vcodec copy {transcodeAudio} -map 0 -map -0:s -movflags faststart -b:v 5M -individual_header_trailer 0 -f segment -segment_format mpegts -segment_time [INTERVALO] -segment_list_size [SEGMENTOS] -segment_format_options mpegts_flags=+initial_discontinuity:mpegts_copyts=1 -segment_list_type m3u8 -segment_list_flags +live -segment_list";
+            string ffmpegOutput = $" -c copy {pixFmt} -map 0 -map -0:s {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+second_level_segment_duration+second_level_segment_index+temp_file -strftime 1 -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -strftime_mkdir 1 -hls_segment_filename";
+            //string ffmpegOutput = $"{pixFmt} -vcodec copy {transcodeAudio} -map 0 -map -0:s -movflags faststart -b:v 5M -individual_header_trailer 0 -f segment -segment_format mpegts -segment_time [INTERVALO] -segment_list_size [SEGMENTOS] -segment_format_options mpegts_flags=+initial_discontinuity:mpegts_copyts=1 -segment_list_type m3u8 -segment_list_flags +live -segment_list";
             if (stream.Transcode == 1)
             {
                 //frameRate = " -r 25";
@@ -211,7 +211,14 @@ namespace ticolinea.stream.service
             ffmpegOutput = ffmpegOutput.Replace("[INTERVALO]", stream.Intervalo.ToString());
             ffmpegOutput = ffmpegOutput.Replace("[SEGMENTOS]", stream.Segmentos.ToString());
 
-            process.StartInfo.Arguments = $"-y{frameRate} -nostdin -loglevel quiet -err_detect ignore_err -fflags +genpts -async 1 -probesize 15000000 -analyzeduration 12000000 -i {stream.Fuente} {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_.m3u8 {ubicacionStreams}{stream.StreamId}_%d.ts";
+#if !DEBUG
+        string separadorFolder="/";
+#endif
+#if DEBUG
+            string separadorFolder = @"\";
+#endif
+
+            process.StartInfo.Arguments = $"-y{frameRate} -nostdin -loglevel quiet -err_detect ignore_err -i {stream.Fuente} {ffmpegOutput} {ubicacionStreams}{separadorFolder}{stream.StreamId}{separadorFolder}%Y%m%d_%H%M_%S_%%d_%%08t.ts {ubicacionStreams}{stream.StreamId}_.m3u8";
             process.Start();
 
             using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))

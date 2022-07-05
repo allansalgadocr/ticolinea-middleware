@@ -17,6 +17,35 @@ namespace ticolinea.stream.service.Controllers
             return Ok();
         }
 
+        [HttpGet("{usuario}/{password}")]
+        public IActionResult ParametrosVideo(string usuario, string password)
+        {
+            var usuariodb = Helpers.Usuario.VerificarUsuario(usuario, password);
+            if (usuariodb == null) return Unauthorized();
+
+            List<Modelos.Configuracion> configuracion = new();
+            using (var mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            {
+                var cmd = mariadb.Conexion.CreateCommand();
+                cmd.CommandText = "SELECT configuracion_key,numero FROM configuracion_apk " +
+                                  "where configuracion_key in ('minBufferMs', 'maxBufferMs', 'bufferForPlaybackMs', 'bufferForPlaybackAfterRebufferMs')";
+
+                using (var reader = cmd.ExecuteReader())
+                    while (reader.Read())
+                    {
+                        configuracion.Add(new Modelos.Configuracion
+                        {
+                            Config = reader.GetString(0),
+                            Valor = reader.GetInt32(1)
+                        });
+                    }
+
+                mariadb.Conexion.Close();
+            }
+
+            return Ok(configuracion);
+        }
+
         /*[HttpGet("{tipo}")]
         public IActionResult apk(string tipo)
         {
