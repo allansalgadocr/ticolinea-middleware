@@ -43,6 +43,7 @@ namespace ticolinea.stream.service
 
             foreach (StreamDb stream in streams)
             {
+                //ObtenerInfoCodec(stream.StreamId, stream.Fuente);
                 if (stream.ProcesoId == -1)
                     IniciarStream(stream);
                 else
@@ -53,8 +54,6 @@ namespace ticolinea.stream.service
                         IniciarStream(stream);
                 }
             }
-
-
         }
 
 
@@ -192,13 +191,15 @@ namespace ticolinea.stream.service
 
             string transcodeAudio = " -acodec copy";
             if (!string.IsNullOrEmpty(stream.TranscodeAudio))
-                transcodeAudio = $" -acodec {stream.TranscodeAudio} -strict experimental";
+                transcodeAudio = $" -acodec {stream.TranscodeAudio} -threads 2";
 
-            string frameRate = "";
-            string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p -vsync 1 -r 30" : "";
+            string frameRate = stream.Transcode == 1 ? " -r 30" : "";
+            string pixFmt = "";
+            //string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p" : "";
             //string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
             //string ffmpegOutput = $"-c copy {pixFmt} -map 0 -map -0:s -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -hls_segment_filename";
-            string ffmpegOutput = $" -c copy {pixFmt} -map 0 -map -0:s {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+second_level_segment_duration+second_level_segment_index+temp_file -strftime 1 -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -strftime_mkdir 1 -hls_segment_filename";
+            string ffmpegOutput = $" -c copy {pixFmt} {transcodeAudio} -movflags faststart -flags +cgop -g 30 -hls_flags +discont_start+omit_endlist+delete_segments -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 20 -sc_threshold 0 -hls_segment_filename";
+            //string ffmpegOutput = $" -c copy {pixFmt} -map 0 -map -0:s {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+second_level_segment_duration+second_level_segment_index+temp_file -strftime 1 -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -strftime_mkdir 1 -hls_segment_filename";
             //string ffmpegOutput = $"{pixFmt} -vcodec copy {transcodeAudio} -map 0 -map -0:s -movflags faststart -b:v 5M -individual_header_trailer 0 -f segment -segment_format mpegts -segment_time [INTERVALO] -segment_list_size [SEGMENTOS] -segment_format_options mpegts_flags=+initial_discontinuity:mpegts_copyts=1 -segment_list_type m3u8 -segment_list_flags +live -segment_list";
             if (stream.Transcode == 1)
             {
@@ -211,14 +212,7 @@ namespace ticolinea.stream.service
             ffmpegOutput = ffmpegOutput.Replace("[INTERVALO]", stream.Intervalo.ToString());
             ffmpegOutput = ffmpegOutput.Replace("[SEGMENTOS]", stream.Segmentos.ToString());
 
-#if !DEBUG
-        string separadorFolder="/";
-#endif
-#if DEBUG
-            string separadorFolder = @"\";
-#endif
-
-            process.StartInfo.Arguments = $"-y{frameRate} -nostdin -loglevel quiet -err_detect ignore_err -i {stream.Fuente} {ffmpegOutput} {ubicacionStreams}{separadorFolder}{stream.StreamId}{separadorFolder}%Y%m%d_%H%M_%S_%%d_%%08t.ts {ubicacionStreams}{stream.StreamId}_.m3u8";
+            process.StartInfo.Arguments = $"-y -nostdin -loglevel quiet -err_detect ignore_err {frameRate} -i {stream.Fuente} {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_%d.ts {ubicacionStreams}{stream.StreamId}_.m3u8";
             process.Start();
 
             using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
@@ -395,13 +389,13 @@ namespace ticolinea.stream.service
             }
         }
 
-        private static void ObtenerInfoCodec(int streamId, string fuente, Mariadb mariadb)
+        public static void ObtenerInfoCodec(int streamId, string fuente)
         {
             try
             {
                 var args = $"-i {fuente} -analyzeduration 512000 -probesize 512000 -v quiet -print_format json -show_streams -show_format";
                 Process probe = new();
-                probe.StartInfo.FileName = "/home/ticolineaplay/tools/ffprobe";
+                probe.StartInfo.FileName = Constantes.Global.FFPROBE_PATH;
                 probe.StartInfo.Arguments = args;
                 probe.StartInfo.UseShellExecute = false;
                 probe.StartInfo.RedirectStandardOutput = true;
@@ -414,26 +408,30 @@ namespace ticolinea.stream.service
                 {
                     s.CodecName,
                     s.CodedHeight,
-                    s.CodedWidth
+                    s.CodedWidth,
+                    s.AvgFrameRate
                 }).FirstOrDefault();
-                string videodbInfo = $"codec:{videoInfo?.CodecName}|height:{videoInfo.CodedHeight}|width:{videoInfo.CodedWidth}";
+                string videodbInfo = $"{videoInfo?.CodecName}|height:{videoInfo?.CodedHeight}|width:{videoInfo?.CodedWidth}|fr={videoInfo?.AvgFrameRate}";
                 var audioInfo = probeData.Streams.Where(x => x.CodecType == "audio").Select(s => new
                 {
                     s.CodecName
                 }).FirstOrDefault();
-                string audiodbInfo = $"codec:{audioInfo?.CodecName}";
+                string audiodbInfo = $"{audioInfo?.CodecName}";
 
                 probe.WaitForExit();
 
-                var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "UPDATE streams_tl SET audio_info=@audio_info, video_info=@video_info " +
-                               "WHERE stream_id=@id";
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "UPDATE streams_tl SET audio_info=@audio_info, video_info=@video_info " +
+                                   "WHERE id=@id";
 
-                cmd.Parameters.AddWithValue("@audio_info", audiodbInfo);
-                cmd.Parameters.AddWithValue("@video_info", videodbInfo);
-                cmd.Parameters.AddWithValue("@id", streamId);
+                    cmd.Parameters.AddWithValue("@audio_info", audiodbInfo);
+                    cmd.Parameters.AddWithValue("@video_info", videodbInfo);
+                    cmd.Parameters.AddWithValue("@id", streamId);
 
-                cmd.ExecuteNonQuery();
+                    cmd.ExecuteNonQuery();
+                }
             }
             catch (Exception ex)
             {

@@ -25,6 +25,13 @@ namespace ticolinea.stream.service.Controllers
 
             var streamsFolder = Constantes.Global.STREAMS_FOLDER;
             var playlistFile = $"{streamsFolder}{chID}_.m3u8";
+
+            //string playlistOutput = "";
+            /*using (var s = new FileStream(playlistFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var tr = new StreamReader(s))
+            {
+                playlistOutput = tr.ReadToEnd();
+            }*/
             string playlistOutput = System.IO.File.ReadAllText(playlistFile);
 
             string pattern = @"(.*?).ts";
