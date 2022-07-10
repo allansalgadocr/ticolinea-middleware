@@ -14,6 +14,9 @@
         public int Transcode { get; set; }
         public string Resolucion { get; set; }
         public string Bitrate { get; set; }
+        public int CGOP { get; set; }
+        public int GOP { get; set; }
+
     }
 
     public class InfoStream

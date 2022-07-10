@@ -42,5 +42,12 @@ namespace ticolinea.stream.service.Controllers
             Helpers.xmlHelper.Deserializar(archivo);
             return Ok();
         }
+
+        [HttpGet("{verificarSoloHabilitados}")]
+        public IActionResult TestVerificaCodecs(int verificarSoloHabilitados)
+        {
+            Jobs.VerificarCodecsStreams(verificarSoloHabilitados == 1);
+            return Ok();
+        }
     }
 }

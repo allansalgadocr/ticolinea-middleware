@@ -142,7 +142,7 @@ namespace ticolinea.stream.service.Controllers
                 using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
                 {
                     var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
+                    cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate, cgop, gop FROM streams_tl a " +
                                     "INNER JOIN streams_info b " +
                                     "on a.id = b.stream_id " +
                                     $"WHERE iniciado = 1 AND stream_id = {chnId} and Habilitado=1;";
@@ -163,7 +163,9 @@ namespace ticolinea.stream.service.Controllers
                                 Framerate = reader.GetInt32(8),
                                 Transcode = reader.GetInt32(9),
                                 Resolucion = reader.GetString(10),
-                                Bitrate = reader.GetString(11)
+                                Bitrate = reader.GetString(11),
+                                CGOP = reader.GetInt32(12),
+                                GOP = reader.GetInt32(13),
                             });
                         }
                     cmd.Connection?.Close();

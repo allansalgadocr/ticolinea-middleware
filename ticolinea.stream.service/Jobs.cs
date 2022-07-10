@@ -14,7 +14,7 @@ namespace ticolinea.stream.service
             using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
             {
                 var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate, proceso_id FROM streams_tl a INNER JOIN " +
+                cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate, proceso_id, cgop, gop FROM streams_tl a INNER JOIN " +
                                                       "streams_info b " +
                                                       "ON a.id = b.stream_id " +
                                                       "WHERE habilitado = 1 and iniciado = 1 and es_bajodemanda=0 and tipo=1;";
@@ -36,6 +36,8 @@ namespace ticolinea.stream.service
                             Resolucion = reader.GetString(9),
                             Bitrate = reader.GetString(10),
                             ProcesoId = reader.GetInt32(11),
+                            CGOP = reader.GetInt32(12),
+                            GOP = reader.GetInt32(13)
                         });
                     }
                 cmd.Connection?.Close();
@@ -56,6 +58,34 @@ namespace ticolinea.stream.service
             }
         }
 
+        public static void VerificarCodecsStreams(bool verificaSoloHabilitados = true)
+        {
+            var extraCommand = verificaSoloHabilitados ? " and habilitado = 1" : "";
+            List<StreamDb> streams = new();
+            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            {
+                var cmd = mariadb.Conexion.CreateCommand();
+                cmd.CommandText = "SELECT fuente_stream,id FROM streams_tl " +
+                                                      $"WHERE tipo=1 {extraCommand};";
+
+                using (var reader = cmd.ExecuteReader())
+                    while (reader.Read())
+                    {
+                        streams.Add(new StreamDb
+                        {
+                            Fuente = reader.GetString(0),
+                            StreamId = reader.GetInt32(1),
+
+                        });
+                    }
+                cmd.Connection?.Close();
+            }
+
+            foreach (StreamDb stream in streams)
+            {
+                ObtenerInfoCodec(stream.StreamId, stream.Fuente);
+            }
+        }
 
         public static void DetenerStreamsSinUso()
         {
@@ -148,7 +178,7 @@ namespace ticolinea.stream.service
         public static void ReiniciarStream(StreamDb stream)
         {
             DetenerProceso(stream.ProcesoId);
-            IniciarStream(stream);
+            //IniciarStream(stream);
         }
 
         public static void DetenerProceso(int procesoId)
@@ -189,16 +219,17 @@ namespace ticolinea.stream.service
             process.Start();*/
             //}
 
+            string gcop = stream.CGOP == 1 ? $" -flags +cgop -g {stream.GOP} " : "";
             string transcodeAudio = " -acodec copy";
             if (!string.IsNullOrEmpty(stream.TranscodeAudio))
                 transcodeAudio = $" -acodec {stream.TranscodeAudio} -threads 2";
 
-            string frameRate = stream.Transcode == 1 ? " -r 30" : "";
+            string frameRate = stream.Transcode == 1 ? $" -r {stream.Framerate}" : "";
             string pixFmt = "";
             //string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p" : "";
             //string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
             //string ffmpegOutput = $"-c copy {pixFmt} -map 0 -map -0:s -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -hls_segment_filename";
-            string ffmpegOutput = $" -c copy {pixFmt} {transcodeAudio} -movflags faststart -flags +cgop -g 30 -hls_flags +discont_start+omit_endlist+delete_segments -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 20 -sc_threshold 0 -hls_segment_filename";
+            string ffmpegOutput = $" -c copy {pixFmt} {transcodeAudio} -movflags faststart {gcop} -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 20 -hls_segment_filename";
             //string ffmpegOutput = $" -c copy {pixFmt} -map 0 -map -0:s {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+second_level_segment_duration+second_level_segment_index+temp_file -strftime 1 -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -strftime_mkdir 1 -hls_segment_filename";
             //string ffmpegOutput = $"{pixFmt} -vcodec copy {transcodeAudio} -map 0 -map -0:s -movflags faststart -b:v 5M -individual_header_trailer 0 -f segment -segment_format mpegts -segment_time [INTERVALO] -segment_list_size [SEGMENTOS] -segment_format_options mpegts_flags=+initial_discontinuity:mpegts_copyts=1 -segment_list_type m3u8 -segment_list_flags +live -segment_list";
             if (stream.Transcode == 1)
