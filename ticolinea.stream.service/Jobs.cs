@@ -219,7 +219,7 @@ namespace ticolinea.stream.service
             process.Start();*/
             //}
 
-            string gcop = stream.CGOP == 1 ? $" -flags +cgop -g {stream.GOP} " : "";
+            string gcop = stream.CGOP == 1 ? $" -flags +cgop -g {stream.GOP} -sc_threshold 0 " : "";
             string transcodeAudio = " -acodec copy";
             if (!string.IsNullOrEmpty(stream.TranscodeAudio))
                 transcodeAudio = $" -acodec {stream.TranscodeAudio} -threads 2";
@@ -243,7 +243,7 @@ namespace ticolinea.stream.service
             ffmpegOutput = ffmpegOutput.Replace("[INTERVALO]", stream.Intervalo.ToString());
             ffmpegOutput = ffmpegOutput.Replace("[SEGMENTOS]", stream.Segmentos.ToString());
 
-            process.StartInfo.Arguments = $"-y -nostdin -loglevel quiet -err_detect ignore_err {frameRate} -i {stream.Fuente} {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_%d.ts {ubicacionStreams}{stream.StreamId}_.m3u8";
+            process.StartInfo.Arguments = $"-y -nostdin -loglevel quiet -err_detect ignore_err -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 {frameRate} -i {stream.Fuente} {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_%d.ts {ubicacionStreams}{stream.StreamId}_.m3u8";
             process.Start();
 
             using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
