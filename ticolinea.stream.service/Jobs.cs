@@ -219,7 +219,7 @@ namespace ticolinea.stream.service
             process.Start();*/
             //}
 
-            string gcop = stream.CGOP == 1 ? $" -flags +cgop -g {stream.GOP} -sc_threshold 0 " : "";
+            string gcop = stream.CGOP == 1 ? $" -flags +cgop -g {stream.GOP} -keyint_min {stream.GOP} -sc_threshold 0 " : "";
             string transcodeAudio = " -acodec copy";
             if (!string.IsNullOrEmpty(stream.TranscodeAudio))
                 transcodeAudio = $" -acodec {stream.TranscodeAudio} -threads 2";
