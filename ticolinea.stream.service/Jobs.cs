@@ -108,28 +108,21 @@ namespace ticolinea.stream.service
                             ProcesoId = reader.GetInt32(1)
                         });
                     }
-                cmd.Connection?.Close();
-            }
 
-
-            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
-            {
-                var cmd = mariadb.Conexion.CreateCommand();
                 foreach (StreamDb stream in streams)
                 {
+                    var cmdStreams = mariadb.Conexion.CreateCommand();
                     var proc = ObtenerProcesoEjecutando(stream.ProcesoId);
                     if (proc != null)
                     {
                         proc.Kill();
                     }
 
-                    cmd.CommandText = "UPDATE streams_info SET proceso_id=-1 " +
+                    cmdStreams.CommandText = "UPDATE streams_info SET proceso_id=-1 " +
                                          "WHERE stream_id=@id";
-                    cmd.Parameters.AddWithValue("@id", stream.StreamId);
-                    cmd.ExecuteNonQuery();
+                    cmdStreams.Parameters.AddWithValue("@id", stream.StreamId);
+                    cmdStreams.ExecuteNonQuery();
                 }
-
-                cmd.Connection?.Close();
             }
         }
 
@@ -200,7 +193,7 @@ namespace ticolinea.stream.service
         {
             string ubicacionStreams = Constantes.Global.STREAMS_FOLDER;
             Process process = new();
-            process.StartInfo.FileName = Constantes.Global.FFMPEG_PATH;
+            process.StartInfo.FileName = stream.Fuente.StartsWith("srt://") ? Constantes.Global.FFMPEG_PATH_SRT : Constantes.Global.FFMPEG_PATH;
 
             //if (stream.Transcode == 1)
             //{
@@ -219,17 +212,23 @@ namespace ticolinea.stream.service
             process.Start();*/
             //}
 
-            string gcop = stream.CGOP == 1 ? $" -flags +cgop -g {stream.GOP} -sc_threshold 40 " : "";
+            string gcop = stream.CGOP == 1 ? $" -flags +cgop -g {stream.GOP} " : "";
             string transcodeAudio = " -acodec copy";
             if (!string.IsNullOrEmpty(stream.TranscodeAudio))
-                transcodeAudio = $" -acodec {stream.TranscodeAudio} -threads 2";
+                transcodeAudio = $" -acodec {stream.TranscodeAudio} -threads 0";
 
             string frameRate = stream.Transcode == 1 ? $" -r {stream.Framerate}" : "";
             string pixFmt = "";
             //string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p" : "";
             //string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
             //string ffmpegOutput = $"-c copy {pixFmt} -map 0 -map -0:s -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -hls_segment_filename";
-            string ffmpegOutput = $" -c copy {pixFmt} {transcodeAudio} -movflags faststart {gcop} -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 20 -hls_segment_filename";
+            string ffmpegOutput = $" -c copy -analyzeduration {stream.ProbeSize} -probesize {stream.ProbeSize} {pixFmt} {transcodeAudio} -movflags faststart {gcop} -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
+            //string ffmpegOutput = $" -c copy {pixFmt} {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
+            if (stream.Transcode == 1)
+            {
+                transcodeAudio = transcodeAudio.Replace("-threads 2", "");
+                ffmpegOutput = $" -c:v h264 -crf 23 -maxrate 5M -bufsize 5M -tune zerolatency {pixFmt} {transcodeAudio} -threads 1 -movflags faststart {gcop} -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
+            }
             //string ffmpegOutput = $" -c copy {pixFmt} -map 0 -map -0:s {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+second_level_segment_duration+second_level_segment_index+temp_file -strftime 1 -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -strftime_mkdir 1 -hls_segment_filename";
             //string ffmpegOutput = $"{pixFmt} -vcodec copy {transcodeAudio} -map 0 -map -0:s -movflags faststart -b:v 5M -individual_header_trailer 0 -f segment -segment_format mpegts -segment_time [INTERVALO] -segment_list_size [SEGMENTOS] -segment_format_options mpegts_flags=+initial_discontinuity:mpegts_copyts=1 -segment_list_type m3u8 -segment_list_flags +live -segment_list";
             if (stream.Transcode == 1)
@@ -243,7 +242,15 @@ namespace ticolinea.stream.service
             ffmpegOutput = ffmpegOutput.Replace("[INTERVALO]", stream.Intervalo.ToString());
             ffmpegOutput = ffmpegOutput.Replace("[SEGMENTOS]", stream.Segmentos.ToString());
 
-            process.StartInfo.Arguments = $"-y -nostdin -loglevel quiet -err_detect ignore_err -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 {frameRate} -i {stream.Fuente} {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_%d.ts {ubicacionStreams}{stream.StreamId}_.m3u8";
+            string progress = stream.Bitrate == "Progress" ? $" -progress {ubicacionStreams}logs/{stream.StreamId}.txt " : "";
+            string arguments = $"-y -nostdin -loglevel quiet -err_detect ignore_err -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 {frameRate}{progress} -i \"{stream.Fuente}\" {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_%d.ts {ubicacionStreams}{stream.StreamId}_.m3u8";
+
+
+            if (stream.Fuente.StartsWith("srt://") || stream.Fuente.StartsWith("rtmp://"))
+                arguments = arguments.Replace("-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10", "");
+
+            process.StartInfo.Arguments = arguments;
+            process.StartInfo.RedirectStandardInput = false;
             process.Start();
 
             using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
@@ -256,7 +263,6 @@ namespace ticolinea.stream.service
                 cmd.Parameters.AddWithValue("@id", stream.StreamId);
 
                 cmd.ExecuteNonQuery();
-                cmd.Connection?.Close();
             }
             //ObtenerInfoCodec(stream.StreamId, stream.Fuente);
         }
@@ -268,25 +274,11 @@ namespace ticolinea.stream.service
                 var cmd = mariadb.Conexion.CreateCommand();
                 if (estaCaido)
                 {
-                    if (procesoId > -1)
-                    {
-                        try
-                        {
-                            var proceso = ObtenerProcesoEjecutando(procesoId);
-                            if (proceso != null)
-                                proceso.Kill();
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine(ex);
-                        }
-                    }
-
-                    cmd.CommandText = "UPDATE streams_info SET ejecutando=0,proceso_id=-1,reportado_caido=1 " +
+                    cmd.CommandText = "UPDATE streams_info SET reportado_caido=1 " +
                                "WHERE stream_id=@id";
                 }
                 else
-                    cmd.CommandText = "UPDATE streams_info SET ejecutando=1,reportado_caido=0 " +
+                    cmd.CommandText = "UPDATE streams_info SET reportado_caido=0 " +
                               "WHERE stream_id=@id";
 
                 cmd.Parameters.AddWithValue("@id", streamId);
@@ -310,7 +302,7 @@ namespace ticolinea.stream.service
                     cmd.CommandText = "SELECT fuente_stream, id, nombre_stream,proceso_id FROM streams_tl a " +
                                         "inner join streams_info b " +
                                         "on a.id = b.stream_id " +
-                                        "WHERE habilitado = 1 AND iniciado = 1 AND omitir_verificacion = 0 and tipo = 1; ";
+                                        "WHERE habilitado = 1 AND iniciado = 1 AND omitir_verificacion = 0 and tipo = 1 and es_bajodemanda=0; ";
 
                     using (var reader = cmd.ExecuteReader())
                         while (reader.Read())
@@ -330,7 +322,7 @@ namespace ticolinea.stream.service
                 {
                     try
                     {
-                        var args = $"-i {stream.Fuente} -analyzeduration 1000000 -probesize 1000000 -v quiet -print_format json -show_streams -show_format";
+                        var args = $"-i http://localhost:27701/Live/Streaming/{stream.StreamId}/test/test.m3u8 -analyzeduration 1000000 -probesize 1000000 -v quiet -print_format json -show_streams -show_format";
                         Process probe = new();
                         probe.StartInfo.FileName = Constantes.Global.FFPROBE_PATH;
                         probe.StartInfo.Arguments = args;
@@ -506,6 +498,123 @@ namespace ticolinea.stream.service
             {
                 Console.WriteLine("ERROR AL ELIMINAR ARCHIVOS VIEJOS" + ex.Message);
             }
+        }
+
+        public static void EliminarArchivosGrandes()
+        {
+            try
+            {
+                var files = Directory.GetFiles("/home/ticolineaplay/streams")
+                        .Select(f => new FileInfo(f))
+                        .Where(f => f.Length > 15000000)
+                        .ToList();
+
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var deteccionDeFalla = false;
+                    foreach (var file in files)
+                    {
+                        StreamDb stream = new StreamDb();
+                        var nombreArchivo = file.Name.Replace("/home/ticolineaplay/streams", "");
+                        var split = nombreArchivo.Split("_");
+                        var chnId = split[0];
+                        file.Delete();
+                        if (!string.IsNullOrEmpty(chnId))
+                        {
+                            var cmd = mariadb.Conexion.CreateCommand();
+                            cmd.CommandText = "SELECT a.id,b.proceso_id,c.actividad_id FROM streams_tl a " +
+                                                                "INNER JOIN streams_info b on a.id = b.stream_id " +
+                                                                "LEFT JOIN actividad_usuario_actualmente c " +
+                                                                "on a.id = c.stream_id " +
+                                                                $"WHERE stream_id = {chnId} AND proceso_id != -1 and tipo=1;";
+
+                            using (var reader = cmd.ExecuteReader())
+                                while (reader.Read())
+                                {
+                                    stream = new StreamDb
+                                    {
+                                        StreamId = reader.GetInt32(0),
+                                        ProcesoId = reader.GetInt32(1)
+                                    };
+                                }
+
+                            if (stream.ProcesoId > 0)
+                            {
+                                deteccionDeFalla = true;
+                                DetenerProceso(stream.ProcesoId);
+                            }
+                        }
+                    }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("ERROR AL ELIMINAR ARCHIVOS VIEJOS" + ex.Message);
+            }
+        }
+
+        public static void SincronizarS3()
+        {
+            try
+            {
+                var watcher = new FileSystemWatcher(@"C:\inetpub\wwwroot\iptv\streams");
+
+                watcher.NotifyFilter = NotifyFilters.Attributes
+                                     | NotifyFilters.CreationTime
+                                     | NotifyFilters.DirectoryName
+                                     | NotifyFilters.FileName
+                                     | NotifyFilters.LastAccess
+                                     | NotifyFilters.LastWrite
+                                     | NotifyFilters.Security
+                                     | NotifyFilters.Size;
+
+                watcher.Changed += Watcher_Changed;
+                watcher.Created += Watcher_Created;
+                watcher.Deleted += Watcher_Deleted;
+                watcher.Renamed += Watcher_Renamed;
+                watcher.Error += Watcher_Error;
+
+                watcher.Filter = "*.*";
+                watcher.IncludeSubdirectories = false;
+                watcher.EnableRaisingEvents = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+            }
+        }
+
+        private static void Watcher_Error(object sender, ErrorEventArgs e)
+        {
+            Console.WriteLine(e.GetException());
+        }
+
+        private static void Watcher_Renamed(object sender, RenamedEventArgs e)
+        {
+            Console.WriteLine($"Renamed:");
+            Console.WriteLine($"    Old: {e.OldFullPath}");
+            Console.WriteLine($"    New: {e.FullPath}");
+        }
+
+        private static void Watcher_Deleted(object sender, FileSystemEventArgs e)
+        {
+            Console.WriteLine($"Deleted: {e.FullPath}");
+        }
+
+        private static void Watcher_Created(object sender, FileSystemEventArgs e)
+        {
+            string value = $"Created: {e.FullPath}";
+        }
+
+        private static void Watcher_Changed(object sender, FileSystemEventArgs e)
+        {
+            if (e.ChangeType != WatcherChangeTypes.Changed)
+            {
+                return;
+            }
+            Console.WriteLine($"Changed: {e.FullPath}");
         }
     }
 }

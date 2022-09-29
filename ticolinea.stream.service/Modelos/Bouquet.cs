@@ -9,5 +9,6 @@
         public int Tipo { get; set; }
         public string Contenedor { get; set; }
         public string CanalEPG { get; set; } = "";
+        public int CanalId { get; set; } = 0;
     }
 }

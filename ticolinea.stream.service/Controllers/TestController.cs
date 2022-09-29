@@ -36,10 +36,17 @@ namespace ticolinea.stream.service.Controllers
             return Ok();
         }
 
-        [HttpGet("{archivo}")]
-        public IActionResult ObtenerEPG(string archivo)
+        [HttpGet]
+        public IActionResult EliminarArchivosGrandes()
         {
-            Helpers.xmlHelper.Deserializar(archivo);
+            Jobs.EliminarArchivosGrandes();
+            return Ok();
+        }
+
+        [HttpGet("{archivo}/{esLocal}")]
+        public IActionResult ObtenerEPG(string archivo, bool esLocal)
+        {
+            Helpers.xmlHelper.Deserializar(archivo, esLocal);
             return Ok();
         }
 

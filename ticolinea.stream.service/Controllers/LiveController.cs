@@ -12,6 +12,7 @@ namespace ticolinea.stream.service.Controllers
     public class LiveController : ControllerBase
     {
 
+        [ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
         [HttpGet("{chID}/{usuario}/{password}.{ext}")]
         public async Task<IActionResult> Streaming(int chID, string usuario, string password, string ext)
         {
@@ -81,6 +82,7 @@ namespace ticolinea.stream.service.Controllers
             return File(stream, "application/x-mpegurl", $"{chID}.m3u8");
         }
 
+        [ResponseCache(Duration = 10, Location = ResponseCacheLocation.Any, NoStore = false)]
         [HttpGet("{usuario}/{password}/{token}/{segment}")]
         public async Task<IActionResult> Hls(string usuario, string password, string token, string segment)
         {

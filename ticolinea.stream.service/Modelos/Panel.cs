@@ -14,6 +14,7 @@
         public int Optimizar { get; set; } = 0;
         public int Habilitado { get; set; } = 0;
         public string CanalEPG { get; set; } = "";
+        public int CanalId { get; set; } = 0;
     }
 
     public class PanelPelicula

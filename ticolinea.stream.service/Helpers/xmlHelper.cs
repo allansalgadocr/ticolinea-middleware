@@ -7,10 +7,20 @@ namespace ticolinea.stream.service.Helpers
 {
     public static class xmlHelper
     {
-        public static void Deserializar(string archivo)
+        public static void Deserializar(string archivo, bool esLocal)
         {
-            HttpClient httpClient = new HttpClient();
-            string xml = httpClient.GetStringAsync($"https://ticolineaexterno.s3.amazonaws.com/ticolineatv/{archivo}").Result;
+            string xml = "";
+
+            if (!esLocal)
+            {
+                HttpClient httpClient = new HttpClient();
+                xml = httpClient.GetStringAsync($"https://ticolineaexterno.s3.amazonaws.com/ticolineatv/{archivo}").Result;
+            }
+            else
+            {
+                var xmlFile = $"{Constantes.Global.EPG_FOLDER}{archivo}";
+                xml = System.IO.File.ReadAllText(xmlFile);
+            }
 
             XmlSerializer serializer = new XmlSerializer(typeof(Tv));
             using (StringReader reader = new StringReader(xml))
