@@ -931,17 +931,17 @@ namespace ticolinea.stream.service.Controllers
                     process.StartInfo.FileName = Constantes.Global.FFMPEG_PATH;
 
                     //string ffmpegOutput = $"-codec copy -c:a aac -b:a 128k -map 0 -threads 2";
-                    string ffmpegOutput = "-vcodec libx264 -crf 23 -preset veryfast -b:v 3M -maxrate 4M -bufsize 4M -c:a aac -strict experimental -b:a 192k -c:s copy -map 0 -movflags faststart -map 0 -threads 2";
+                    string ffmpegOutput = "-c:v libx264 -b:v 5M -maxrate:v 5M -minrate:v 5M -bufsize:v 10M -crf 23 -preset veryfast -g 48 -sc_threshold 0 -keyint_min 48 -c:a aac -b:a 96k -ac 2 -c:s copy -map 0 -movflags faststart  -map 0 -threads 4";
                     //string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
 
-                    process.StartInfo.Arguments = $"-y -i \"{panelPelicula.UrlPelicula}\" {ffmpegOutput} \"{Constantes.Global.MOVIES_FOLDER}{nombreArchivo}.{ext}\" ";
+                    process.StartInfo.Arguments = $"-y -i \"{panelPelicula.UrlPelicula}\" -progress {Constantes.Global.MOVIES_FOLDER}{nombreArchivo}_progress.txt {ffmpegOutput} \"{Constantes.Global.MOVIES_FOLDER}{nombreArchivo}.{ext}\" ";
                     process.Start();
 
                     var now = DateTimeOffset.Now.ToUnixTimeSeconds();
                     cmd.CommandText = "INSERT INTO `streams_tl` " +
                                       "(`id`,`id_categoria`,`nombre_stream`,`fuente_stream`,`imagen_stream`,`orden`,`agregado`,`probesize_ondemand`,`es_bajodemanda`,`tipo`,`contenedor`,`habilitado`,`transcode_audio`,`video_info`," +
                                       "`audio_info`,`intervalo`,`segmentos`,`omitir_verificacion`,`framerate`,`transcode`,`resolucion`,`bitrate`) " +
-                                      "VALUES(@id,@id_categoria,@nombre_stream,@fuente_stream,@imagen_stream,@orden,@agregado,512000,0,2,@contenedor,@habilitado,'','', " +
+                                      "VALUES(@id,@id_categoria,@nombre_stream,@fuente_stream,@imagen_stream,@orden,@agregado,512000,0,2,@contenedor,@habilitado,'',@process, " +
                                       "'',0,0,0,0,0,'',''); ";
 
                     cmd.Parameters.AddWithValue("@id", maxId + 1);
@@ -953,6 +953,7 @@ namespace ticolinea.stream.service.Controllers
                     cmd.Parameters.AddWithValue("@agregado", now);
                     cmd.Parameters.AddWithValue("@habilitado", panelPelicula.Habilitado);
                     cmd.Parameters.AddWithValue("@contenedor", ext);
+                    cmd.Parameters.AddWithValue("@process", process.Id.ToString());
 
                     cmd.ExecuteNonQuery();
 
@@ -1042,12 +1043,12 @@ namespace ticolinea.stream.service.Controllers
                     Process process = new();
                     process.StartInfo.FileName = Constantes.Global.FFMPEG_PATH;
 
-                    //string ffmpegOutput = $"-codec copy -c:a aac -b:a 128k -map 0 -threads 2";
-                    string ffmpegOutput = "-vcodec libx264 -crf 23 -preset veryfast -b:v 3M -maxrate 4M -bufsize 4M -c:a aac -strict experimental -b:a 192k -c:s copy -map 0 -movflags faststart -map 0 -threads 2";
-                    //string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
+                    string ffmpegOutput = "-c:v libx264 -x264-params \"nal-hrd=cbr:force-cfr=1\" -b:v 5M -maxrate:v 5M -minrate:v 5M -bufsize:v 10M -crf 23 -preset veryfast -g 48 -sc_threshold 0 -keyint_min 48 -c:a aac -b:a 96k -ac 2 -c:s copy -map 0 -movflags faststart -threads 2";
 
-                    process.StartInfo.Arguments = $"-y -i \"{panelPelicula.UrlPelicula}\" {ffmpegOutput} \"{Constantes.Global.MOVIES_FOLDER}{nombreArchivo}.{ext}\" ";
+                    process.StartInfo.Arguments = $"-y -loglevel quiet -err_detect ignore_err -nostdin -nostats -progress {Constantes.Global.MOVIES_FOLDER}{nombreArchivo}_progress.txt -i \"{panelPelicula.UrlPelicula}\" {ffmpegOutput} \"{Constantes.Global.MOVIES_FOLDER}{nombreArchivo}.{ext}\" ";
                     process.Start();
+                    process.StartInfo.RedirectStandardInput = false;
+                    process.StartInfo.RedirectStandardOutput = false;
 
                     cmd.CommandText = "UPDATE `streams_tl` " +
                                       "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,fuente_stream=@fuente_stream,imagen_stream=@imagen_stream,habilitado=@habilitado,contenedor=@contenedor " +
@@ -1072,6 +1073,351 @@ namespace ticolinea.stream.service.Controllers
 
             return Ok();
         }
+        #endregion
+
+        #region Series
+        [HttpPost("{usuario}/{password}")]
+        public IActionResult AgregarEpisodio([FromBody] PanelEpisodioInfo panelSerie, string usuario, string password)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                string nombreArchivo = RemoveSpecialCharacters(panelSerie.Titulo.Trim());
+                string ext = panelSerie.URLSerie.Split('.').ToList().Last();
+                if (!string.IsNullOrEmpty(ext))
+                {
+                    ext = ext.ToLower();
+                }
+                else
+                {
+                    throw new Exception($"Extensión {ext} no valida");
+                }
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    int maxId = 0;
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "select max(id) from streams_tl;";
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read())
+                        {
+                            maxId = reader.GetInt32(0);
+                        }
+
+                    if (maxId == 0) throw new Exception("Error al obtener maxID");
+
+                    //Convierte la película a un formato compatible para caja
+                    Process process = new();
+                    process.StartInfo.FileName = Constantes.Global.FFMPEG_PATH;
+
+                    string ffmpegOutput = "-c:v libx264 -x264-params \"nal-hrd=cbr:force-cfr=1\" -b:v 5M -maxrate:v 5M -minrate:v 5M -bufsize:v 10M -crf 23 -preset veryfast -g 48 -sc_threshold 0 -keyint_min 48 -c:a aac -b:a 96k -ac 2 -c:s copy -map 0 -movflags faststart";
+
+                    process.StartInfo.Arguments = $"-y -loglevel quiet -err_detect ignore_err -nostdin -nostats -i \"{panelSerie.URLSerie}\" -progress {Constantes.Global.SERIES_FOLDER}{nombreArchivo}_progress.txt {ffmpegOutput} \"{Constantes.Global.SERIES_FOLDER}{nombreArchivo}.{ext}\" ";
+                    process.Start();
+                    process.StartInfo.RedirectStandardInput = true;
+                    process.StartInfo.RedirectStandardOutput = true;
+
+                    var now = DateTimeOffset.Now.ToUnixTimeSeconds();
+                    cmd.CommandText = "INSERT INTO `streams_tl` " +
+                                      "(`id`,`id_categoria`,`nombre_stream`,`fuente_stream`,`imagen_stream`,`orden`,`agregado`,`probesize_ondemand`,`es_bajodemanda`,`tipo`,`contenedor`,`habilitado`,`transcode_audio`,`video_info`," +
+                                      "`audio_info`,`intervalo`,`segmentos`,`omitir_verificacion`,`framerate`,`transcode`,`resolucion`,`bitrate`) " +
+                                      "VALUES(@id,@id_categoria,@nombre_stream,@fuente_stream,@imagen_stream,@orden,@agregado,512000,0,3,@contenedor,@habilitado,'',@process, " +
+                                      "'',0,0,0,0,0,'',''); ";
+
+                    cmd.Parameters.AddWithValue("@id", maxId + 1);
+                    cmd.Parameters.AddWithValue("@id_categoria", panelSerie.Categoria);
+                    cmd.Parameters.AddWithValue("@nombre_stream", panelSerie.Titulo);
+                    cmd.Parameters.AddWithValue("@fuente_stream", $"{Constantes.Global.SERIES_FOLDER}{nombreArchivo}.{ext}");
+                    cmd.Parameters.AddWithValue("@imagen_stream", panelSerie.URLCaratula);
+                    cmd.Parameters.AddWithValue("@orden", maxId + 1);
+                    cmd.Parameters.AddWithValue("@agregado", now);
+                    cmd.Parameters.AddWithValue("@habilitado", panelSerie.Habilitado);
+                    cmd.Parameters.AddWithValue("@contenedor", ext);
+                    cmd.Parameters.AddWithValue("@process", process.Id.ToString());
+
+                    cmd.ExecuteNonQuery();
+
+                    //Agregar info pelicula
+                    var cmdInfo = mariadb.Conexion.CreateCommand();
+
+                    cmdInfo.CommandText = "INSERT INTO `series_episodios` " +
+                                      "(episodio_num,serie_id,stream_id,orden) " +
+                                      "VALUES(@episodioNum,@serieId,@stream_id,@episodioNum); ";
+                    cmdInfo.Parameters.AddWithValue("@episodioNum", panelSerie.EpisodioNumero);
+                    cmdInfo.Parameters.AddWithValue("@serieId", panelSerie.SerieId);
+                    cmdInfo.Parameters.AddWithValue("@stream_id", maxId+1);
+
+                    cmdInfo.ExecuteNonQuery();
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
+        [HttpPost("{usuario}/{password}")]
+        public IActionResult ActualizarEpisodio([FromBody] PanelEpisodioInfo panelSerie, string usuario, string password)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "UPDATE `streams_tl` " +
+                                      "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,imagen_stream=@imagen_stream,habilitado=@habilitado " +
+                                      "WHERE id=@id; ";
+
+                    cmd.Parameters.AddWithValue("@id", panelSerie.StreamId);
+                    cmd.Parameters.AddWithValue("@id_categoria", panelSerie.Categoria);
+                    cmd.Parameters.AddWithValue("@nombre_stream", panelSerie.Titulo);
+                    cmd.Parameters.AddWithValue("@imagen_stream", panelSerie.URLCaratula);
+                    cmd.Parameters.AddWithValue("@habilitado", panelSerie.Habilitado);
+
+                    cmd.ExecuteNonQuery();
+
+                    //Agregar info pelicula
+                    var cmdInfo = mariadb.Conexion.CreateCommand();
+
+                    cmdInfo.CommandText = "UPDATE series_episodios " +
+                                      "episodio_num=@episodio_num,serie_id=@serie_id " +
+                                      "WHERE id=@id; ";
+                    cmdInfo.Parameters.AddWithValue("@episodioNum", panelSerie.EpisodioNumero);
+                    cmdInfo.Parameters.AddWithValue("@serieId", panelSerie.SerieId);
+                    cmdInfo.Parameters.AddWithValue("@stream_id", panelSerie.Id);
+
+                    cmdInfo.ExecuteNonQuery();
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
+        [HttpPost("{usuario}/{password}")]
+        public IActionResult AgregarSerie([FromBody] PanelSerieInfo panelSerie, string usuario, string password)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    //Agregar info pelicula
+                    var cmdInfo = mariadb.Conexion.CreateCommand();
+
+                    cmdInfo.CommandText = "INSERT INTO `series_info` " +
+                                      "(caratula,caratula_grande,genero,director,fechaLanzamiento,temporadas,youtube_trailer,titulo,categoria_id,rating) " +
+                                      "VALUES(@caratula,@caratula_grande,@genero,@director,@fechaLanzamiento,@temporadas,@youtube_trailer,@titulo,@categoria_id,@rating); ";
+                    cmdInfo.Parameters.AddWithValue("@caratula", panelSerie.URLCaratula);
+                    cmdInfo.Parameters.AddWithValue("@caratula_grande", panelSerie.URLCaratulaGrande);
+                    cmdInfo.Parameters.AddWithValue("@genero",panelSerie.Genero);
+                    cmdInfo.Parameters.AddWithValue("@director", panelSerie.Director);
+                    cmdInfo.Parameters.AddWithValue("@fechaLanzamiento", panelSerie.FechaLanzamiento);
+                    cmdInfo.Parameters.AddWithValue("@temporadas", panelSerie.Temporadas);
+                    cmdInfo.Parameters.AddWithValue("@youtube_trailer", panelSerie.URLYoutube);
+                    cmdInfo.Parameters.AddWithValue("@titulo", panelSerie.Titulo);
+                    cmdInfo.Parameters.AddWithValue("@categoria_id", panelSerie.Categoria);
+                    cmdInfo.Parameters.AddWithValue("@rating", panelSerie.Rating);
+
+                    cmdInfo.ExecuteNonQuery();
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
+        [HttpPost("{usuario}/{password}")]
+        public IActionResult ActualizarSerie([FromBody] PanelSerieInfo panelSerie, string usuario, string password)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    //Agregar info pelicula
+                    var cmdInfo = mariadb.Conexion.CreateCommand();
+
+                    cmdInfo.CommandText = "UPDATE `series_info` " +
+                                      "SET caratula=@caratula,@caratula_grande=@caratula_grande,genero=@genero,director=@director,fechaLanzamiento=@fechaLanzamiento,temporadas=@temporadas,youtube_trailer=@youtube_trailer,titulo=@titulo,categoria_id=@categoria_id,@rating=@rating " +
+                                      "WHERE id=@id; ";
+
+                    cmdInfo.Parameters.AddWithValue("@id", panelSerie.Id);
+                    cmdInfo.Parameters.AddWithValue("@caratula", panelSerie.URLCaratula);
+                    cmdInfo.Parameters.AddWithValue("@caratula_grande", panelSerie.URLCaratulaGrande);
+                    cmdInfo.Parameters.AddWithValue("@genero", panelSerie.Genero);
+                    cmdInfo.Parameters.AddWithValue("@director", panelSerie.Director);
+                    cmdInfo.Parameters.AddWithValue("@fechaLanzamiento", panelSerie.FechaLanzamiento);
+                    cmdInfo.Parameters.AddWithValue("@temporadas", panelSerie.Temporadas);
+                    cmdInfo.Parameters.AddWithValue("@youtube_trailer", panelSerie.URLYoutube);
+                    cmdInfo.Parameters.AddWithValue("@titulo", panelSerie.Titulo);
+                    cmdInfo.Parameters.AddWithValue("@categoria_id", panelSerie.Categoria);
+                    cmdInfo.Parameters.AddWithValue("@rating", panelSerie.Rating);
+
+                    cmdInfo.ExecuteNonQuery();
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
+        [HttpGet("{usuario}/{password}")]
+        public IActionResult ObtenerSeries(string usuario, string password)
+        {
+            List<PanelEpisodioInfo> movies = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "SELECT d.id,imagen_stream,nombre_stream,id_categoria,fuente_stream,habilitado,d.episodio_num,d.serie_id,d.stream_id FROM streams_tl a " +
+                                                          "INNER JOIN " +
+                                                          "stream_categories c " +
+                                                          "ON a.id_categoria = c.id and tipo=3 " +
+                                                          "INNER JOIN "+
+                                                          "series_episodios d "+
+                                                          "ON a.id=d.stream_id "+
+                                                          "order by a.orden;";
+
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read())
+                        {
+                            movies.Add(new PanelEpisodioInfo
+                            {
+                                Id = reader.GetInt32(0),
+                                URLCaratula = reader.GetString(1),
+                                Titulo = reader.GetString(2),
+                                Categoria = reader.GetInt32(3),
+                                URLSerie = reader.GetString(4),
+                                Habilitado = reader.GetInt32(5),
+                                EpisodioNumero = reader.GetInt32(6),    
+                                SerieId= reader.GetInt32(7),
+                                StreamId= reader.GetInt32(8),
+                            });
+                        }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(movies);
+        }
+
+        [HttpGet("{usuario}/{password}")]
+        public IActionResult ObtenerCategoriasSeries(string usuario, string password)
+        {
+            List<PanelCategoria> categorias = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "select id,category_name from stream_categories " +
+                                      "where category_type = 'serie';";
+
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read())
+                        {
+                            categorias.Add(new PanelCategoria
+                            {
+                                Id = reader.GetInt32(0),
+                                Texto = reader.GetString(1),
+                            });
+                        }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(categorias);
+        }
+
+        [HttpGet("{usuario}/{password}")]
+        public IActionResult ObtenerEpisodios(string usuario, string password)
+        {
+            List<PanelSerieInfo> episodios = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                {
+                    var cmd = mariadb.Conexion.CreateCommand();
+                    cmd.CommandText = "select id,caratula,caratula_grande,genero,director,fechaLanzamiento, " +
+                                      "temporadas,youtube_trailer, titulo, categoria_id, rating from series_info; ";
+
+                    using (var reader = cmd.ExecuteReader())
+                        while (reader.Read())
+                        {
+                            episodios.Add(new PanelSerieInfo
+                            {
+                                Id = reader.GetInt32(0),
+                                URLCaratula= reader.GetString(1),
+                                URLCaratulaGrande= reader.GetString(2),
+                                Genero= reader.GetString(3),
+                                Director= reader.GetString(4),
+                                FechaLanzamiento= reader.GetString(5),
+                                Temporadas= reader.GetString(6),
+                                URLYoutube= reader.GetString(7),
+                                Titulo= reader.GetString(8),
+                                Categoria = reader.GetInt32(9),
+                                Rating = reader.GetString(10)
+                            });
+                        }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(episodios);
+        }
+
         #endregion
 
         public static string UnixTimeStampToDateTime(double unixTimeStamp)

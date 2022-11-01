@@ -30,12 +30,41 @@
         public int Habilitado { get; set; } = 0;
     }
 
+
     public class PanelInfoPelicula
     {
         public string Anno { get; set; } = "";
         public string Resena { get; set; } = "";
         public string PG { get; set; } = "";
         public string Duracion { get; set; } = "";
+    }
+
+    public class PanelEpisodioInfo
+    {
+        public int Id { get; set; } = 0;
+        public int StreamId { get; set; }
+        public string Titulo { get; set; } = "";
+        public string URLCaratula { get; set; } = "";
+        public int Categoria { get; set; } = 0;
+        public string URLSerie { get; set; } = "";
+        public int Habilitado { get; set; } = 0;
+        public int EpisodioNumero { get; set; } = 0;
+        public int SerieId { get; set; } = 0;
+    }
+
+    public class PanelSerieInfo
+    {
+        public int Id { get; set; } = 0;
+        public string Titulo { get; set; } = "";
+        public string URLCaratula { get; set; } = "";
+        public string URLCaratulaGrande { get; set; } = "";
+        public string Genero { get; set; } = "";
+        public string Temporadas { get; set; } = "";
+        public string FechaLanzamiento { get; set; } = "";
+        public string Rating { get; set; } = "";
+        public int Categoria { get; set; } = 0;
+        public string URLYoutube { get; set; } = "";
+        public string Director { get; set; } = "";
     }
 
     public class PanelUsuario

@@ -1,4 +1,6 @@
-﻿using System.Diagnostics;
+﻿using CliWrap;
+using CliWrap.Buffered;
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using ticolinea.stream.service.Db;
@@ -151,6 +153,7 @@ namespace ticolinea.stream.service
         {
             try
             {
+
                 var proceso = Process.GetProcessById(procesoId);
                 if (proceso != null)
                 {
@@ -178,15 +181,24 @@ namespace ticolinea.stream.service
         {
             try
             {
-                if (procesoId > -1)
+                var proceso = Process.GetProcessById(procesoId);
+                if (proceso != null)
                 {
-                    var proceso = ObtenerProcesoEjecutando(procesoId);
-                    if (proceso != null)
-                        proceso.Kill();
+                    proceso.Kill(true);
                 }
 
             }
             catch (Exception ex) { }
+        }
+
+        public static async Task<string> RunCommandAsync(int streamId)
+        {
+            var result = await Cli
+                  .Wrap("/bin/ps")
+                  .WithArguments("-e | pgrep -f \"/33_.m3u\"")
+                  .ExecuteBufferedAsync();
+
+            return result.StandardOutput;
         }
 
         public static void IniciarStream(StreamDb stream)
@@ -195,23 +207,6 @@ namespace ticolinea.stream.service
             Process process = new();
             process.StartInfo.FileName = stream.Fuente.StartsWith("srt://") ? Constantes.Global.FFMPEG_PATH_SRT : Constantes.Global.FFMPEG_PATH;
 
-            //if (stream.Transcode == 1)
-            //{
-            //string transcodeStreamCmd = "-y -nostdin -loglevel quiet -err_detect ignore_err -i \"[INPUT]\" -codec:v libx264 -r [FRAMERATE] -pix_fmt yuv420p -profile:v baseline -level 3 -b:v [BITRATE] -s [RESOLUCION] -codec:a aac -strict experimental -ac 2 -b:a 128k -movflags faststart -flags -global_header -hls_allow_cache 0 -sc_threshold 0 -hls_flags delete_segments -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_segment_filename [UBICACIONSTREAM][STREAMID]_%d.ts [UBICACIONSTREAM][STREAMID]_.m3u8";
-            /*string transcodeStreamCmd = "-y -nostdin -loglevel quiet -err_detect ignore_err -i \"[INPUT]\" -pix_fmt yuv420p -vsync 1 -vcodec libx264 -r 23.976 -threads 0 -b:v: 1024k -bufsize 1216k -maxrate 1280k -preset medium -profile:v high -tune film -g 48 -x264opts no-scenecut -pass 1 -acodec aac -b:a 128k -ac 2 -ar 48000 -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_segment_filename [UBICACIONSTREAM][STREAMID]_%d.ts [UBICACIONSTREAM][STREAMID]_.m3u8";
-            transcodeStreamCmd = transcodeStreamCmd.Replace("[INPUT]", stream.Fuente)
-                                .Replace("[FRAMERATE]", stream.Framerate == 0 ? "29.97" : stream.Framerate.ToString())
-                                .Replace("[BITRATE]", string.IsNullOrWhiteSpace(stream.Bitrate) ? "500K" : stream.Bitrate)
-                                .Replace("[RESOLUCION]", string.IsNullOrWhiteSpace(stream.Resolucion) ? "1280:720" : stream.Resolucion)
-                                .Replace("[INTERVALO]", stream.Intervalo.ToString())
-                                .Replace("[UBICACIONSTREAM]", ubicacionStreams)
-                                .Replace("[SEGMENTOS]", stream.Segmentos.ToString())
-                                .Replace("[STREAMID]", stream.StreamId.ToString());
-
-            process.StartInfo.Arguments = transcodeStreamCmd;
-            process.Start();*/
-            //}
-
             string gcop = stream.CGOP == 1 ? $" -flags +cgop -g {stream.GOP} " : "";
             string transcodeAudio = " -acodec copy";
             if (!string.IsNullOrEmpty(stream.TranscodeAudio))
@@ -219,10 +214,13 @@ namespace ticolinea.stream.service
 
             string frameRate = stream.Transcode == 1 ? $" -r {stream.Framerate}" : "";
             string pixFmt = "";
-            //string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p" : "";
-            //string ffmpegOutput = $"-c copy {pixFmt} -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -sc_threshold 0 -hls_segment_filename";
-            //string ffmpegOutput = $"-c copy {pixFmt} -map 0 -map -0:s -analyzeduration [PROBESIZE] -probesize [PROBESIZE]{transcodeAudio} -movflags faststart -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -hls_segment_filename";
+
+#if DEBUG
+            string ffmpegOutput = $" -c copy";
+#endif
+#if !DEBUG
             string ffmpegOutput = $" -c copy -analyzeduration {stream.ProbeSize} -probesize {stream.ProbeSize} {pixFmt} {transcodeAudio} -movflags faststart {gcop} -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
+#endif
             //string ffmpegOutput = $" -c copy {pixFmt} {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
             if (stream.Transcode == 1)
             {
@@ -243,14 +241,19 @@ namespace ticolinea.stream.service
             ffmpegOutput = ffmpegOutput.Replace("[SEGMENTOS]", stream.Segmentos.ToString());
 
             string progress = stream.Bitrate == "Progress" ? $" -progress {ubicacionStreams}logs/{stream.StreamId}.txt " : "";
-            string arguments = $"-y -nostdin -loglevel quiet -err_detect ignore_err -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 {frameRate}{progress} -i \"{stream.Fuente}\" {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_%d.ts {ubicacionStreams}{stream.StreamId}_.m3u8";
-
+#if DEBUG
+            string arguments = $"-y -nostdin -nostats -loglevel quiet -err_detect ignore_err -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 {frameRate}{progress} -i \"{stream.Fuente}\" {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_.m3u8";
+#endif
+#if !DEBUG
+            string arguments = $"-y -nostdin -nostats -loglevel quiet -err_detect ignore_err -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 {frameRate}{progress} -i \"{stream.Fuente}\" {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_%d.ts {ubicacionStreams}{stream.StreamId}_.m3u8";
+#endif
 
             if (stream.Fuente.StartsWith("srt://") || stream.Fuente.StartsWith("rtmp://"))
                 arguments = arguments.Replace("-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10", "");
 
             process.StartInfo.Arguments = arguments;
             process.StartInfo.RedirectStandardInput = false;
+            process.StartInfo.RedirectStandardOutput = false;
             process.Start();
 
             using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
@@ -334,7 +337,7 @@ namespace ticolinea.stream.service
                         string output = probe.StandardOutput.ReadToEnd();
                         var probeData = Modelos.ProbeData.FromJson(output);
                         bool estaCaido = false;
-                        if (probeData.Streams == null)
+                        if (probeData?.Streams == null)
                         {
                             streamsCaidos++;
                             estaCaido = true;
@@ -342,6 +345,7 @@ namespace ticolinea.stream.service
                         }
 
                         ActualizarCanalEstado(stream.StreamId, estaCaido, stream.ProcesoId);
+                        DetenerProceso(stream.ProcesoId);
                     }
                     catch (Exception ex)
                     {

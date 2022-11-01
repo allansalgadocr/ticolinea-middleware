@@ -56,5 +56,11 @@ namespace ticolinea.stream.service.Controllers
             Jobs.VerificarCodecsStreams(verificarSoloHabilitados == 1);
             return Ok();
         }
+
+        [HttpGet("{verificarSoloHabilitados}")]
+        public async Task<IActionResult> TestDetenerProceso(int streamId)
+        {
+            return Ok(await Jobs.RunCommandAsync(streamId));
+        }
     }
 }

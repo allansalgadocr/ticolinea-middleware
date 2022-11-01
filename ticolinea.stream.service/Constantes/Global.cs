@@ -8,8 +8,9 @@
         public const string FFMPEG_PATH_SRT = "/home/ticolineaplay/ffmpeg/ffmpeg";
         public const string FFMPEG_PATH = "ffmpeg";
         public const string FFPROBE_PATH = "/home/ticolineaplay/tools/ffprobe";
-        public const string MARIADB_CONN= "server=127.0.0.1;Port=3306;uid=iptvtl;pwd=Qawsedrf7852!;database=iptv;Allow User Variables=True;SSLMode=None;Pooling=true;Min Pool Size=10;Max Pool Size=200;Connection Lifetime=60;AllowPublicKeyRetrieval=true";
+        public const string MARIADB_CONN= "server=127.0.0.1;Port=3306;uid=iptvtl;pwd=Qawsedrf7852!;database=iptv;Allow User Variables=True;SSLMode=None;Pooling=true;Min Pool Size=50;Max Pool Size=500;Connection Lifetime=60;AllowPublicKeyRetrieval=true";
         public const string MOVIES_FOLDER = "/home/ticolineapeliculas/stream/";
+        public const string SERIES_FOLDER = "/home/ticolineapeliculas/series/";
         public const string MOVIES_RAW = "/home/ticolineapeliculas/";
 #endif
 #if DEBUG
@@ -20,6 +21,7 @@
         public const string FFPROBE_PATH = "ffmpeg";
         public const string MARIADB_CONN = "Server=localhost;User ID=root;Password=Qawsedrf7852!;Database=ticolineaplay;Allow User Variables=True;SSLMode=None";
         public const string MOVIES_FOLDER = "C:\\inetpub\\wwwroot\\iptv\\vod\\stream\\";
+        public const string SERIES_FOLDER = "D:\\serie\\";
         public const string MOVIES_RAW = "D:\\Mega 2\\";
 #endif
     }
