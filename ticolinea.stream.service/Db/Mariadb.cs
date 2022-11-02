@@ -2,11 +2,11 @@
 
 namespace ticolinea.stream.service.Db
 {
-    public class Mariadb : IDisposable
+    public class MariadbRemove : IDisposable
     {
         public MySqlConnection Conexion;
 
-        public Mariadb(string connectionString)
+        public MariadbRemove(string connectionString)
         {
             if (Conexion == null)
                 Conexion = new MySqlConnection(connectionString);

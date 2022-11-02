@@ -1,49 +1,50 @@
-﻿using ticolinea.stream.service.Db;
+﻿using MySqlConnector;
+using ticolinea.stream.service.Db;
 
 namespace ticolinea.stream.service.Helpers
 {
     public class Usuario
     {
-        public static void ActualizaInfoUsuario(int usuarioId, int chnId, string userAgent, string userIp, int conexionesMaximas)
+        public static async Task ActualizaInfoUsuario(int usuarioId, int chnId, string userAgent, string userIp, int conexionesMaximas)
         {
             List<int> actividades = new();
-            using (var mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var conn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "SELECT actividad_id from actividad_usuario_actualmente WHERE usuario_id=@usuarioId ORDER BY fecha_inicio desc;";
-
-                cmd.Parameters.AddWithValue("@usuarioId", usuarioId);
-
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        actividades.Add(reader.GetInt32(0));
-                    }
-
-                /*if (actividades.Count >= conexionesMaximas)
+                using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "DELETE FROM actividad_usuario_actualmente WHERE actividad_id=@actividadId;";
-                    cmd.Parameters.AddWithValue("@actividadId", actividades.First());
+                    if (conn.State == System.Data.ConnectionState.Closed) await conn.OpenAsync();
 
-                    cmd.ExecuteNonQuery();
-                    cmd.Connection?.Close();
-                }*/
+                    cmd.CommandText = "SELECT actividad_id from actividad_usuario_actualmente WHERE usuario_id=@usuarioId ORDER BY fecha_inicio desc;";
+                    cmd.Parameters.AddWithValue("@usuarioId", usuarioId);
+
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
+                        {
+                            actividades.Add(reader.GetInt32(0));
+                        }
+                }
 
                 if (actividades.Count == 0)
                 {
                     try
                     {
                         var now = DateTimeOffset.Now.ToUnixTimeSeconds();
-                        cmd.CommandText = "INSERT INTO actividad_usuario_actualmente(usuario_id,stream_id,user_agent,usuario_ip,formato,fecha_inicio)" +
+                        using (var cmd = conn.CreateCommand())
+                        {
+                            if (conn.State == System.Data.ConnectionState.Closed) await conn.OpenAsync();
+
+                            cmd.CommandText = "INSERT INTO actividad_usuario_actualmente(usuario_id,stream_id,user_agent,usuario_ip,formato,fecha_inicio)" +
                                        "VALUES(@usuario_id,@stream_id,@user_agent,@usuario_ip,'HLS',@fecha_inicio);";
 
-                        cmd.Parameters.AddWithValue("@usuario_id", usuarioId);
-                        cmd.Parameters.AddWithValue("@stream_id", chnId);
-                        cmd.Parameters.AddWithValue("@user_agent", userAgent);
-                        cmd.Parameters.AddWithValue("@usuario_ip", userIp);
-                        cmd.Parameters.AddWithValue("@fecha_inicio", now);
+                            cmd.Parameters.AddWithValue("@usuario_id", usuarioId);
+                            cmd.Parameters.AddWithValue("@stream_id", chnId);
+                            cmd.Parameters.AddWithValue("@user_agent", userAgent);
+                            cmd.Parameters.AddWithValue("@usuario_ip", userIp);
+                            cmd.Parameters.AddWithValue("@fecha_inicio", now);
 
-                        cmd.ExecuteNonQuery();
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+
                     }
                     catch (Exception ex)
                     {
@@ -53,36 +54,44 @@ namespace ticolinea.stream.service.Helpers
                 else
                 {
                     var now = DateTimeOffset.Now.ToUnixTimeSeconds();
-                    cmd.CommandText = "UPDATE actividad_usuario_actualmente " +
-                                   "SET stream_id=@streamid, usuario_ip=@usuarioip, user_agent=@usuarioagent, fecha_inicio=@fechaInicio"+
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        if (conn.State == System.Data.ConnectionState.Closed) await conn.OpenAsync();
+                        cmd.CommandText = "UPDATE actividad_usuario_actualmente " +
+                                   "SET stream_id=@streamid, usuario_ip=@usuarioip, user_agent=@usuarioagent, fecha_inicio=@fechaInicio" +
                                    " WHERE actividad_id=@actividadId;";
 
-                    cmd.Parameters.AddWithValue("@streamid", chnId);
-                    cmd.Parameters.AddWithValue("@usuarioip", userIp);
-                    cmd.Parameters.AddWithValue("@usuarioagent", userAgent);
-                    cmd.Parameters.AddWithValue("@fechaInicio", now);
-                    cmd.Parameters.AddWithValue("@actividadId", actividades.First());
+                        cmd.Parameters.AddWithValue("@streamid", chnId);
+                        cmd.Parameters.AddWithValue("@usuarioip", userIp);
+                        cmd.Parameters.AddWithValue("@usuarioagent", userAgent);
+                        cmd.Parameters.AddWithValue("@fechaInicio", now);
+                        cmd.Parameters.AddWithValue("@actividadId", actividades.First());
 
-                    cmd.ExecuteNonQuery();
-                }    
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
             }
         }
 
-        public static Modelos.Usuario VerificarUsuario(string usuario, string password)
+        public static async Task<Modelos.Usuario> VerificarUsuario(string usuario, string password)
         {
             //Verifica si usuario existe
             List<Modelos.Usuario> usuarios = new();
-            using (var mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var mariadb = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "SELECT id,conexiones_maximas, habilitado FROM usuarios_ticolinea " +
+                string sql = "SELECT id,conexiones_maximas, habilitado FROM usuarios_ticolinea " +
                                                       "WHERE usuario = @usuario and clave = @clave and habilitado=1;";
 
-                cmd.Parameters.AddWithValue("@usuario", usuario);
-                cmd.Parameters.AddWithValue("@clave", password);
+                using (MySqlCommand cmd = mariadb.CreateCommand())
+                {
+                    if (mariadb.State == System.Data.ConnectionState.Closed) await mariadb.OpenAsync();
+                    cmd.CommandText = sql;
+                    cmd.Parameters.AddWithValue("@usuario", usuario);
+                    cmd.Parameters.AddWithValue("@clave", password);
 
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
+                    using var reader = await cmd.ExecuteReaderAsync();
+                    while (await reader.ReadAsync())
                     {
                         usuarios.Add(new Modelos.Usuario
                         {
@@ -91,8 +100,7 @@ namespace ticolinea.stream.service.Helpers
                             Habilitado = reader.GetInt32(2),
                         });
                     }
-
-                mariadb.Conexion.Close();
+                }
             }
 
             return usuarios.FirstOrDefault();

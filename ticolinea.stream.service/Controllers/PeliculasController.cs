@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using MySqlConnector;
 using ticolinea.stream.service.Db;
 using ticolinea.stream.service.Modelos;
 
@@ -11,12 +12,12 @@ namespace ticolinea.stream.service.Controllers
     {
 
         [HttpGet("{chID}/{usuario}/{password}.{ext}")]
-        public IActionResult Reproducir(int chID, string usuario, string password, string ext)
+        public async Task<IActionResult> Reproducir(int chID, string usuario, string password, string ext)
         {
-            var usuariodb = Helpers.Usuario.VerificarUsuario(usuario, password);
+            var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
             if (usuariodb == null) return Unauthorized();
 
-            var peliculaData = ObtieneDatosPelicula(chID);
+            var peliculaData = await ObtieneDatosPelicula(chID);
             if (peliculaData == null)
                 return NotFound();
 
@@ -31,18 +32,18 @@ namespace ticolinea.stream.service.Controllers
 
             var userAgent = Request.Headers["User-Agent"].ToString();
 
-            Helpers.Usuario.ActualizaInfoUsuario(usuariodb.UsuarioId, chID, userAgent, ip, usuariodb.ConexionesMaximas);
+            await Helpers.Usuario.ActualizaInfoUsuario(usuariodb.UsuarioId, chID, userAgent, ip, usuariodb.ConexionesMaximas);
 
             return PhysicalFile(peliculaData.Fuente, ObtenerExtension(ext), enableRangeProcessing: true);
         }
 
         [HttpGet("{chID}/{usuario}/{password}")]
-        public IActionResult Informacion(int chID, string usuario, string password)
+        public async Task<IActionResult> Informacion(int chID, string usuario, string password)
         {
             var usuariodb = Helpers.Usuario.VerificarUsuario(usuario, password);
             if (usuariodb == null) return Unauthorized();
 
-            var peliculaData = ObtieneInfoPelicula(chID);
+            var peliculaData = await ObtieneInfoPelicula(chID);
 
             return Ok(peliculaData);
         }
@@ -63,53 +64,55 @@ namespace ticolinea.stream.service.Controllers
             };
         }
 
-        private StreamDb ObtieneDatosPelicula(int chnId)
+        private async Task<StreamDb> ObtieneDatosPelicula(int chnId)
         {
             List<StreamDb> streams = new();
-            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var cmd = mariadb.Conexion.CreateCommand();
+                using (var cmd = cnn.CreateCommand())
+                {
+                    if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmd.CommandText = "SELECT fuente_stream,id FROM streams_tl " +
+                                        $"WHERE id = {chnId};";
 
-                cmd.CommandText = "SELECT fuente_stream,id FROM streams_tl " +
-                                    $"WHERE id = {chnId};";
-
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        streams.Add(new StreamDb
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            Fuente = reader.GetString(0),
-                            StreamId = reader.GetInt32(1),
-                        });
-                    }
-                cmd.Connection?.Close();
+                            streams.Add(new StreamDb
+                            {
+                                Fuente = reader.GetString(0),
+                                StreamId = reader.GetInt32(1),
+                            });
+                        }
+                }
             }
 
 
             return streams.FirstOrDefault();
         }
 
-        private PeliculaInfo ObtieneInfoPelicula(int chnId)
+        private async Task<PeliculaInfo> ObtieneInfoPelicula(int chnId)
         {
             List<PeliculaInfo> peliculaInfo = new();
-            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var cmd = mariadb.Conexion.CreateCommand();
+                using (var cmd = cnn.CreateCommand())
+                {
+                    if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmd.CommandText = "SELECT anno,resena,pg FROM pelicula_info " +
+                                        $"WHERE stream_id = {chnId};";
 
-                cmd.CommandText = "SELECT anno,resena,pg FROM pelicula_info " +
-                                    $"WHERE stream_id = {chnId};";
-
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        peliculaInfo.Add(new PeliculaInfo
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            anno = reader.GetString(0),
-                            resena = reader.GetString(1),
-                            PG = reader.GetString(2),
-                        });
-                    }
-                cmd.Connection?.Close();
+                            peliculaInfo.Add(new PeliculaInfo
+                            {
+                                anno = reader.GetString(0),
+                                resena = reader.GetString(1),
+                                PG = reader.GetString(2),
+                            });
+                        }
+                }
             }
 
             return peliculaInfo.FirstOrDefault();

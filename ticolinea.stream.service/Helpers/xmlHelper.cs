@@ -2,12 +2,13 @@
 using System.Collections;
 using System.Xml.Serialization;
 using ticolinea.stream.service.Db;
+using MySqlConnector;
 
 namespace ticolinea.stream.service.Helpers
 {
     public static class xmlHelper
     {
-        public static void Deserializar(string archivo, bool esLocal)
+        public static async Task Deserializar(string archivo, bool esLocal)
         {
             string xml = "";
 
@@ -26,14 +27,17 @@ namespace ticolinea.stream.service.Helpers
             using (StringReader reader = new StringReader(xml))
             {
                 var epg = (Tv)serializer.Deserialize(reader);
-                List<string>? canales = epg?.Programme.Select(s => s.Channel).Distinct().ToList();
-                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                List<string> canales = epg?.Programme.Select(s => s.Channel).Distinct().ToList();
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
-                    var cmd = mariadb.Conexion.CreateCommand();
-                    if (canales.Any())
+                    using (var cmd = cnn.CreateCommand())
                     {
-                        cmd.CommandText = "DELETE FROM epg_tl;";
-                        cmd.ExecuteNonQuery();
+                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (canales.Any())
+                        {
+                            cmd.CommandText = "DELETE FROM epg_tl;";
+                            await cmd.ExecuteNonQueryAsync();
+                        }
                     }
 
                     foreach (string canal in canales)
@@ -42,34 +46,38 @@ namespace ticolinea.stream.service.Helpers
 
                         foreach (var programacion in programaciones)
                         {
-                            var cmdInsert = mariadb.Conexion.CreateCommand();
-                            cmdInsert.CommandText = "INSERT INTO `epg_tl` " +
-                                      "(canal_epg,titulo,descripcion,inicio,fin,anno,icono,fecha_hora_inicio,fecha_hora_fin) " +
-                                      "VALUES (@canal_epg,@titulo,@descripcion,@inicio,@fin,@anno,@icono,@fecha_hora_inicio,@fecha_hora_fin);";
-
-                            long fechaHoraInicio = 0;
-                            if (!string.IsNullOrWhiteSpace(programacion.Start))
+                            using (var cmdInsert = cnn.CreateCommand())
                             {
-                                long.TryParse(programacion.Start.Substring(0, 12), out fechaHoraInicio);
+                                if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                                cmdInsert.CommandText = "INSERT INTO `epg_tl` " +
+                                          "(canal_epg,titulo,descripcion,inicio,fin,anno,icono,fecha_hora_inicio,fecha_hora_fin) " +
+                                          "VALUES (@canal_epg,@titulo,@descripcion,@inicio,@fin,@anno,@icono,@fecha_hora_inicio,@fecha_hora_fin);";
+
+
+                                long fechaHoraInicio = 0;
+                                if (!string.IsNullOrWhiteSpace(programacion.Start))
+                                {
+                                    long.TryParse(programacion.Start.Substring(0, 12), out fechaHoraInicio);
+                                }
+
+                                long fechaHoraFin = 0;
+                                if (!string.IsNullOrWhiteSpace(programacion.Stop))
+                                {
+                                    long.TryParse(programacion.Stop.Substring(0, 12), out fechaHoraFin);
+                                }
+
+                                cmdInsert.Parameters.AddWithValue("@canal_epg", programacion.Channel);
+                                cmdInsert.Parameters.AddWithValue("@titulo", programacion.Title.Text?.Replace("\xCC\x81l", ""));
+                                cmdInsert.Parameters.AddWithValue("@descripcion", programacion.Desc.Text);
+                                cmdInsert.Parameters.AddWithValue("@inicio", programacion.Start);
+                                cmdInsert.Parameters.AddWithValue("@fin", programacion.Stop);
+                                cmdInsert.Parameters.AddWithValue("@anno", programacion.Date);
+                                cmdInsert.Parameters.AddWithValue("@icono", programacion.Icon?.Src);
+                                cmdInsert.Parameters.AddWithValue("@fecha_hora_inicio", fechaHoraInicio);
+                                cmdInsert.Parameters.AddWithValue("@fecha_hora_fin", fechaHoraFin);
+
+                               await cmdInsert.ExecuteNonQueryAsync();
                             }
-
-                            long fechaHoraFin = 0;
-                            if (!string.IsNullOrWhiteSpace(programacion.Stop))
-                            {
-                                long.TryParse(programacion.Stop.Substring(0, 12), out fechaHoraFin);
-                            }
-
-                            cmdInsert.Parameters.AddWithValue("@canal_epg", programacion.Channel);
-                            cmdInsert.Parameters.AddWithValue("@titulo", programacion.Title.Text?.Replace("\xCC\x81l", ""));
-                            cmdInsert.Parameters.AddWithValue("@descripcion", programacion.Desc.Text);
-                            cmdInsert.Parameters.AddWithValue("@inicio", programacion.Start);
-                            cmdInsert.Parameters.AddWithValue("@fin", programacion.Stop);
-                            cmdInsert.Parameters.AddWithValue("@anno", programacion.Date);
-                            cmdInsert.Parameters.AddWithValue("@icono", programacion.Icon?.Src);
-                            cmdInsert.Parameters.AddWithValue("@fecha_hora_inicio", fechaHoraInicio);
-                            cmdInsert.Parameters.AddWithValue("@fecha_hora_fin", fechaHoraFin);
-
-                            cmdInsert.ExecuteNonQuery();
                         }
 
                     }
@@ -92,16 +100,16 @@ public class Channel
 {
 
     [XmlElement(ElementName = "display-name")]
-    public string Displayname { get; set; }
+    public string Displayname { get; set; } = "";
 
     [XmlElement(ElementName = "icon")]
-    public Icon Icon { get; set; }
+    public Icon Icon { get; set; } = new Icon();
 
     [XmlAttribute(AttributeName = "id")]
-    public string Id { get; set; }
+    public string Id { get; set; } = "";
 
     [XmlText]
-    public string Text { get; set; }
+    public string Text { get; set; } = "";
 }
 
 [XmlRoot(ElementName = "title")]
@@ -109,7 +117,7 @@ public class Title
 {
 
     [XmlAttribute(AttributeName = "lang")]
-    public string Lang { get; set; }
+    public string Lang { get; set; } = "";
 
     [XmlText]
     public string Text { get; set; } = "";
@@ -120,7 +128,7 @@ public class Desc
 {
 
     [XmlAttribute(AttributeName = "lang")]
-    public string Lang { get; set; }
+    public string Lang { get; set; } = "";
 
     [XmlText]
     public string Text { get; set; } = "";
@@ -131,10 +139,10 @@ public class Category
 {
 
     [XmlAttribute(AttributeName = "lang")]
-    public string Lang { get; set; }
+    public string Lang { get; set; } = "";
 
     [XmlText]
-    public string Text { get; set; }
+    public string Text { get; set; } = "";
 }
 
 [XmlRoot(ElementName = "programme")]
@@ -142,13 +150,13 @@ public class Programme
 {
 
     [XmlElement(ElementName = "category")]
-    public List<Category> Category { get; set; }
+    public List<Category> Category { get; set; } = new List<Category>();
 
     [XmlElement(ElementName = "icon")]
     public Icon Icon { get; set; } = new Icon();
 
     [XmlElement(ElementName = "rating")]
-    public Rating Rating { get; set; }
+    public Rating Rating { get; set; } = new Rating();
 
     [XmlAttribute(AttributeName = "start")]
     public string Start { get; set; } = "";
@@ -157,28 +165,28 @@ public class Programme
     public string Stop { get; set; } = "";
 
     [XmlAttribute(AttributeName = "channel")]
-    public string Channel { get; set; }
+    public string Channel { get; set; } = "";
 
     [XmlText]
-    public string Text { get; set; }
+    public string Text { get; set; } = "";
 
     [XmlElement(ElementName = "title")]
     public Title Title { get; set; } = new Title();
 
     [XmlElement(ElementName = "desc")]
-    public Desc Desc { get; set; }
+    public Desc Desc { get; set; } = new Desc();
 
     [XmlElement(ElementName = "credits")]
-    public Credits Credits { get; set; }
+    public Credits Credits { get; set; } = new Credits();
 
     [XmlElement(ElementName = "date")]
     public int Date { get; set; } = 0;
 
     [XmlElement(ElementName = "star-rating")]
-    public Starrating Starrating { get; set; }
+    public Starrating Starrating { get; set; } = new Starrating();
 
     [XmlElement(ElementName = "sub-title")]
-    public Subtitle Subtitle { get; set; }
+    public Subtitle Subtitle { get; set; } = new Subtitle();
 }
 
 [XmlRoot(ElementName = "credits")]
@@ -186,10 +194,10 @@ public class Credits
 {
 
     [XmlElement(ElementName = "director")]
-    public string Director { get; set; }
+    public string Director { get; set; } = "";
 
     [XmlElement(ElementName = "actor")]
-    public List<string> Actor { get; set; }
+    public List<string> Actor { get; set; } = new List<string>();
 }
 
 [XmlRoot(ElementName = "rating")]
@@ -197,13 +205,13 @@ public class Rating
 {
 
     [XmlElement(ElementName = "value")]
-    public string Value { get; set; }
+    public string Value { get; set; } = "";
 
     [XmlAttribute(AttributeName = "system")]
-    public string System { get; set; }
+    public string System { get; set; } = "";
 
     [XmlText]
-    public string Text { get; set; }
+    public string Text { get; set; } = "";
 }
 
 [XmlRoot(ElementName = "star-rating")]
@@ -211,7 +219,7 @@ public class Starrating
 {
 
     [XmlElement(ElementName = "value")]
-    public string Value { get; set; }
+    public string Value { get; set; } = "";
 }
 
 [XmlRoot(ElementName = "sub-title")]
@@ -219,10 +227,10 @@ public class Subtitle
 {
 
     [XmlAttribute(AttributeName = "lang")]
-    public string Lang { get; set; }
+    public string Lang { get; set; } = "";
 
     [XmlText]
-    public string Text { get; set; }
+    public string Text { get; set; } = "";
 }
 
 [XmlRoot(ElementName = "tv")]
@@ -230,12 +238,12 @@ public class Tv
 {
 
     [XmlElement(ElementName = "channel")]
-    public List<Channel> Channel { get; set; }
+    public List<Channel> Channel { get; set; } = new List<Channel>();
 
     [XmlElement(ElementName = "iepg")]
-    public int Iepg { get; set; }
+    public int Iepg { get; set; } = 0;
 
     [XmlElement(ElementName = "programme")]
-    public List<Programme> Programme { get; set; }
+    public List<Programme> Programme { get; set; } = new List<Programme>();
 }
 

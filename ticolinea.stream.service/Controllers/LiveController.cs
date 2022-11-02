@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using MySqlConnector;
 using System.Text;
 using System.Text.RegularExpressions;
 using ticolinea.stream.service.Db;
@@ -19,10 +20,11 @@ namespace ticolinea.stream.service.Controllers
             if (ext == null) return Unauthorized();
             if (ext != "m3u8") return Unauthorized();
 
-            var usuariodb = Helpers.Usuario.VerificarUsuario(usuario, password);
+            var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
             if (usuariodb == null) return Unauthorized();
+            var existeCanal = await ObtieneDatosCanal(chID);
 
-            if (!ObtieneDatosCanal(chID)) return Unauthorized();
+            if (!existeCanal) return Unauthorized();
 
             var streamsFolder = Constantes.Global.STREAMS_FOLDER;
             var playlistFile = $"{streamsFolder}{chID}_.m3u8";
@@ -33,7 +35,7 @@ namespace ticolinea.stream.service.Controllers
             {
                 playlistOutput = tr.ReadToEnd();
             }*/
-            string playlistOutput = System.IO.File.ReadAllText(playlistFile);
+            string playlistOutput = await System.IO.File.ReadAllTextAsync(playlistFile);
 
             string pattern = @"(.*?).ts";
             Regex rg = new(pattern);
@@ -77,7 +79,7 @@ namespace ticolinea.stream.service.Controllers
 
             var userAgent = Request.Headers["User-Agent"].ToString();
 
-            Helpers.Usuario.ActualizaInfoUsuario(usuariodb.UsuarioId, chID, userAgent, ip, usuariodb.ConexionesMaximas);
+            await Helpers.Usuario.ActualizaInfoUsuario(usuariodb.UsuarioId, chID, userAgent, ip, usuariodb.ConexionesMaximas);
 
             return File(stream, "application/x-mpegurl", $"{chID}.m3u8");
         }
@@ -91,86 +93,55 @@ namespace ticolinea.stream.service.Controllers
 
             var streamsFolder = Constantes.Global.STREAMS_FOLDER;
             var segmentFile = $"{streamsFolder}{segment}";
-            /*var fileBytes = System.IO.File.ReadAllBytes(segmentFile);
-            MemoryStream stream = new(fileBytes);*/
+            var fileBytes = await System.IO.File.ReadAllBytesAsync(segmentFile);
+            MemoryStream stream = new(fileBytes);
 
-            return PhysicalFile(segmentFile, "video/mp2t");
+            //return PhysicalFile(segmentFile, "video/mp2t");
 
-            //return File(stream, "video/mp2t", segment);
+            return File(stream, "video/mp2t", segment);
         }
 
-        /*public Usuario VerificarUsuario(string usuario, string password)
-        {
-            usuario = usuario.Replace("UPDATE", "").Replace("INSERT", "").Replace("DELETE", "");
-            password = password.Replace("UPDATE", "").Replace("INSERT", "").Replace("DELETE", "");
-            //Verifica si usuario existe
-            using (var connection = new MySqlConnection("server=127.0.0.1;Port=7999;uid=ticolineadb;pwd=Qawsedrf7852!;database=xtream_iptvpro;Allow User Variables=True;SSLMode=None"))
-            {
-                connection.Open();
 
-                List<Usuario> usuarios = new();
-
-                string query = "SELECT id,conexiones_maximas, habilitado FROM usuarios_ticolinea " +
-                                                  "WHERE usuario = @usuario and clave = @clave;";
-
-                using var cmd = new MySqlCommand(query, connection);
-                cmd.Parameters.AddWithValue("@usuario", usuario);
-                cmd.Parameters.AddWithValue("@clave", password);
-
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        usuarios.Add(new Usuario
-                        {
-                            UsuarioId = reader.GetInt32(0),
-                            ConexionesMaximas = reader.GetInt32(1),
-                            Habilitado = reader.GetInt32(2),
-                        });
-                    }
-
-                return usuarios.FirstOrDefault();
-            }
-        }*/
-
-        private bool ObtieneDatosCanal(int chnId)
+        private async Task<bool> ObtieneDatosCanal(int chnId)
         {
             string ubicacionStreams = Constantes.Global.STREAMS_FOLDER;
-
 
             try
             {
                 List<StreamDb> streams = new();
 
-                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                using (var conn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
-                    var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate, cgop, gop FROM streams_tl a " +
-                                    "INNER JOIN streams_info b " +
-                                    "on a.id = b.stream_id " +
-                                    $"WHERE iniciado = 1 AND stream_id = {chnId} and Habilitado=1;";
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        if (conn.State == System.Data.ConnectionState.Closed) await conn.OpenAsync();
+                        cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate, cgop, gop FROM streams_tl a " +
+                                        "INNER JOIN streams_info b " +
+                                        "on a.id = b.stream_id " +
+                                        $"WHERE iniciado = 1 AND stream_id = {chnId} and Habilitado=1;";
 
-                    using (var reader = cmd.ExecuteReader())
-                        while (reader.Read())
-                        {
-                            streams.Add(new StreamDb
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
                             {
-                                Fuente = reader.GetString(0),
-                                StreamId = reader.GetInt32(1),
-                                ProbeSize = reader.GetInt32(2),
-                                EsBajoDemanda = reader.GetInt32(3),
-                                ProcesoId = reader.GetInt32(4),
-                                TranscodeAudio = reader.GetString(5),
-                                Intervalo = reader.GetInt16(6),
-                                Segmentos = reader.GetInt16(7),
-                                Framerate = reader.GetInt32(8),
-                                Transcode = reader.GetInt32(9),
-                                Resolucion = reader.GetString(10),
-                                Bitrate = reader.GetString(11),
-                                CGOP = reader.GetInt32(12),
-                                GOP = reader.GetInt32(13),
-                            });
-                        }
-                    cmd.Connection?.Close();
+                                streams.Add(new StreamDb
+                                {
+                                    Fuente = reader.GetString(0),
+                                    StreamId = reader.GetInt32(1),
+                                    ProbeSize = reader.GetInt32(2),
+                                    EsBajoDemanda = reader.GetInt32(3),
+                                    ProcesoId = reader.GetInt32(4),
+                                    TranscodeAudio = reader.GetString(5),
+                                    Intervalo = reader.GetInt16(6),
+                                    Segmentos = reader.GetInt16(7),
+                                    Framerate = reader.GetInt32(8),
+                                    Transcode = reader.GetInt32(9),
+                                    Resolucion = reader.GetString(10),
+                                    Bitrate = reader.GetString(11),
+                                    CGOP = reader.GetInt32(12),
+                                    GOP = reader.GetInt32(13),
+                                });
+                            }
+                    }
                 }
 
 
@@ -190,8 +161,8 @@ namespace ticolinea.stream.service.Controllers
                     {
                         Console.WriteLine("Canal sin proceso, iniciando stream");
                         //Inicia stream
-                        Jobs.IniciarStream(stream);
-                        System.Threading.Thread.Sleep(500);
+                        await Jobs.IniciarStream(stream);
+                        System.Threading.Thread.Sleep(400);
                         bool archivoExiste = false;
                         int ciclo = 0;
                         while (archivoExiste == false && ciclo < 35)
@@ -212,7 +183,7 @@ namespace ticolinea.stream.service.Controllers
                     Console.WriteLine("Canal sin proceso, iniciado stream");
 
                     //Inicia stream
-                    Jobs.IniciarStream(stream);
+                    await Jobs.IniciarStream(stream);
                     System.Threading.Thread.Sleep(100);
                     bool archivoExiste = false;
                     int ciclo = 0;

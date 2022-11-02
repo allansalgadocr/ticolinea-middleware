@@ -9,51 +9,51 @@ namespace ticolinea.stream.service.Controllers
     public class TestController : ControllerBase
     {
         [HttpGet]
-        public IActionResult TestRevisarStreams()
+        public async Task<IActionResult> TestRevisarStreams()
         {
-            Jobs.RevisarStreams();
+            await Jobs.RevisarStreams();
             return Ok();
         }
 
         [HttpGet]
-        public IActionResult TestDetenerStreams()
+        public async Task<IActionResult> TestDetenerStreams()
         {
-            Jobs.DetenerStreamsSinUso();
+            await Jobs.DetenerStreamsSinUso();
             return Ok();
         }
 
         [HttpGet]
-        public IActionResult TestMataConexiones()
+        public async Task<IActionResult> TestMataConexiones()
         {
-            Jobs.MataConexionesSinUso();
+            await Jobs.MataConexionesSinUso();
             return Ok();
         }
 
         [HttpGet]
-        public IActionResult TestVerificaStreams()
+        public async Task<IActionResult> TestVerificaStreams()
         {
-            Jobs.VerificarStreamsCaidos();
+            await Jobs.VerificarStreamsCaidos();
             return Ok();
         }
 
         [HttpGet]
-        public IActionResult EliminarArchivosGrandes()
+        public async Task<IActionResult> EliminarArchivosGrandes()
         {
-            Jobs.EliminarArchivosGrandes();
+            await Jobs.EliminarArchivosGrandes();
             return Ok();
         }
 
         [HttpGet("{archivo}/{esLocal}")]
-        public IActionResult ObtenerEPG(string archivo, bool esLocal)
+        public async Task<IActionResult> ObtenerEPG(string archivo, bool esLocal)
         {
-            Helpers.xmlHelper.Deserializar(archivo, esLocal);
+            await Helpers.xmlHelper.Deserializar(archivo, esLocal);
             return Ok();
         }
 
         [HttpGet("{verificarSoloHabilitados}")]
-        public IActionResult TestVerificaCodecs(int verificarSoloHabilitados)
+        public async Task<IActionResult> TestVerificaCodecs(int verificarSoloHabilitados)
         {
-            Jobs.VerificarCodecsStreams(verificarSoloHabilitados == 1);
+            await Jobs.VerificarCodecsStreams(verificarSoloHabilitados == 1);
             return Ok();
         }
 

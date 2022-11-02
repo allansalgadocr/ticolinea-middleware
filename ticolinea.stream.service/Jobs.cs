@@ -1,5 +1,6 @@
 ﻿using CliWrap;
 using CliWrap.Buffered;
+using MySqlConnector;
 using System.Diagnostics;
 using System.Net;
 using System.Text;
@@ -10,120 +11,130 @@ namespace ticolinea.stream.service
 {
     public class Jobs
     {
-        public static void RevisarStreams()
+        public static async Task RevisarStreams()
         {
             List<StreamDb> streams = new();
-            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate, proceso_id, cgop, gop FROM streams_tl a INNER JOIN " +
-                                                      "streams_info b " +
-                                                      "ON a.id = b.stream_id " +
-                                                      "WHERE habilitado = 1 and iniciado = 1 and es_bajodemanda=0 and tipo=1;";
+                using (var cmd = cnn.CreateCommand())
+                {
+                    if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate, proceso_id, cgop, gop FROM streams_tl a INNER JOIN " +
+                                                          "streams_info b " +
+                                                          "ON a.id = b.stream_id " +
+                                                          "WHERE habilitado = 1 and iniciado = 1 and es_bajodemanda=0 and tipo=1;";
 
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        streams.Add(new StreamDb
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            Fuente = reader.GetString(0),
-                            StreamId = reader.GetInt32(1),
-                            ProbeSize = reader.GetInt32(2),
-                            EsBajoDemanda = reader.GetInt32(3),
-                            TranscodeAudio = reader.GetString(4),
-                            Intervalo = reader.GetInt16(5),
-                            Segmentos = reader.GetInt16(6),
-                            Framerate = reader.GetInt32(7),
-                            Transcode = reader.GetInt32(8),
-                            Resolucion = reader.GetString(9),
-                            Bitrate = reader.GetString(10),
-                            ProcesoId = reader.GetInt32(11),
-                            CGOP = reader.GetInt32(12),
-                            GOP = reader.GetInt32(13)
-                        });
-                    }
-                cmd.Connection?.Close();
+                            streams.Add(new StreamDb
+                            {
+                                Fuente = reader.GetString(0),
+                                StreamId = reader.GetInt32(1),
+                                ProbeSize = reader.GetInt32(2),
+                                EsBajoDemanda = reader.GetInt32(3),
+                                TranscodeAudio = reader.GetString(4),
+                                Intervalo = reader.GetInt16(5),
+                                Segmentos = reader.GetInt16(6),
+                                Framerate = reader.GetInt32(7),
+                                Transcode = reader.GetInt32(8),
+                                Resolucion = reader.GetString(9),
+                                Bitrate = reader.GetString(10),
+                                ProcesoId = reader.GetInt32(11),
+                                CGOP = reader.GetInt32(12),
+                                GOP = reader.GetInt32(13)
+                            });
+                        }
+                }
             }
 
             foreach (StreamDb stream in streams)
             {
                 //ObtenerInfoCodec(stream.StreamId, stream.Fuente);
                 if (stream.ProcesoId == -1)
-                    IniciarStream(stream);
+                    await IniciarStream(stream);
                 else
                 {
                     //Verifica si existe el proceso
                     bool EstaCorriendoStream = ObtenerProcesoFFMPEG(stream.ProcesoId);
                     if (!EstaCorriendoStream)
-                        IniciarStream(stream);
+                        await IniciarStream(stream);
                 }
             }
         }
 
-        public static void VerificarCodecsStreams(bool verificaSoloHabilitados = true)
+        public static async Task VerificarCodecsStreams(bool verificaSoloHabilitados = true)
         {
             var extraCommand = verificaSoloHabilitados ? " and habilitado = 1" : "";
             List<StreamDb> streams = new();
-            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "SELECT fuente_stream,id FROM streams_tl " +
-                                                      $"WHERE tipo=1 {extraCommand};";
+                using (var cmd = cnn.CreateCommand())
+                {
+                    if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmd.CommandText = "SELECT fuente_stream,id FROM streams_tl " +
+                                                          $"WHERE tipo=1 {extraCommand};";
 
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        streams.Add(new StreamDb
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            Fuente = reader.GetString(0),
-                            StreamId = reader.GetInt32(1),
+                            streams.Add(new StreamDb
+                            {
+                                Fuente = reader.GetString(0),
+                                StreamId = reader.GetInt32(1),
 
-                        });
-                    }
-                cmd.Connection?.Close();
+                            });
+                        }
+                }
             }
 
             foreach (StreamDb stream in streams)
             {
-                ObtenerInfoCodec(stream.StreamId, stream.Fuente);
+                await ObtenerInfoCodec(stream.StreamId, stream.Fuente);
             }
         }
 
-        public static void DetenerStreamsSinUso()
+        public static async Task DetenerStreamsSinUso()
         {
             List<StreamDb> streams = new();
-            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "SELECT a.id,b.proceso_id,c.actividad_id FROM streams_tl a " +
-                                                    "INNER JOIN streams_info b on a.id = b.stream_id " +
-                                                    "LEFT JOIN actividad_usuario_actualmente c " +
-                                                    "on a.id = c.stream_id " +
-                                                    "WHERE es_bajodemanda = 1 AND proceso_id != -1 AND actividad_id is null and tipo=1;";
+                using (var cmd = cnn.CreateCommand())
+                {
+                    if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmd.CommandText = "SELECT a.id,b.proceso_id,c.actividad_id FROM streams_tl a " +
+                                                        "INNER JOIN streams_info b on a.id = b.stream_id " +
+                                                        "LEFT JOIN actividad_usuario_actualmente c " +
+                                                        "on a.id = c.stream_id " +
+                                                        "WHERE es_bajodemanda = 1 AND proceso_id != -1 AND actividad_id is null and tipo=1;";
 
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        streams.Add(new StreamDb
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            StreamId = reader.GetInt32(0),
-                            ProcesoId = reader.GetInt32(1)
-                        });
-                    }
+                            streams.Add(new StreamDb
+                            {
+                                StreamId = reader.GetInt32(0),
+                                ProcesoId = reader.GetInt32(1)
+                            });
+                        }
+                }
 
                 foreach (StreamDb stream in streams)
                 {
-                    var cmdStreams = mariadb.Conexion.CreateCommand();
                     var proc = ObtenerProcesoEjecutando(stream.ProcesoId);
                     if (proc != null)
                     {
                         proc.Kill();
                     }
 
-                    cmdStreams.CommandText = "UPDATE streams_info SET proceso_id=-1 " +
+                    using (var cmdStreams = cnn.CreateCommand())
+                    {
+                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmdStreams.CommandText = "UPDATE streams_info SET proceso_id=-1 " +
                                          "WHERE stream_id=@id";
-                    cmdStreams.Parameters.AddWithValue("@id", stream.StreamId);
-                    cmdStreams.ExecuteNonQuery();
+                        cmdStreams.Parameters.AddWithValue("@id", stream.StreamId);
+                        await cmdStreams.ExecuteNonQueryAsync();
+                    }
                 }
             }
         }
@@ -194,14 +205,14 @@ namespace ticolinea.stream.service
         public static async Task<string> RunCommandAsync(int streamId)
         {
             var result = await Cli
-                  .Wrap("/bin/ps")
-                  .WithArguments("-e | pgrep -f \"/33_.m3u\"")
+                  .Wrap("/bin/pgrep")
+                  .WithArguments($"-f \"/{streamId}_.m3u\"")
                   .ExecuteBufferedAsync();
 
             return result.StandardOutput;
         }
 
-        public static void IniciarStream(StreamDb stream)
+        public static async Task IniciarStream(StreamDb stream)
         {
             string ubicacionStreams = Constantes.Global.STREAMS_FOLDER;
             Process process = new();
@@ -256,41 +267,46 @@ namespace ticolinea.stream.service
             process.StartInfo.RedirectStandardOutput = false;
             process.Start();
 
-            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "UPDATE streams_info SET proceso_id=@id_proceso, ejecutando=1 " +
-                           "WHERE stream_id=@id";
+                using (var cmd = cnn.CreateCommand())
+                {
+                    if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmd.CommandText = "UPDATE streams_info SET proceso_id=@id_proceso, ejecutando=1 " +
+                               "WHERE stream_id=@id";
 
-                cmd.Parameters.AddWithValue("@id_proceso", process.Id);
-                cmd.Parameters.AddWithValue("@id", stream.StreamId);
+                    cmd.Parameters.AddWithValue("@id_proceso", process.Id);
+                    cmd.Parameters.AddWithValue("@id", stream.StreamId);
 
-                cmd.ExecuteNonQuery();
+                    await cmd.ExecuteNonQueryAsync();
+                }
             }
             //ObtenerInfoCodec(stream.StreamId, stream.Fuente);
         }
 
-        public static void ActualizarCanalEstado(int streamId, bool estaCaido, int procesoId)
+        public static async Task ActualizarCanalEstado(int streamId, bool estaCaido, int procesoId)
         {
-            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var cmd = mariadb.Conexion.CreateCommand();
-                if (estaCaido)
+                using (var cmd = cnn.CreateCommand())
                 {
-                    cmd.CommandText = "UPDATE streams_info SET reportado_caido=1 " +
-                               "WHERE stream_id=@id";
-                }
-                else
-                    cmd.CommandText = "UPDATE streams_info SET reportado_caido=0 " +
-                              "WHERE stream_id=@id";
+                    if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    if (estaCaido)
+                    {
+                        cmd.CommandText = "UPDATE streams_info SET reportado_caido=1 " +
+                                   "WHERE stream_id=@id";
+                    }
+                    else
+                        cmd.CommandText = "UPDATE streams_info SET reportado_caido=0 " +
+                                  "WHERE stream_id=@id";
 
-                cmd.Parameters.AddWithValue("@id", streamId);
-                cmd.ExecuteNonQuery();
-                cmd.Connection?.Close();
+                    cmd.Parameters.AddWithValue("@id", streamId);
+                    await cmd.ExecuteNonQueryAsync();
+                }
             }
         }
 
-        public static void VerificarStreamsCaidos()
+        public static async Task VerificarStreamsCaidos()
         {
 
             try
@@ -299,25 +315,28 @@ namespace ticolinea.stream.service
                 List<StreamDb> streams = new();
                 int streamsCaidos = 0;
                 sb.AppendLine("[CANT] streams se reportaron como caídos:");
-                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
-                    var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "SELECT fuente_stream, id, nombre_stream,proceso_id FROM streams_tl a " +
-                                        "inner join streams_info b " +
-                                        "on a.id = b.stream_id " +
-                                        "WHERE habilitado = 1 AND iniciado = 1 AND omitir_verificacion = 0 and tipo = 1 and es_bajodemanda=0; ";
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "SELECT fuente_stream, id, nombre_stream,proceso_id FROM streams_tl a " +
+                                            "inner join streams_info b " +
+                                            "on a.id = b.stream_id " +
+                                            "WHERE habilitado = 1 AND iniciado = 1 AND omitir_verificacion = 0 and tipo = 1 and es_bajodemanda=0; ";
 
-                    using (var reader = cmd.ExecuteReader())
-                        while (reader.Read())
-                        {
-                            streams.Add(new StreamDb
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
                             {
-                                Fuente = reader.GetString(0),
-                                StreamId = reader.GetInt32(1),
-                                TranscodeAudio = reader.GetString(2),
-                                ProcesoId = reader.GetInt32(3)
-                            });
-                        }
+                                streams.Add(new StreamDb
+                                {
+                                    Fuente = reader.GetString(0),
+                                    StreamId = reader.GetInt32(1),
+                                    TranscodeAudio = reader.GetString(2),
+                                    ProcesoId = reader.GetInt32(3)
+                                });
+                            }
+                    }
                 }
 
 
@@ -344,7 +363,7 @@ namespace ticolinea.stream.service
                             sb.AppendLine($"• {stream.StreamId} - {stream.TranscodeAudio}");
                         }
 
-                        ActualizarCanalEstado(stream.StreamId, estaCaido, stream.ProcesoId);
+                        await ActualizarCanalEstado(stream.StreamId, estaCaido, stream.ProcesoId);
                         DetenerProceso(stream.ProcesoId);
                     }
                     catch (Exception ex)
@@ -376,7 +395,7 @@ namespace ticolinea.stream.service
             }
         }
 
-        public static void VerificarStream(StreamDb stream)
+        public static async Task VerificarStream(StreamDb stream)
         {
             try
             {
@@ -401,7 +420,7 @@ namespace ticolinea.stream.service
                             estaCaido = true;
                         }
 
-                        ActualizarCanalEstado(stream.StreamId, estaCaido, stream.ProcesoId);
+                        await ActualizarCanalEstado(stream.StreamId, estaCaido, stream.ProcesoId);
                     }
                     catch (Exception ex)
                     {
@@ -416,7 +435,7 @@ namespace ticolinea.stream.service
             }
         }
 
-        public static void ObtenerInfoCodec(int streamId, string fuente)
+        public static async Task ObtenerInfoCodec(int streamId, string fuente)
         {
             try
             {
@@ -447,17 +466,20 @@ namespace ticolinea.stream.service
 
                 probe.WaitForExit();
 
-                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
-                    var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "UPDATE streams_tl SET audio_info=@audio_info, video_info=@video_info " +
-                                   "WHERE id=@id";
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "UPDATE streams_tl SET audio_info=@audio_info, video_info=@video_info " +
+                                       "WHERE id=@id";
 
-                    cmd.Parameters.AddWithValue("@audio_info", audiodbInfo);
-                    cmd.Parameters.AddWithValue("@video_info", videodbInfo);
-                    cmd.Parameters.AddWithValue("@id", streamId);
+                        cmd.Parameters.AddWithValue("@audio_info", audiodbInfo);
+                        cmd.Parameters.AddWithValue("@video_info", videodbInfo);
+                        cmd.Parameters.AddWithValue("@id", streamId);
 
-                    cmd.ExecuteNonQuery();
+                        await cmd.ExecuteNonQueryAsync();
+                    }
                 }
             }
             catch (Exception ex)
@@ -467,18 +489,20 @@ namespace ticolinea.stream.service
         }
 
 
-        public static void MataConexionesSinUso()
+        public static async Task MataConexionesSinUso()
         {
             try
             {
                 var fechaFinMaxima = DateTimeOffset.Now.AddMinutes(-25).ToUnixTimeSeconds();
-                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
-                    var cmd = mariadb.Conexion.CreateCommand();
-                    cmd.CommandText = "DELETE FROM actividad_usuario_actualmente where fecha_inicio < @fechaFinMaxima;";
-                    cmd.Parameters.AddWithValue("@fechaFinMaxima", fechaFinMaxima);
-                    cmd.ExecuteNonQuery();
-                    cmd.Connection?.Close();
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "DELETE FROM actividad_usuario_actualmente where fecha_inicio < @fechaFinMaxima;";
+                        cmd.Parameters.AddWithValue("@fechaFinMaxima", fechaFinMaxima);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
                 }
             }
             catch (Exception ex)
@@ -504,7 +528,7 @@ namespace ticolinea.stream.service
             }
         }
 
-        public static void EliminarArchivosGrandes()
+        public static async Task EliminarArchivosGrandes()
         {
             try
             {
@@ -513,9 +537,8 @@ namespace ticolinea.stream.service
                         .Where(f => f.Length > 15000000)
                         .ToList();
 
-                using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
-                    var deteccionDeFalla = false;
                     foreach (var file in files)
                     {
                         StreamDb stream = new StreamDb();
@@ -525,26 +548,28 @@ namespace ticolinea.stream.service
                         file.Delete();
                         if (!string.IsNullOrEmpty(chnId))
                         {
-                            var cmd = mariadb.Conexion.CreateCommand();
-                            cmd.CommandText = "SELECT a.id,b.proceso_id,c.actividad_id FROM streams_tl a " +
-                                                                "INNER JOIN streams_info b on a.id = b.stream_id " +
-                                                                "LEFT JOIN actividad_usuario_actualmente c " +
-                                                                "on a.id = c.stream_id " +
-                                                                $"WHERE stream_id = {chnId} AND proceso_id != -1 and tipo=1;";
+                            using (var cmd = cnn.CreateCommand())
+                            {
+                                if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                                cmd.CommandText = "SELECT a.id,b.proceso_id,c.actividad_id FROM streams_tl a " +
+                                                                    "INNER JOIN streams_info b on a.id = b.stream_id " +
+                                                                    "LEFT JOIN actividad_usuario_actualmente c " +
+                                                                    "on a.id = c.stream_id " +
+                                                                    $"WHERE stream_id = {chnId} AND proceso_id != -1 and tipo=1;";
 
-                            using (var reader = cmd.ExecuteReader())
-                                while (reader.Read())
-                                {
-                                    stream = new StreamDb
+                                using (var reader = await cmd.ExecuteReaderAsync())
+                                    while (await reader.ReadAsync())
                                     {
-                                        StreamId = reader.GetInt32(0),
-                                        ProcesoId = reader.GetInt32(1)
-                                    };
-                                }
+                                        stream = new StreamDb
+                                        {
+                                            StreamId = reader.GetInt32(0),
+                                            ProcesoId = reader.GetInt32(1)
+                                        };
+                                    }
+                            }
 
                             if (stream.ProcesoId > 0)
                             {
-                                deteccionDeFalla = true;
                                 DetenerProceso(stream.ProcesoId);
                             }
                         }

@@ -3,11 +3,11 @@
     public class Bouquet
     {
         public int Id { get; set; }
-        public string Nombre { get; set; }
-        public string Imagen { get; set; }
-        public string Categoria { get; set; }
+        public string Nombre { get; set; } = "";
+        public string Imagen { get; set; } = "";
+        public string Categoria { get; set; } = "";
         public int Tipo { get; set; }
-        public string Contenedor { get; set; }
+        public string Contenedor { get; set; } = "";
         public string CanalEPG { get; set; } = "";
         public int CanalId { get; set; } = 0;
     }

@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using MySqlConnector;
 using System.Text;
 using ticolinea.stream.service.Db;
 
@@ -10,14 +11,14 @@ namespace ticolinea.stream.service.Controllers
     {
 
         /*[HttpGet]
-        public IActionResult Reordenar()
+        public async Task<IActionResult> Reordenar()
         {
             string orden = "";
-            var cmd = this.Mariadb.Conexion.CreateCommand() as MySqlCommand;
+            var cmd = this.cnn.CreateCommand() as MySqlCommand;
             cmd.CommandText = "SELECT replace(replace(bouquet_channels,'[',''),']','') FROM bouquets WHERE Id=1;";
 
-            using (var reader = cmd.ExecuteReader())
-                while (reader.Read())
+            using (var reader = await cmd.ExecuteReaderAsync())
+                while (await reader.ReadAsync())
                 {
                     orden = reader.GetString(0);
                 }
@@ -30,7 +31,7 @@ namespace ticolinea.stream.service.Controllers
                 int streamId = 0;
                 using (var command = new MySqlCommand($"SELECT id FROM streams_tl WHERE Id={lst};", connection))
                 using (var reader = command.ExecuteReader())
-                    while (reader.Read())
+                    while (await reader.ReadAsync())
                     {
                         streamId = reader.GetInt32(0);
                     }
@@ -50,117 +51,129 @@ namespace ticolinea.stream.service.Controllers
         }*/
 
         [HttpGet("{usuario}/{password}")]
-        public IActionResult Playlist(string usuario, string password)
+        public async Task<IActionResult> Playlist(string usuario, string password)
         {
-            var usuariodb = Helpers.Usuario.VerificarUsuario(usuario, password);
+            var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
             if (usuariodb == null) return Unauthorized();
 
             List<Modelos.Bouquet> bouquet = new();
             List<Modelos.Bouquet> bouquetCustom = new();
             StringBuilder sb = new();
             sb.AppendLine("#EXTM3U\r\n");
-            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
-                                                        "INNER JOIN stream_categories b " +
-                                                        "on a.id_categoria = b.id " +
-                                                        "WHERE habilitado=1 and tipo=1 and canal_id=0 " +
-                                                        "order by a.orden asc;";
+                using (var cmd = cnn.CreateCommand())
+                {
+                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
+                                                            "INNER JOIN stream_categories b " +
+                                                            "on a.id_categoria = b.id " +
+                                                            "WHERE habilitado=1 and tipo=1 and canal_id=0 " +
+                                                            "order by a.orden asc;";
 
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        bouquet.Add(new Modelos.Bouquet
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            Id = reader.GetInt32(0),
-                            Nombre = reader.GetString(1),
-                            Imagen = reader.GetString(2),
-                            Categoria = reader.GetString(3),
-                            Tipo = reader.GetInt32(4),
-                            Contenedor = reader.GetString(5),
-                            CanalEPG = reader.GetString(6),
-                        });
-                    }
+                            bouquet.Add(new Modelos.Bouquet
+                            {
+                                Id = reader.GetInt32(0),
+                                Nombre = reader.GetString(1),
+                                Imagen = reader.GetString(2),
+                                Categoria = reader.GetString(3),
+                                Tipo = reader.GetInt32(4),
+                                Contenedor = reader.GetString(5),
+                                CanalEPG = reader.GetString(6),
+                            });
+                        }
+                }
 
-                cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg, canal_id FROM streams_tl a " +
+                using (var cmd = cnn.CreateCommand())
+                {
+                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg, canal_id FROM streams_tl a " +
                                                         "INNER JOIN stream_categories b " +
                                                         "on a.id_categoria = b.id " +
                                                         "WHERE habilitado=1 and tipo=1 and canal_id != 0 " +
                                                         "order by a.canal_id asc;";
 
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        bouquetCustom.Add(new Modelos.Bouquet
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            Id = reader.GetInt32(0),
-                            Nombre = reader.GetString(1),
-                            Imagen = reader.GetString(2),
-                            Categoria = reader.GetString(3),
-                            Tipo = reader.GetInt32(4),
-                            Contenedor = reader.GetString(5),
-                            CanalEPG = reader.GetString(6),
-                            CanalId = reader.GetInt32(7)
-                        });
-                    }
+                            bouquetCustom.Add(new Modelos.Bouquet
+                            {
+                                Id = reader.GetInt32(0),
+                                Nombre = reader.GetString(1),
+                                Imagen = reader.GetString(2),
+                                Categoria = reader.GetString(3),
+                                Tipo = reader.GetInt32(4),
+                                Contenedor = reader.GetString(5),
+                                CanalEPG = reader.GetString(6),
+                                CanalId = reader.GetInt32(7)
+                            });
+                        }
 
-                foreach (var canal in bouquetCustom)
-                {
-                    if (canal.CanalId < bouquet.Count() - 1)
+                    foreach (var canal in bouquetCustom)
                     {
-                        bouquet.Insert(canal.CanalId-1, canal);
-                    }
-                    else
-                    {
-                        bouquet.Add(canal);
+                        if (canal.CanalId < bouquet.Count() - 1)
+                        {
+                            bouquet.Insert(canal.CanalId - 1, canal);
+                        }
+                        else
+                        {
+                            bouquet.Add(canal);
+                        }
                     }
                 }
 
-                var cmdPeliculas = mariadb.Conexion.CreateCommand();
-                cmdPeliculas.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
-                                                        "INNER JOIN stream_categories b " +
-                                                        "on a.id_categoria = b.id " +
-                                                        "WHERE habilitado=1 and tipo=2 " +
-                                                        "order by a.id desc;";
+                using (var cmdPeliculas = cnn.CreateCommand())
+                {
+                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmdPeliculas.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
+                                                            "INNER JOIN stream_categories b " +
+                                                            "on a.id_categoria = b.id " +
+                                                            "WHERE habilitado=1 and tipo=2 " +
+                                                            "order by a.id desc;";
 
-                using (var reader = cmdPeliculas.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        bouquet.Add(new Modelos.Bouquet
+                    using (var reader = cmdPeliculas.ExecuteReader())
+                        while (await reader.ReadAsync())
                         {
-                            Id = reader.GetInt32(0),
-                            Nombre = reader.GetString(1),
-                            Imagen = reader.GetString(2),
-                            Categoria = reader.GetString(3),
-                            Tipo = reader.GetInt32(4),
-                            Contenedor = reader.GetString(5),
-                            CanalEPG = reader.GetString(6),
-                        });
-                    }
+                            bouquet.Add(new Modelos.Bouquet
+                            {
+                                Id = reader.GetInt32(0),
+                                Nombre = reader.GetString(1),
+                                Imagen = reader.GetString(2),
+                                Categoria = reader.GetString(3),
+                                Tipo = reader.GetInt32(4),
+                                Contenedor = reader.GetString(5),
+                                CanalEPG = reader.GetString(6),
+                            });
+                        }
+                }
 
-                var cmdSeries = mariadb.Conexion.CreateCommand();
-                cmdSeries.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
-                                                        "INNER JOIN stream_categories b " +
-                                                        "on a.id_categoria = b.id " +
-                                                        "WHERE habilitado=1 and tipo=3 " +
-                                                        "order by a.id desc;";
+                using (var cmdSeries = cnn.CreateCommand())
+                {
+                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmdSeries.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
+                                                            "INNER JOIN stream_categories b " +
+                                                            "on a.id_categoria = b.id " +
+                                                            "WHERE habilitado=1 and tipo=3 " +
+                                                            "order by a.id desc;";
 
-                using (var reader = cmdSeries.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        bouquet.Add(new Modelos.Bouquet
+                    using (var reader = await cmdSeries.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            Id = reader.GetInt32(0),
-                            Nombre = reader.GetString(1),
-                            Imagen = reader.GetString(2),
-                            Categoria = reader.GetString(3),
-                            Tipo = reader.GetInt32(4),
-                            Contenedor = reader.GetString(5),
-                            CanalEPG = reader.GetString(6),
-                        });
-                    }
-
+                            bouquet.Add(new Modelos.Bouquet
+                            {
+                                Id = reader.GetInt32(0),
+                                Nombre = reader.GetString(1),
+                                Imagen = reader.GetString(2),
+                                Categoria = reader.GetString(3),
+                                Tipo = reader.GetInt32(4),
+                                Contenedor = reader.GetString(5),
+                                CanalEPG = reader.GetString(6),
+                            });
+                        }
+                }
             }
 
             foreach (var chn in bouquet)
@@ -176,7 +189,8 @@ namespace ticolinea.stream.service.Controllers
 #endif
                 }
 
-                if (chn.Tipo == 2 || chn.Tipo == 3) {
+                if (chn.Tipo == 2 || chn.Tipo == 3)
+                {
 #if !DEBUG
                     sb.AppendLine($"http://tv.play-latino.com:27701/Peliculas/Reproducir/{chn.Id}/{usuario}/{password}.{chn.Contenedor}\r\n");
 #endif
@@ -190,60 +204,67 @@ namespace ticolinea.stream.service.Controllers
         }
 
         [HttpGet("{usuario}/{password}.{extension}")]
-        public IActionResult STB(string usuario, string password,string extension)
+        public async Task<IActionResult> STB(string usuario, string password, string extension)
         {
-            var usuariodb = Helpers.Usuario.VerificarUsuario(usuario, password);
+            var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
             if (usuariodb == null) return Unauthorized();
 
             List<Modelos.Bouquet> bouquet = new();
             List<Modelos.Bouquet> bouquetCustom = new();
             StringBuilder sb = new();
             sb.AppendLine("#EXTM3U\r\n");
-            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var cmd = mariadb.Conexion.CreateCommand();
-                cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
-                                                        "INNER JOIN stream_categories b " +
-                                                        "on a.id_categoria = b.id " +
-                                                        "WHERE habilitado=1 and tipo=1 and canal_id=0 " +
-                                                        "order by a.orden asc;";
+                using (var cmd = cnn.CreateCommand())
+                {
+                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
+                                                            "INNER JOIN stream_categories b " +
+                                                            "on a.id_categoria = b.id " +
+                                                            "WHERE habilitado=1 and tipo=1 and canal_id=0 " +
+                                                            "order by a.orden asc;";
 
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        bouquet.Add(new Modelos.Bouquet
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            Id = reader.GetInt32(0),
-                            Nombre = reader.GetString(1),
-                            Imagen = reader.GetString(2),
-                            Categoria = reader.GetString(3),
-                            Tipo = reader.GetInt32(4),
-                            Contenedor = reader.GetString(5),
-                            CanalEPG = reader.GetString(6),
-                        });
-                    }
+                            bouquet.Add(new Modelos.Bouquet
+                            {
+                                Id = reader.GetInt32(0),
+                                Nombre = reader.GetString(1),
+                                Imagen = reader.GetString(2),
+                                Categoria = reader.GetString(3),
+                                Tipo = reader.GetInt32(4),
+                                Contenedor = reader.GetString(5),
+                                CanalEPG = reader.GetString(6),
+                            });
+                        }
+                }
 
-                cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg, canal_id FROM streams_tl a " +
+                using (var cmd = cnn.CreateCommand())
+                {
+                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg, canal_id FROM streams_tl a " +
                                                         "INNER JOIN stream_categories b " +
                                                         "on a.id_categoria = b.id " +
                                                         "WHERE habilitado=1 and tipo=1 and canal_id != 0 " +
                                                         "order by a.canal_id asc;";
 
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        bouquetCustom.Add(new Modelos.Bouquet
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            Id = reader.GetInt32(0),
-                            Nombre = reader.GetString(1),
-                            Imagen = reader.GetString(2),
-                            Categoria = reader.GetString(3),
-                            Tipo = reader.GetInt32(4),
-                            Contenedor = reader.GetString(5),
-                            CanalEPG = reader.GetString(6),
-                            CanalId = reader.GetInt32(7)
-                        });
-                    }
+                            bouquetCustom.Add(new Modelos.Bouquet
+                            {
+                                Id = reader.GetInt32(0),
+                                Nombre = reader.GetString(1),
+                                Imagen = reader.GetString(2),
+                                Categoria = reader.GetString(3),
+                                Tipo = reader.GetInt32(4),
+                                Contenedor = reader.GetString(5),
+                                CanalEPG = reader.GetString(6),
+                                CanalId = reader.GetInt32(7)
+                            });
+                        }
+                }
 
                 foreach (var canal in bouquetCustom)
                 {
@@ -257,27 +278,30 @@ namespace ticolinea.stream.service.Controllers
                     }
                 }
 
-                var cmdPeliculas = mariadb.Conexion.CreateCommand();
-                cmdPeliculas.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
-                                                        "INNER JOIN stream_categories b " +
-                                                        "on a.id_categoria = b.id " +
-                                                        "WHERE habilitado=1 and tipo=2 " +
-                                                        "order by a.id desc;";
+                using (var cmdPeliculas = cnn.CreateCommand())
+                {
+                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    cmdPeliculas.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
+                                                            "INNER JOIN stream_categories b " +
+                                                            "on a.id_categoria = b.id " +
+                                                            "WHERE habilitado=1 and tipo=2 " +
+                                                            "order by a.id desc;";
 
-                using (var reader = cmdPeliculas.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        bouquet.Add(new Modelos.Bouquet
+                    using (var reader = await cmdPeliculas.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            Id = reader.GetInt32(0),
-                            Nombre = reader.GetString(1),
-                            Imagen = reader.GetString(2),
-                            Categoria = reader.GetString(3),
-                            Tipo = reader.GetInt32(4),
-                            Contenedor = reader.GetString(5),
-                            CanalEPG = reader.GetString(6),
-                        });
-                    }
+                            bouquet.Add(new Modelos.Bouquet
+                            {
+                                Id = reader.GetInt32(0),
+                                Nombre = reader.GetString(1),
+                                Imagen = reader.GetString(2),
+                                Categoria = reader.GetString(3),
+                                Tipo = reader.GetInt32(4),
+                                Contenedor = reader.GetString(5),
+                                CanalEPG = reader.GetString(6),
+                            });
+                        }
+                }
 
             }
 
@@ -290,7 +314,7 @@ namespace ticolinea.stream.service.Controllers
                     sb.AppendLine($"http://tv.play-latino.com:27701/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
 #endif
 #if DEBUG
-                    sb.AppendLine($"http://192.168.100.8:5000/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
+                    sb.AppendLine($"http://192.168.0.5:5002/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
 #endif
                 }
 
@@ -302,38 +326,41 @@ namespace ticolinea.stream.service.Controllers
         }
 
         [HttpGet("{usuario}/{password}/{anno}/{mes}/{dia}")]
-        public IActionResult Informacion(string usuario, string password, int anno = 0, int mes = 0, int dia = 0)
+        public async Task<IActionResult> Informacion(string usuario, string password, int anno = 0, int mes = 0, int dia = 0)
         {
             List<Modelos.InfoStream> infoStreams = new();
-            using (Mariadb mariadb = new Mariadb(Constantes.Global.MARIADB_CONN))
+            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
                 string fechaHoraActual = new DateTime(anno, mes, dia).ToString("yyyyMMdd");
                 string fechaHoraDiaSiguiente = new DateTime(anno, mes, dia).AddDays(1).ToString("yyyyMMdd");
                 string fechaHoraInicio = fechaHoraActual + "0000";
                 string fechaHoraFin = fechaHoraDiaSiguiente + "0000";
-                var cmd = mariadb.Conexion.CreateCommand();
+                using (var cmd = cnn.CreateCommand())
+                {
+                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
 
-                //202209212000
-                string horaFechaInicio = DateTime.Now.AddHours(-2).ToString("yyyyMMddHH00");
-                string horaFechaFin = DateTime.Now.AddHours(5).ToString("yyyyMMddHH00");
-                cmd.CommandText = "select a.canal_epg,titulo,descripcion,anno,fecha_hora_inicio,fecha_hora_fin from epg_tl a " +
-                                    "inner join streams_tl b " +
-                                    "on a.canal_epg = b.canal_epg " +
-                                    $"where fecha_hora_inicio >= {horaFechaInicio} and fecha_hora_inicio <= {horaFechaFin} and b.habilitado = 1; ";
+                    //202209212000
+                    string horaFechaInicio = DateTime.Now.AddHours(-2).ToString("yyyyMMddHH00");
+                    string horaFechaFin = DateTime.Now.AddHours(5).ToString("yyyyMMddHH00");
+                    cmd.CommandText = "select a.canal_epg,titulo,descripcion,anno,fecha_hora_inicio,fecha_hora_fin from epg_tl a " +
+                                        "inner join streams_tl b " +
+                                        "on a.canal_epg = b.canal_epg " +
+                                        $"where fecha_hora_inicio >= {horaFechaInicio} and fecha_hora_inicio <= {horaFechaFin} and b.habilitado = 1; ";
 
-                using (var reader = cmd.ExecuteReader())
-                    while (reader.Read())
-                    {
-                        infoStreams.Add(new Modelos.InfoStream
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            CanalEpg = reader.GetString(0),
-                            Titulo = reader.GetString(1),
-                            Descripcion = reader.GetString(2),
-                            Anno = reader.GetString(3),
-                            Inicio = reader.GetInt64(4),
-                            Fin = reader.GetInt64(5)
-                        });
-                    }
+                            infoStreams.Add(new Modelos.InfoStream
+                            {
+                                CanalEpg = reader.GetString(0),
+                                Titulo = reader.GetString(1),
+                                Descripcion = reader.GetString(2),
+                                Anno = reader.GetString(3),
+                                Inicio = reader.GetInt64(4),
+                                Fin = reader.GetInt64(5)
+                            });
+                        }
+                }
             }
 
             return Ok(infoStreams);
