@@ -194,7 +194,7 @@ namespace ticolinea.stream.service.Controllers
 
                         if (stream != null)
                         {
-                            Jobs.ReiniciarStream(stream);
+                            await Jobs.ReiniciarStream(stream);
                             await Jobs.VerificarStream(stream);
                         }
                     }
@@ -498,11 +498,11 @@ namespace ticolinea.stream.service.Controllers
                         {
                             if (panelStream.Habilitado == 0)
                             {
-                                Jobs.DetenerProceso(stream.ProcesoId);
+                                await Jobs.DetenerProceso(stream.ProcesoId,stream.StreamId);
                             }
                             else
                             {
-                                Jobs.ReiniciarStream(stream);
+                                await Jobs.ReiniciarStream(stream);
                                 await Jobs.VerificarStream(stream);
                             }
                         }
@@ -604,7 +604,7 @@ namespace ticolinea.stream.service.Controllers
 
                     if (stream != null)
                     {
-                        Jobs.DetenerProceso(stream.ProcesoId);
+                        await Jobs.DetenerProceso(stream.ProcesoId, stream.StreamId);
 
                         using (var cmd = cnn.CreateCommand())
                         {
@@ -672,7 +672,7 @@ namespace ticolinea.stream.service.Controllers
 
                     if (stream != null)
                     {
-                        Jobs.ReiniciarStream(stream);
+                        await Jobs.ReiniciarStream(stream);
                         using (var cmd = cnn.CreateCommand())
                         {
                             if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
@@ -747,7 +747,7 @@ namespace ticolinea.stream.service.Controllers
 
                     if (stream != null)
                     {
-                        Jobs.DetenerProceso(stream.ProcesoId);
+                        await Jobs.DetenerProceso(stream.ProcesoId,stream.StreamId);
                         using (var cmd = cnn.CreateCommand())
                         {
                             if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();

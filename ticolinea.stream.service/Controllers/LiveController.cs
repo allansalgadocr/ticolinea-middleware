@@ -156,7 +156,7 @@ namespace ticolinea.stream.service.Controllers
 
                 if (stream.ProcesoId > -1)
                 {
-                    bool EstaCorriendoStream = Jobs.ObtenerProcesoFFMPEG(stream.ProcesoId);
+                    bool EstaCorriendoStream = await Jobs.ObtenerProcesoFFMPEG(stream.ProcesoId, stream.StreamId);
                     if ((!EstaCorriendoStream && stream.EsBajoDemanda == 1) || (!EstaCorriendoStream && stream.EsBajoDemanda == 0))
                     {
                         Console.WriteLine("Canal sin proceso, iniciando stream");
