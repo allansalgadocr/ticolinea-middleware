@@ -83,6 +83,8 @@
         public int Cantidad { get; set; } = 0;
     }
 
+
+
     public class PanelCategoria
     {
         public int Id { get; set; } = 0;

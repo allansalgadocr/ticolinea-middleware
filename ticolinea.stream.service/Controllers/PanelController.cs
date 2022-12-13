@@ -252,6 +252,84 @@ namespace ticolinea.stream.service.Controllers
             return Ok();
         }
 
+        [HttpPost("{usuario}/{password}")]
+        public async Task<IActionResult> AgregarCategoria([FromBody] PanelCategoria panelCategoria, string usuario, string password)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    int maxId = 0;
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "select max(id) from stream_categories;";
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
+                            {
+                                maxId = reader.GetInt32(0);
+                            }
+                    }
+
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+
+                        var now = DateTimeOffset.Now.ToUnixTimeSeconds();
+                        cmd.CommandText = "INSERT INTO `stream_categories` " +
+                                          "(`id`,`category_type`,`category_name`,`parent_id`,`cat_order`) " +
+                                          "VALUES(@id,'live',@category_name,0,@id); ";
+                        cmd.Parameters.AddWithValue("@id", maxId+1);
+                        cmd.Parameters.AddWithValue("@category_name", panelCategoria.Texto);
+
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
+        [HttpPost("{usuario}/{password}/{usuarioId}")]
+        public async Task<IActionResult> ActualizarCategoria([FromBody] PanelCategoria panelCategoria, string usuario, string password, int categoriaId)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+
+                        cmd.CommandText = "UPDATE `stream_categories` " +
+                                              "SET category_name=@category_name " +
+                                              "WHERE id=@id; ";
+
+                        cmd.Parameters.AddWithValue("@category_name", panelCategoria.Texto);
+                        cmd.Parameters.AddWithValue("@id", categoriaId);
+
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
         [HttpPost("{usuario}/{password}/{usuarioId}")]
         public async Task<IActionResult> ActualizarUsuario([FromBody] PanelUsuario panelUsuario, string usuario, string password, int usuarioId)
         {
@@ -532,8 +610,10 @@ namespace ticolinea.stream.service.Controllers
                     using (var cmd = cnn.CreateCommand())
                     {
                         if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+
                         cmd.CommandText = "select id,category_name from stream_categories " +
-                                          "where category_type = 'live';";
+                                            "where category_name not like 'VOD/%' and category_name not like 'SERIE/%' " +
+                                            "order by category_name; ";
 
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
