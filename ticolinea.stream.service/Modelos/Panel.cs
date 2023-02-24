@@ -39,6 +39,20 @@
         public string Duracion { get; set; } = "";
     }
 
+    public class PanelEpisodio
+    {
+        public int Id { get; set; } = 0;
+        public int EpisodioNum { get; set; } = 0;
+        public int SerieId { get; set; } = 0;
+        public int StreamId { get; set; } = 0;
+        public int Orden { get; set; } = 0;
+        public string Resena { get; set; } = "";
+        public int TemporadaNum { get; set; } = 0;
+        public string Nombre { get; set; } = "";
+        public string Imagen { get; set; } = "";
+        public int Habilitado { get; set; } = 0;
+    }
+
     public class PanelEpisodioInfo
     {
         public int Id { get; set; } = 0;
@@ -50,6 +64,8 @@
         public int Habilitado { get; set; } = 0;
         public int EpisodioNumero { get; set; } = 0;
         public int SerieId { get; set; } = 0;
+        public string Resena { get; set; } = "";
+        public int TemporadaNum { get; set; } = 0;
     }
 
     public class PanelSerieInfo
@@ -65,6 +81,8 @@
         public int Categoria { get; set; } = 0;
         public string URLYoutube { get; set; } = "";
         public string Director { get; set; } = "";
+        public string Resena { get; set; } = "";
+        public int Habilitado { get; set; } = 0;
     }
 
     public class PanelUsuario

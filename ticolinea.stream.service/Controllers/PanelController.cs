@@ -25,7 +25,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "SELECT a.id,imagen_stream,nombre_stream,category_name,fuente_stream,reportado_caido, habilitado, iniciado, canal_epg FROM streams_tl a INNER JOIN " +
                                                               "streams_info b " +
                                                               "ON a.id = b.stream_id INNER JOIN " +
@@ -74,7 +74,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "select nombre_stream,fuente_stream,imagen_stream,id_categoria,es_bajodemanda,transcode,habilitado, canal_epg, canal_id from streams_tl " +
                                           "where id=@id;";
                         cmd.Parameters.AddWithValue("@id", chnId);
@@ -123,7 +123,7 @@ namespace ticolinea.stream.service.Controllers
                     int maxId = 0;
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "select max(id) from streams_tl;";
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
@@ -157,7 +157,7 @@ namespace ticolinea.stream.service.Controllers
 
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "INSERT INTO `streams_info` " +
                                       "(`stream_id`,`ejecutando`,`proceso_id`,`info_progreso`,`iniciado`) " +
                                       "VALUES(@stream_id,1,-1,'',1);";
@@ -222,7 +222,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         long fechaVencimiento = 0;
                         int.TryParse(panelUsuario.FechaVencimiento, out int meses);
                         if (meses > 0)
@@ -281,8 +281,38 @@ namespace ticolinea.stream.service.Controllers
                         cmd.CommandText = "INSERT INTO `stream_categories` " +
                                           "(`id`,`category_type`,`category_name`,`parent_id`,`cat_order`) " +
                                           "VALUES(@id,'live',@category_name,0,@id); ";
-                        cmd.Parameters.AddWithValue("@id", maxId+1);
+                        cmd.Parameters.AddWithValue("@id", maxId + 1);
                         cmd.Parameters.AddWithValue("@category_name", panelCategoria.Texto);
+
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
+        [HttpPost("{usuario}/{password}")]
+        public async Task<IActionResult> EliminarCategoriasSinUso(string usuario, string password)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+
+
+                        cmd.CommandText = "DELETE FROM stream_categories " +
+                                          "where id not in (Select id_categoria from streams_tl); ";
 
                         await cmd.ExecuteNonQueryAsync();
                     }
@@ -341,7 +371,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         long fechaVencimiento = -1;
                         int.TryParse(panelUsuario.FechaVencimiento, out int meses);
                         if (meses > 0)
@@ -383,6 +413,37 @@ namespace ticolinea.stream.service.Controllers
             return Ok();
         }
 
+        [HttpGet("{usuario}/{password}/{chnId}")]
+        public async Task<IActionResult> EliminarUsuario(string usuario, string password, int usuarioId)
+        {
+            List<PanelCategoria> categorias = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    List<StreamDb> streams = new();
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "DELETE FROM usuarios_ticolinea " +
+                                      "WHERE id=@usuario_id; ";
+                        cmd.Parameters.AddWithValue("@usuario_id", usuarioId);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(categorias);
+        }
+
         [HttpGet("{usuario}/{password}")]
         public async Task<IActionResult> ObtenerUsuarios(string usuario, string password)
         {
@@ -396,7 +457,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado,notas FROM usuarios_ticolinea;";
 
                         using (var reader = await cmd.ExecuteReaderAsync())
@@ -441,7 +502,7 @@ namespace ticolinea.stream.service.Controllers
                     using (var cmd = cnn.CreateCommand())
                     {
                         cmd.CommandText = "select fuente_stream from streams_tl where habilitado=1 and tipo=1;";
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
                             {
@@ -486,7 +547,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado,notas FROM usuarios_ticolinea WHERE id=@id;";
                         cmd.Parameters.AddWithValue("@id", usuarioId);
 
@@ -529,7 +590,7 @@ namespace ticolinea.stream.service.Controllers
                     List<StreamDb> streams = new();
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "UPDATE `streams_tl` " +
                                           "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,fuente_stream=@fuente_stream,imagen_stream=@imagen_stream,es_bajodemanda=@es_bajodemanda,habilitado=@habilitado,transcode=@transcode,canal_epg=@canal_epg,canal_id=@canal_id " +
                                           "WHERE id=@id; ";
@@ -576,7 +637,7 @@ namespace ticolinea.stream.service.Controllers
                         {
                             if (panelStream.Habilitado == 0)
                             {
-                                await Jobs.DetenerProceso(stream.ProcesoId,stream.StreamId);
+                                await Jobs.DetenerProceso(stream.ProcesoId, stream.StreamId);
                             }
                             else
                             {
@@ -609,7 +670,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
 
                         cmd.CommandText = "select id,category_name from stream_categories " +
                                             "where category_name not like 'VOD/%' and category_name not like 'SERIE/%' " +
@@ -653,7 +714,7 @@ namespace ticolinea.stream.service.Controllers
 
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
                                         "INNER JOIN streams_info b " +
                                         "on a.id = b.stream_id " +
@@ -688,7 +749,7 @@ namespace ticolinea.stream.service.Controllers
 
                         using (var cmd = cnn.CreateCommand())
                         {
-                            if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                            if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                             cmd.CommandText = "UPDATE `streams_info` " +
                                       "SET iniciado=0 " +
                                       "WHERE stream_id=@id; ";
@@ -721,7 +782,7 @@ namespace ticolinea.stream.service.Controllers
                     List<StreamDb> streams = new();
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
                                         "INNER JOIN streams_info b " +
                                         "on a.id = b.stream_id " +
@@ -755,7 +816,7 @@ namespace ticolinea.stream.service.Controllers
                         await Jobs.ReiniciarStream(stream);
                         using (var cmd = cnn.CreateCommand())
                         {
-                            if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                            if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                             cmd.CommandText = "UPDATE `streams_info` " +
                                       "SET iniciado=1 " +
                                       "WHERE stream_id=@id; ";
@@ -796,7 +857,7 @@ namespace ticolinea.stream.service.Controllers
                     List<StreamDb> streams = new();
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
                                         "INNER JOIN streams_info b " +
                                         "on a.id = b.stream_id " +
@@ -827,10 +888,10 @@ namespace ticolinea.stream.service.Controllers
 
                     if (stream != null)
                     {
-                        await Jobs.DetenerProceso(stream.ProcesoId,stream.StreamId);
+                        await Jobs.DetenerProceso(stream.ProcesoId, stream.StreamId);
                         using (var cmd = cnn.CreateCommand())
                         {
-                            if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                            if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                             cmd.CommandText = "DELETE FROM streams_info " +
                                       "WHERE stream_id=@id; ";
                             cmd.Parameters.AddWithValue("@id", chnId);
@@ -864,12 +925,21 @@ namespace ticolinea.stream.service.Controllers
             {
                 using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
-                    List<StreamDb> streams = new();
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "DELETE FROM streams_tl " +
                                       "WHERE id=@stream_id; ";
+                        cmd.Parameters.AddWithValue("@stream_id", chnId);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "DELETE FROM pelicula_info " +
+                                      "WHERE stream_id=@stream_id; ";
+
                         cmd.Parameters.AddWithValue("@stream_id", chnId);
                         await cmd.ExecuteNonQueryAsync();
                     }
@@ -881,7 +951,72 @@ namespace ticolinea.stream.service.Controllers
                 return StatusCode(500);
             }
 
-            return Ok(categorias);
+            return Ok();
+        }
+
+        [HttpGet("{usuario}/{password}/{serieId}")]
+        public async Task<IActionResult> EliminarSerie(string usuario, string password, int serieId)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "DELETE FROM series_info " +
+                                      "WHERE id=@serieId; ";
+                        cmd.Parameters.AddWithValue("@serieId", serieId);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
+        [HttpGet("{usuario}/{password}/{chnId}")]
+        public async Task<IActionResult> EliminarEpisodio(string usuario, string password, int chnId)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "DELETE FROM series_episodios " +
+                                      "WHERE stream_id=@chnId; ";
+                        cmd.Parameters.AddWithValue("@chnId", chnId);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "DELETE FROM streams_tl " +
+                                      "WHERE id=@chnId; ";
+                        cmd.Parameters.AddWithValue("@chnId", chnId);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
         }
 
         #region Peliculas
@@ -898,7 +1033,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
 
                         cmd.CommandText = "select id,category_name from stream_categories " +
                                           "where category_type = 'movie';";
@@ -939,7 +1074,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "select usuario,notas,nombre_stream from actividad_usuario_actualmente a " +
                                             "inner join usuarios_ticolinea b " +
                                             "on a.usuario_id = b.id " +
@@ -983,7 +1118,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "SELECT a.id,imagen_stream,nombre_stream,category_name,fuente_stream,habilitado FROM streams_tl a " +
                                                               "INNER JOIN " +
                                                               "stream_categories c " +
@@ -1016,6 +1151,58 @@ namespace ticolinea.stream.service.Controllers
             return Ok(movies);
         }
 
+        [HttpGet("{usuario}/{password}/{chnId}")]
+        public async Task<IActionResult> ObtenerPelicula(string usuario, string password, int chnId)
+        {
+            List<PanelPelicula> pelicula = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "SELECT a.nombre_stream,d.anno,a.id_categoria,d.duracion,a.habilitado,d.PG,d.resena,a.imagen_stream,a.fuente_stream FROM streams_tl a " +
+                                                              "INNER JOIN " +
+                                                              "stream_categories c ON a.id_categoria = c.id and tipo=2 " +
+                                                              "lEFT JOIN " +
+                                                              "pelicula_info d " +
+                                                              " ON a.id=d.stream_id " +
+                                                              $"WHERE a.id={chnId};";
+
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
+                            {
+                                pelicula.Add(new PanelPelicula
+                                {
+                                    NombrePelicula = reader.GetString(0),
+                                    Anno = reader.GetString(1),
+                                    Categoria = reader.GetInt32(2),
+                                    Duracion = reader.GetString(3),
+                                    Habilitado = reader.GetInt16(4),
+                                    PG = reader.GetString(5),
+                                    Resena = reader.GetString(6),
+                                    UrlLogo = reader.GetString(7),
+                                    UrlPelicula = reader.GetString(8)
+                                });
+                            }
+                    }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(pelicula.FirstOrDefault());
+        }
+
         [HttpGet("{usuario}/{password}")]
         public IActionResult ObtenerArchivosPeliculas(string usuario, string password)
         {
@@ -1026,7 +1213,9 @@ namespace ticolinea.stream.service.Controllers
             try
             {
                 filePaths = Directory.GetFiles(Constantes.Global.MOVIES_RAW, "*.*",
-                                          SearchOption.TopDirectoryOnly).OrderByDescending(d => new FileInfo(d).CreationTime).ToList();
+                                          SearchOption.TopDirectoryOnly)
+                                     .Where(file => file.ToLower().EndsWith("mkv") || file.ToLower().EndsWith("mp4"))
+                                     .OrderBy(d => new FileInfo(d).Name).ToList();
 
 
             }
@@ -1061,7 +1250,7 @@ namespace ticolinea.stream.service.Controllers
                     int maxId = 0;
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "select max(id) from streams_tl;";
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
@@ -1086,7 +1275,7 @@ namespace ticolinea.stream.service.Controllers
 
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "INSERT INTO `streams_tl` " +
                                       "(`id`,`id_categoria`,`nombre_stream`,`fuente_stream`,`imagen_stream`,`orden`,`agregado`,`probesize_ondemand`,`es_bajodemanda`,`tipo`,`contenedor`,`habilitado`,`transcode_audio`,`video_info`," +
                                       "`audio_info`,`intervalo`,`segmentos`,`omitir_verificacion`,`framerate`,`transcode`,`resolucion`,`bitrate`) " +
@@ -1110,7 +1299,7 @@ namespace ticolinea.stream.service.Controllers
                     //Agregar info pelicula
                     using (var cmdInfo = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmdInfo.CommandText = "INSERT INTO `pelicula_info` " +
                                           "(anno,resena,PG,stream_id,duracion) " +
                                           "VALUES(@anno,@resena,@PG,@stream_id,@duracion); ";
@@ -1145,7 +1334,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         var now = DateTimeOffset.Now.ToUnixTimeSeconds();
                         cmd.CommandText = "INSERT INTO `pelicula_info` " +
                                           "(anno,resena,PG,stream_id,duracion) " +
@@ -1177,44 +1366,38 @@ namespace ticolinea.stream.service.Controllers
 
             try
             {
-                string nombreArchivo = RemoveSpecialCharacters(panelPelicula.NombrePelicula.Trim());
-                string ext = panelPelicula.UrlPelicula.Split('.').ToList().Last();
-                if (!string.IsNullOrEmpty(ext))
-                {
-                    ext = ext.ToLower();
-                }
-                else
-                {
-                    throw new Exception($"Extensión {ext} no valida");
-                }
 
                 using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
-                    List<StreamDb> streams = new();
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        //Convierte la película a un formato compatible para caja
-                        Process process = new();
-                        process.StartInfo.FileName = Constantes.Global.FFMPEG_PATH;
-
-                        string ffmpegOutput = "-c:v libx264 -x264-params \"nal-hrd=cbr:force-cfr=1\" -b:v 5M -maxrate:v 5M -minrate:v 5M -bufsize:v 10M -crf 23 -preset veryfast -g 48 -sc_threshold 0 -keyint_min 48 -c:a aac -b:a 96k -ac 2 -c:s copy -map 0 -movflags faststart -threads 2";
-
-                        process.StartInfo.Arguments = $"-y -loglevel quiet -err_detect ignore_err -nostdin -nostats -progress {Constantes.Global.MOVIES_FOLDER}{nombreArchivo}_progress.txt -i \"{panelPelicula.UrlPelicula}\" {ffmpegOutput} \"{Constantes.Global.MOVIES_FOLDER}{nombreArchivo}.{ext}\" ";
-                        process.Start();
-                        process.StartInfo.RedirectStandardInput = false;
-                        process.StartInfo.RedirectStandardOutput = false;
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
 
                         cmd.CommandText = "UPDATE `streams_tl` " +
-                                          "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,fuente_stream=@fuente_stream,imagen_stream=@imagen_stream,habilitado=@habilitado,contenedor=@contenedor " +
+                                          "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,imagen_stream=@imagen_stream,habilitado=@habilitado " +
                                           "WHERE id=@id; ";
                         cmd.Parameters.AddWithValue("@id", chnId);
                         cmd.Parameters.AddWithValue("@id_categoria", panelPelicula.Categoria);
                         cmd.Parameters.AddWithValue("@nombre_stream", panelPelicula.NombrePelicula);
-                        cmd.Parameters.AddWithValue("@fuente_stream", $"{Constantes.Global.MOVIES_FOLDER}{nombreArchivo}.{ext}");
                         cmd.Parameters.AddWithValue("@imagen_stream", panelPelicula.UrlLogo);
-                        cmd.Parameters.AddWithValue("@contenedor", ext);
                         cmd.Parameters.AddWithValue("@habilitado", panelPelicula.Habilitado);
+
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+
+                        cmd.CommandText = "UPDATE `pelicula_info` " +
+                                          "SET anno=@anno,resena=@resena,pg=@pg,duracion=@duracion " +
+                                          "WHERE stream_id=@id; ";
+
+                        cmd.Parameters.AddWithValue("@id", chnId);
+                        cmd.Parameters.AddWithValue("@anno", panelPelicula.Anno);
+                        cmd.Parameters.AddWithValue("@resena", panelPelicula.Resena);
+                        cmd.Parameters.AddWithValue("@pg", panelPelicula.PG);
+                        cmd.Parameters.AddWithValue("@duracion", panelPelicula.Duracion);
 
                         await cmd.ExecuteNonQueryAsync();
                     }
@@ -1254,7 +1437,7 @@ namespace ticolinea.stream.service.Controllers
                     int maxId = 0;
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "select max(id) from streams_tl;";
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
@@ -1271,7 +1454,7 @@ namespace ticolinea.stream.service.Controllers
 
                     string ffmpegOutput = "-c:v libx264 -x264-params \"nal-hrd=cbr:force-cfr=1\" -b:v 5M -maxrate:v 5M -minrate:v 5M -bufsize:v 10M -crf 23 -preset veryfast -g 48 -sc_threshold 0 -keyint_min 48 -c:a aac -b:a 96k -ac 2 -c:s copy -map 0 -movflags faststart";
 
-                    process.StartInfo.Arguments = $"-y -loglevel quiet -err_detect ignore_err -nostdin -nostats -i \"{panelSerie.URLSerie}\" -progress {Constantes.Global.SERIES_FOLDER}{nombreArchivo}_progress.txt {ffmpegOutput} \"{Constantes.Global.SERIES_FOLDER}{nombreArchivo}.{ext}\" ";
+                    process.StartInfo.Arguments = $"-y -loglevel quiet -err_detect ignore_err -nostdin -nostats -i \"{panelSerie.URLSerie}\" -progress {Constantes.Global.SERIES_FOLDER}{panelSerie.SerieId}.{panelSerie.EpisodioNumero}.{nombreArchivo}_progress.txt {ffmpegOutput} \"{Constantes.Global.SERIES_FOLDER}{panelSerie.SerieId}.{panelSerie.EpisodioNumero}.{nombreArchivo}.{ext}\" ";
                     process.Start();
                     process.StartInfo.RedirectStandardInput = true;
                     process.StartInfo.RedirectStandardOutput = true;
@@ -1280,7 +1463,7 @@ namespace ticolinea.stream.service.Controllers
 
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "INSERT INTO `streams_tl` " +
                                       "(`id`,`id_categoria`,`nombre_stream`,`fuente_stream`,`imagen_stream`,`orden`,`agregado`,`probesize_ondemand`,`es_bajodemanda`,`tipo`,`contenedor`,`habilitado`,`transcode_audio`,`video_info`," +
                                       "`audio_info`,`intervalo`,`segmentos`,`omitir_verificacion`,`framerate`,`transcode`,`resolucion`,`bitrate`) " +
@@ -1304,13 +1487,17 @@ namespace ticolinea.stream.service.Controllers
                     //Agregar info pelicula
                     using (var cmdInfo = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmdInfo.CommandText = "INSERT INTO `series_episodios` " +
-                                          "(episodio_num,serie_id,stream_id,orden) " +
-                                          "VALUES(@episodioNum,@serieId,@stream_id,@episodioNum); ";
+                                          "(episodio_num,serie_id,stream_id,orden,resena,temporada_num,server_path) " +
+                                          "VALUES(@episodioNum,@serieId,@stream_id,@episodioNum,@resena,@temporadaNum,@serverPath); ";
+
                         cmdInfo.Parameters.AddWithValue("@episodioNum", panelSerie.EpisodioNumero);
                         cmdInfo.Parameters.AddWithValue("@serieId", panelSerie.SerieId);
                         cmdInfo.Parameters.AddWithValue("@stream_id", maxId + 1);
+                        cmdInfo.Parameters.AddWithValue("@resena", panelSerie.Resena);
+                        cmdInfo.Parameters.AddWithValue("@temporadaNum", panelSerie.TemporadaNum);
+                        cmdInfo.Parameters.AddWithValue("@serverPath", panelSerie.URLSerie);
 
                         await cmdInfo.ExecuteNonQueryAsync();
                     }
@@ -1337,13 +1524,12 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "UPDATE `streams_tl` " +
-                                          "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,imagen_stream=@imagen_stream,habilitado=@habilitado " +
+                                          "SET nombre_stream=@nombre_stream,imagen_stream=@imagen_stream,habilitado=@habilitado " +
                                           "WHERE id=@id; ";
 
                         cmd.Parameters.AddWithValue("@id", panelSerie.StreamId);
-                        cmd.Parameters.AddWithValue("@id_categoria", panelSerie.Categoria);
                         cmd.Parameters.AddWithValue("@nombre_stream", panelSerie.Titulo);
                         cmd.Parameters.AddWithValue("@imagen_stream", panelSerie.URLCaratula);
                         cmd.Parameters.AddWithValue("@habilitado", panelSerie.Habilitado);
@@ -1354,13 +1540,15 @@ namespace ticolinea.stream.service.Controllers
                     //Agregar info pelicula
                     using (var cmdInfo = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmdInfo.CommandText = "UPDATE series_episodios " +
-                                          "episodio_num=@episodio_num,serie_id=@serie_id " +
-                                          "WHERE id=@id; ";
-                        cmdInfo.Parameters.AddWithValue("@episodioNum", panelSerie.EpisodioNumero);
-                        cmdInfo.Parameters.AddWithValue("@serieId", panelSerie.SerieId);
-                        cmdInfo.Parameters.AddWithValue("@stream_id", panelSerie.Id);
+                                          " SET episodio_num=@episodio_num,serie_id=@serie_id, resena=@resena " +
+                                          "WHERE stream_id=@id; ";
+
+                        cmdInfo.Parameters.AddWithValue("@id", panelSerie.StreamId);
+                        cmdInfo.Parameters.AddWithValue("@episodio_num", panelSerie.EpisodioNumero);
+                        cmdInfo.Parameters.AddWithValue("@serie_id", panelSerie.SerieId);
+                        cmdInfo.Parameters.AddWithValue("@resena", panelSerie.Resena);
 
                         await cmdInfo.ExecuteNonQueryAsync();
                     }
@@ -1388,10 +1576,10 @@ namespace ticolinea.stream.service.Controllers
                     //Agregar info pelicula
                     using (var cmdInfo = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmdInfo.CommandText = "INSERT INTO `series_info` " +
-                                          "(caratula,caratula_grande,genero,director,fechaLanzamiento,temporadas,youtube_trailer,titulo,categoria_id,rating) " +
-                                          "VALUES(@caratula,@caratula_grande,@genero,@director,@fechaLanzamiento,@temporadas,@youtube_trailer,@titulo,@categoria_id,@rating); ";
+                                          "(caratula,caratula_grande,genero,director,fechaLanzamiento,temporadas,youtube_trailer,titulo,categoria_id,rating,resena) " +
+                                          "VALUES(@caratula,@caratula_grande,@genero,@director,@fechaLanzamiento,@temporadas,@youtube_trailer,@titulo,@categoria_id,@rating,@resena); ";
                         cmdInfo.Parameters.AddWithValue("@caratula", panelSerie.URLCaratula);
                         cmdInfo.Parameters.AddWithValue("@caratula_grande", panelSerie.URLCaratulaGrande);
                         cmdInfo.Parameters.AddWithValue("@genero", panelSerie.Genero);
@@ -1402,6 +1590,8 @@ namespace ticolinea.stream.service.Controllers
                         cmdInfo.Parameters.AddWithValue("@titulo", panelSerie.Titulo);
                         cmdInfo.Parameters.AddWithValue("@categoria_id", panelSerie.Categoria);
                         cmdInfo.Parameters.AddWithValue("@rating", panelSerie.Rating);
+                        cmdInfo.Parameters.AddWithValue("@resena", panelSerie.Resena);
+                        cmdInfo.Parameters.AddWithValue("@habilitado", panelSerie.Resena);
 
                         await cmdInfo.ExecuteNonQueryAsync();
                     }
@@ -1420,6 +1610,7 @@ namespace ticolinea.stream.service.Controllers
         [HttpPost("{usuario}/{password}")]
         public async Task<IActionResult> ActualizarSerie([FromBody] PanelSerieInfo panelSerie, string usuario, string password)
         {
+            string error;
             if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
 
             try
@@ -1429,9 +1620,9 @@ namespace ticolinea.stream.service.Controllers
                     //Agregar info pelicula
                     using (var cmdInfo = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmdInfo.CommandText = "UPDATE `series_info` " +
-                                          "SET caratula=@caratula,@caratula_grande=@caratula_grande,genero=@genero,director=@director,fechaLanzamiento=@fechaLanzamiento,temporadas=@temporadas,youtube_trailer=@youtube_trailer,titulo=@titulo,categoria_id=@categoria_id,@rating=@rating " +
+                                          "SET caratula=@caratula,caratula_grande=@caratula_grande,genero=@genero,director=@director,fechaLanzamiento=@fechaLanzamiento,temporadas=@temporadas,youtube_trailer=@youtube_trailer,titulo=@titulo,categoria_id=@categoria_id,rating=@rating " +
                                           "WHERE id=@id; ";
 
                         cmdInfo.Parameters.AddWithValue("@id", panelSerie.Id);
@@ -1454,7 +1645,7 @@ namespace ticolinea.stream.service.Controllers
             catch (Exception ex)
             {
                 Console.WriteLine(ex.Message);
-                return StatusCode(500);
+                return Ok("ERROR:"+ex.GetBaseException().Message);
             }
 
             return Ok();
@@ -1463,7 +1654,7 @@ namespace ticolinea.stream.service.Controllers
         [HttpGet("{usuario}/{password}")]
         public async Task<IActionResult> ObtenerSeries(string usuario, string password)
         {
-            List<PanelEpisodioInfo> movies = new();
+            List<PanelSerieInfo> movies = new();
 
             if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
 
@@ -1473,30 +1664,25 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "SELECT d.id,imagen_stream,nombre_stream,id_categoria,fuente_stream,habilitado,d.episodio_num,d.serie_id,d.stream_id FROM streams_tl a " +
-                                                              "INNER JOIN " +
-                                                              "stream_categories c " +
-                                                              "ON a.id_categoria = c.id and tipo=3 " +
-                                                              "INNER JOIN " +
-                                                              "series_episodios d " +
-                                                              "ON a.id=d.stream_id " +
-                                                              "order by a.orden;";
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "SELECT id, caratula, genero, fechaLanzamiento, temporadas, categoria_id, Rating, resena, titulo, habilitado " +
+                                          "FROM series_info order by titulo;";
 
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
                             {
-                                movies.Add(new PanelEpisodioInfo
+                                movies.Add(new PanelSerieInfo
                                 {
                                     Id = reader.GetInt32(0),
                                     URLCaratula = reader.GetString(1),
-                                    Titulo = reader.GetString(2),
-                                    Categoria = reader.GetInt32(3),
-                                    URLSerie = reader.GetString(4),
-                                    Habilitado = reader.GetInt32(5),
-                                    EpisodioNumero = reader.GetInt32(6),
-                                    SerieId = reader.GetInt32(7),
-                                    StreamId = reader.GetInt32(8),
+                                    Genero = reader.GetString(2),
+                                    FechaLanzamiento = reader.GetString(3),
+                                    Temporadas = reader.GetString(4),
+                                    Categoria = reader.GetInt32(5),
+                                    Rating = reader.GetString(6),
+                                    Resena = reader.GetString(7),
+                                    Titulo = reader.GetString(8),
+                                    Habilitado = reader.GetInt32(9),
                                 });
                             }
                     }
@@ -1512,6 +1698,53 @@ namespace ticolinea.stream.service.Controllers
             return Ok(movies);
         }
 
+        [HttpGet("{usuario}/{password}/{serieId}")]
+        public async Task<IActionResult> ObtenerInfoSerie(string usuario, string password,int serieId)
+        {
+            List<PanelSerieInfo> movies = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "SELECT id, caratula, genero, fechaLanzamiento, temporadas, categoria_id, Rating, resena, titulo, habilitado " +
+                                          $"FROM series_info WHERE id={serieId} order by titulo;";
+
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
+                            {
+                                movies.Add(new PanelSerieInfo
+                                {
+                                    Id = reader.GetInt32(0),
+                                    URLCaratula = reader.GetString(1),
+                                    Genero = reader.GetString(2),
+                                    FechaLanzamiento = reader.GetString(3),
+                                    Temporadas = reader.GetString(4),
+                                    Categoria = reader.GetInt32(5),
+                                    Rating = reader.GetString(6),
+                                    Resena = reader.GetString(7),
+                                    Titulo = reader.GetString(8),
+                                    Habilitado = reader.GetInt32(9),
+                                });
+                            }
+                    }
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(movies?.FirstOrDefault());
+        }
+
         [HttpGet("{usuario}/{password}")]
         public async Task<IActionResult> ObtenerCategoriasSeries(string usuario, string password)
         {
@@ -1525,7 +1758,7 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "select id,category_name from stream_categories " +
                                           "where category_type = 'serie';";
 
@@ -1553,9 +1786,9 @@ namespace ticolinea.stream.service.Controllers
         }
 
         [HttpGet("{usuario}/{password}")]
-        public async Task<IActionResult> ObtenerEpisodios(string usuario, string password)
+        public async Task<IActionResult> ObtenerEpisodios(string usuario, string password, int serieId)
         {
-            List<PanelSerieInfo> episodios = new();
+            List<PanelEpisodio> episodios = new();
 
             if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
 
@@ -1565,31 +1798,31 @@ namespace ticolinea.stream.service.Controllers
                 {
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "select id,caratula,caratula_grande,genero,director,fechaLanzamiento, " +
-                                          "temporadas,youtube_trailer, titulo, categoria_id, rating from series_info; ";
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "SELECT a.id, episodio_num, serie_id, a.stream_id, a.orden, resena, temporada_num, b.nombre_stream, b.imagen_stream, b.habilitado " +
+                                          $" FROM series_episodios a INNER JOIN streams_tl b " +
+                                          $" ON a.stream_id=b.id " +
+                                          $" WHERE serie_id={serieId};";
 
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
                             {
-                                episodios.Add(new PanelSerieInfo
+                                episodios.Add(new PanelEpisodio
                                 {
                                     Id = reader.GetInt32(0),
-                                    URLCaratula = reader.GetString(1),
-                                    URLCaratulaGrande = reader.GetString(2),
-                                    Genero = reader.GetString(3),
-                                    Director = reader.GetString(4),
-                                    FechaLanzamiento = reader.GetString(5),
-                                    Temporadas = reader.GetString(6),
-                                    URLYoutube = reader.GetString(7),
-                                    Titulo = reader.GetString(8),
-                                    Categoria = reader.GetInt32(9),
-                                    Rating = reader.GetString(10)
+                                    EpisodioNum = reader.GetInt32(1),
+                                    SerieId = reader.GetInt32(2),
+                                    StreamId = reader.GetInt32(3),
+                                    Orden = reader.GetInt32(4),
+                                    Resena = reader.GetString(5),
+                                    TemporadaNum = reader.GetInt32(6),
+                                    Nombre = reader.GetString(7),
+                                    Imagen = reader.GetString(8),
+                                    Habilitado = reader.GetInt32(9),
                                 });
                             }
                     }
                 }
-
 
             }
             catch (Exception ex)
@@ -1599,6 +1832,98 @@ namespace ticolinea.stream.service.Controllers
             }
 
             return Ok(episodios);
+        }
+
+        [HttpGet("{usuario}/{password}/{serieId}/{episodioId}")]
+        public async Task<IActionResult> ObtenerInfoEpisodio(string usuario, string password, int serieId,int episodioId)
+        {
+            List<PanelEpisodio> episodios = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "SELECT a.id, episodio_num, serie_id, a.stream_id, a.orden, resena, temporada_num, b.nombre_stream, b.imagen_stream, b.habilitado " +
+                                          $" FROM series_episodios a INNER JOIN streams_tl b " +
+                                          $" ON a.stream_id=b.id " +
+                                          $" WHERE serie_id={serieId} and a.id={episodioId} ;";
+
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
+                            {
+                                episodios.Add(new PanelEpisodio
+                                {
+                                    Id = reader.GetInt32(0),
+                                    EpisodioNum = reader.GetInt32(1),
+                                    SerieId = reader.GetInt32(2),
+                                    StreamId = reader.GetInt32(3),
+                                    Orden = reader.GetInt32(4),
+                                    Resena = reader.GetString(5),
+                                    TemporadaNum = reader.GetInt32(6),
+                                    Nombre = reader.GetString(7),
+                                    Imagen = reader.GetString(8),
+                                    Habilitado = reader.GetInt32(9),
+                                });
+                            }
+                    }
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(episodios?.FirstOrDefault());
+        }
+
+        [HttpGet("{usuario}/{password}")]
+        public async Task<IActionResult> ObtenerArchivosSeries(string usuario, string password)
+        {
+            List<string> filePaths = new();
+            List<string> processedServerPaths = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                filePaths = Directory.GetFiles(Constantes.Global.MOVIES_RAW + "series/", "*.*",
+                                          SearchOption.TopDirectoryOnly)
+                                      .Where(file => file.ToLower().EndsWith("mkv") || file.ToLower().EndsWith("mp4"))
+                                      .OrderBy(d => new FileInfo(d).Name).ToList();
+
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "SELECT server_path " +
+                                          $" FROM series_episodios";
+
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
+                            {
+                                string serverPath = reader.IsDBNull(0) ? "" : reader.GetString(0);
+                                processedServerPaths.Add(serverPath);
+                            }
+                    }
+                }
+
+                filePaths = filePaths.Except(processedServerPaths).ToList();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(filePaths);
         }
 
         #endregion

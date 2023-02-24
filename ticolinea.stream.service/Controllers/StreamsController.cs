@@ -149,31 +149,6 @@ namespace ticolinea.stream.service.Controllers
                             });
                         }
                 }
-
-                using (var cmdSeries = cnn.CreateCommand())
-                {
-                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                    cmdSeries.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
-                                                            "INNER JOIN stream_categories b " +
-                                                            "on a.id_categoria = b.id " +
-                                                            "WHERE habilitado=1 and tipo=3 " +
-                                                            "order by a.id desc;";
-
-                    using (var reader = await cmdSeries.ExecuteReaderAsync())
-                        while (await reader.ReadAsync())
-                        {
-                            bouquet.Add(new Modelos.Bouquet
-                            {
-                                Id = reader.GetInt32(0),
-                                Nombre = reader.GetString(1),
-                                Imagen = reader.GetString(2),
-                                Categoria = reader.GetString(3),
-                                Tipo = reader.GetInt32(4),
-                                Contenedor = reader.GetString(5),
-                                CanalEPG = reader.GetString(6),
-                            });
-                        }
-                }
             }
 
             foreach (var chn in bouquet)
