@@ -1454,7 +1454,8 @@ namespace ticolinea.stream.service.Controllers
 
                     string ffmpegOutput = "-c:v libx264 -x264-params \"nal-hrd=cbr:force-cfr=1\" -b:v 5M -maxrate:v 5M -minrate:v 5M -bufsize:v 10M -crf 23 -preset veryfast -g 48 -sc_threshold 0 -keyint_min 48 -c:a aac -b:a 96k -ac 2 -c:s copy -map 0 -movflags faststart";
 
-                    process.StartInfo.Arguments = $"-y -loglevel quiet -err_detect ignore_err -nostdin -nostats -i \"{panelSerie.URLSerie}\" -progress {Constantes.Global.SERIES_FOLDER}{panelSerie.SerieId}.{panelSerie.EpisodioNumero}.{nombreArchivo}_progress.txt {ffmpegOutput} \"{Constantes.Global.SERIES_FOLDER}{panelSerie.SerieId}.{panelSerie.EpisodioNumero}.{nombreArchivo}.{ext}\" ";
+                    var nombreSerie = $"{Constantes.Global.SERIES_FOLDER}{panelSerie.SerieId}.{panelSerie.EpisodioNumero}.{nombreArchivo}.{ext}";
+                    process.StartInfo.Arguments = $"-y -loglevel quiet -err_detect ignore_err -nostdin -nostats -i \"{panelSerie.URLSerie}\" -progress {Constantes.Global.SERIES_FOLDER}{panelSerie.SerieId}.{panelSerie.EpisodioNumero}.{nombreArchivo}_progress.txt {ffmpegOutput} \"{nombreSerie}\" ";
                     process.Start();
                     process.StartInfo.RedirectStandardInput = true;
                     process.StartInfo.RedirectStandardOutput = true;
@@ -1473,7 +1474,7 @@ namespace ticolinea.stream.service.Controllers
                         cmd.Parameters.AddWithValue("@id", maxId + 1);
                         cmd.Parameters.AddWithValue("@id_categoria", panelSerie.Categoria);
                         cmd.Parameters.AddWithValue("@nombre_stream", panelSerie.Titulo);
-                        cmd.Parameters.AddWithValue("@fuente_stream", $"{Constantes.Global.SERIES_FOLDER}{nombreArchivo}.{ext}");
+                        cmd.Parameters.AddWithValue("@fuente_stream", $"{nombreSerie}");
                         cmd.Parameters.AddWithValue("@imagen_stream", panelSerie.URLCaratula);
                         cmd.Parameters.AddWithValue("@orden", maxId + 1);
                         cmd.Parameters.AddWithValue("@agregado", now);
