@@ -315,8 +315,8 @@ namespace ticolinea.stream.service
             if (!string.IsNullOrEmpty(stream.TranscodeAudio))
                 transcodeAudio = $" -acodec {stream.TranscodeAudio} -threads 0";
 
-            string frameRate = stream.Transcode == 1 ? $" -r {stream.Framerate}" : "";
-            string pixFmt = "";
+            string frameRate = stream.Transcode == 2 ? $" -r {stream.Framerate}" : "";
+            string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p" : "";
 
 #if DEBUG
             string ffmpegOutput = $" -c copy";
@@ -325,7 +325,7 @@ namespace ticolinea.stream.service
             string ffmpegOutput = $" -c copy -analyzeduration {stream.ProbeSize} -probesize {stream.ProbeSize} {pixFmt} {transcodeAudio} -movflags faststart {gcop} -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
 #endif
             //string ffmpegOutput = $" -c copy {pixFmt} {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
-            if (stream.Transcode == 1)
+            if (stream.Transcode == 3)
             {
                 transcodeAudio = transcodeAudio.Replace("-threads 2", "");
                 ffmpegOutput = $" -c:v h264 -crf 23 -maxrate 5M -bufsize 5M -tune zerolatency {pixFmt} {transcodeAudio} -threads 1 -movflags faststart {gcop} -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
