@@ -56,7 +56,7 @@ namespace ticolinea.stream.service
                 else
                 {
                     //Verifica si existe el proceso
-                    bool EstaCorriendoStream = await ObtenerProcesoFFMPEG(stream.ProcesoId,stream.StreamId);
+                    bool EstaCorriendoStream = await ObtenerProcesoFFMPEG(stream.ProcesoId, stream.StreamId);
                     if (!EstaCorriendoStream)
                         await IniciarStream(stream);
                 }
@@ -121,7 +121,7 @@ namespace ticolinea.stream.service
 
                 foreach (StreamDb stream in streams)
                 {
-                    var proc = await ObtenerProcesoEjecutando(stream.ProcesoId,stream.StreamId);
+                    var proc = await ObtenerProcesoEjecutando(stream.ProcesoId, stream.StreamId);
                     if (proc != null)
                     {
                         proc.Kill();
@@ -139,7 +139,7 @@ namespace ticolinea.stream.service
             }
         }
 
-        public static async Task<bool> ObtenerProcesoFFMPEG(int procesoId,int streamId)
+        public static async Task<bool> ObtenerProcesoFFMPEG(int procesoId, int streamId)
         {
             try
             {
@@ -177,7 +177,7 @@ namespace ticolinea.stream.service
             return false;
         }
 
-        public static async Task<Process> ObtenerProcesoEjecutando(int procesoId,int streamId)
+        public static async Task<Process> ObtenerProcesoEjecutando(int procesoId, int streamId)
         {
             try
             {
@@ -231,7 +231,7 @@ namespace ticolinea.stream.service
             //IniciarStream(stream);
         }
 
-        public static async Task DetenerProceso(int procesoId,int streamId)
+        public static async Task DetenerProceso(int procesoId, int streamId)
         {
             try
             {
@@ -274,10 +274,10 @@ namespace ticolinea.stream.service
                             StringSplitOptions.None
                             );
 
-            string outs= "";
+            string outs = "";
             foreach (var line in lines)
             {
-                outs += line+",";
+                outs += line + ",";
             }
 
             return outs;
@@ -285,7 +285,7 @@ namespace ticolinea.stream.service
 
         public static async Task IniciarStream(StreamDb stream)
         {
-            var proc= await ObtenerProcesoEjecutando(0, stream.StreamId);
+            var proc = await ObtenerProcesoEjecutando(0, stream.StreamId);
             if (proc != null)
             {
                 using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
@@ -317,12 +317,13 @@ namespace ticolinea.stream.service
 
             string frameRate = stream.Transcode == 2 ? $" -r {stream.Framerate}" : "";
             string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p" : "";
+            pixFmt = stream.Transcode == 4 ? "-pix_fmt yuv420p -async 1" : pixFmt;
 
 #if DEBUG
             string ffmpegOutput = $" -c copy";
 #endif
 #if !DEBUG
-            string ffmpegOutput = $" -c copy -analyzeduration {stream.ProbeSize} -probesize {stream.ProbeSize} {pixFmt} {transcodeAudio} -movflags faststart {gcop} -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
+            string ffmpegOutput = $" -c copy -analyzeduration 0 -probesize {stream.ProbeSize} {pixFmt} {transcodeAudio} -movflags faststart {gcop} -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
 #endif
             //string ffmpegOutput = $" -c copy {pixFmt} {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
             if (stream.Transcode == 3)
@@ -332,12 +333,6 @@ namespace ticolinea.stream.service
             }
             //string ffmpegOutput = $" -c copy {pixFmt} -map 0 -map -0:s {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+second_level_segment_duration+second_level_segment_index+temp_file -strftime 1 -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -strftime_mkdir 1 -hls_segment_filename";
             //string ffmpegOutput = $"{pixFmt} -vcodec copy {transcodeAudio} -map 0 -map -0:s -movflags faststart -b:v 5M -individual_header_trailer 0 -f segment -segment_format mpegts -segment_time [INTERVALO] -segment_list_size [SEGMENTOS] -segment_format_options mpegts_flags=+initial_discontinuity:mpegts_copyts=1 -segment_list_type m3u8 -segment_list_flags +live -segment_list";
-            if (stream.Transcode == 1)
-            {
-                //frameRate = " -r 25";
-                //pixFmt = "-pix_fmt yuv420p -vsync 1 -threads 2";
-                //ffmpegOutput = $"-c copy -bufsize 4000k{transcodeAudio} -movflags faststart  -threads 2 -hls_flags +discont_start+delete_segments+omit_endlist -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 10 -hls_segment_filename";
-            }
 
             ffmpegOutput = ffmpegOutput.Replace("[PROBESIZE]", stream.ProbeSize.ToString());
             ffmpegOutput = ffmpegOutput.Replace("[INTERVALO]", stream.Intervalo.ToString());
@@ -456,7 +451,7 @@ namespace ticolinea.stream.service
                         }
 
                         await ActualizarCanalEstado(stream.StreamId, estaCaido, stream.ProcesoId);
-                        await DetenerProceso(stream.ProcesoId,stream.StreamId);
+                        await DetenerProceso(stream.ProcesoId, stream.StreamId);
                     }
                     catch (Exception ex)
                     {
@@ -662,7 +657,7 @@ namespace ticolinea.stream.service
 
                             if (stream.ProcesoId > 0)
                             {
-                                await DetenerProceso(stream.ProcesoId,stream.StreamId);
+                                await DetenerProceso(stream.ProcesoId, stream.StreamId);
                             }
                         }
                     }
