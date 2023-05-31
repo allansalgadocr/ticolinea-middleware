@@ -1,6 +1,8 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using MikrotikDotNet;
 using MySqlConnector;
+using Newtonsoft.Json;
 using System.Diagnostics;
 using ticolinea.stream.service.Db;
 using ticolinea.stream.service.Modelos;
@@ -11,6 +13,61 @@ namespace ticolinea.stream.service.Controllers
     [ApiController]
     public class PanelController : ControllerBase
     {
+        [HttpPost]
+        public async Task<IActionResult> EnviarConexion([FromBody] Modelos.Mikrotik mikrotik)
+        {
+            MikrotikResponse result = new MikrotikResponse();
+
+            if (mikrotik.Usuario != "ticolineapanel" || mikrotik.Password != "mikrotik@1234") return Unauthorized();
+
+            try
+            {
+                using (var httpClient = new HttpClient())
+                {
+                    var data = new
+                    {
+                        nombre = mikrotik.Nombre,
+                        email = mikrotik.Email,
+                        telefono = mikrotik.Telefono,
+                        fechaNacimiento = mikrotik.FechaNacimiento,
+                    };
+
+                    var jsonContent = JsonConvert.SerializeObject(data);
+                    StringContent httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
+
+                    var response = await httpClient.PostAsync("https://b4a74o6jmd.execute-api.us-east-1.amazonaws.com/Prod/api/ClientesExternos/RegistroWifi", httpContent);
+
+                    if (response.StatusCode != System.Net.HttpStatusCode.OK)
+                    {
+                        result.message = $"API NO RESPONDE. {response.ReasonPhrase}";
+                        return Ok(result);
+                    }
+                    else
+                    {
+                        using (var conn = new MKConnection("170.244.171.250", "apialan", "api2022"))
+                        {
+                            conn.Open();
+                            var cmd = conn.CreateCommand("ip hotspot user add");
+                            cmd.Parameters.Add("server", "hotspotMetropoli");
+                            cmd.Parameters.Add("profile", "Profile6Megas1hora");
+                            cmd.Parameters.Add("name", mikrotik.Email.ToLower().Trim());
+                            cmd.Parameters.Add("password", mikrotik.FechaNacimiento.Replace("/", ""));
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                result.message = $"ERROR. {ex.Message}";
+                return Ok(result);
+            }
+
+            result.success = true;
+            return Ok(result);
+        }
 
         [HttpGet("{usuario}/{password}")]
         public async Task<IActionResult> ObtenerStreams(string usuario, string password)
@@ -1646,7 +1703,7 @@ namespace ticolinea.stream.service.Controllers
             catch (Exception ex)
             {
                 Console.WriteLine(ex.Message);
-                return Ok("ERROR:"+ex.GetBaseException().Message);
+                return Ok("ERROR:" + ex.GetBaseException().Message);
             }
 
             return Ok();
@@ -1700,7 +1757,7 @@ namespace ticolinea.stream.service.Controllers
         }
 
         [HttpGet("{usuario}/{password}/{serieId}")]
-        public async Task<IActionResult> ObtenerInfoSerie(string usuario, string password,int serieId)
+        public async Task<IActionResult> ObtenerInfoSerie(string usuario, string password, int serieId)
         {
             List<PanelSerieInfo> movies = new();
 
@@ -1836,7 +1893,7 @@ namespace ticolinea.stream.service.Controllers
         }
 
         [HttpGet("{usuario}/{password}/{serieId}/{episodioId}")]
-        public async Task<IActionResult> ObtenerInfoEpisodio(string usuario, string password, int serieId,int episodioId)
+        public async Task<IActionResult> ObtenerInfoEpisodio(string usuario, string password, int serieId, int episodioId)
         {
             List<PanelEpisodio> episodios = new();
 
