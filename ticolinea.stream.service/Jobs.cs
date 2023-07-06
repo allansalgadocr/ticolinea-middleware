@@ -6,6 +6,7 @@ using System.Net;
 using System.Text;
 using ticolinea.stream.service.Db;
 using ticolinea.stream.service.Modelos;
+using ticolinea.stream.service.Services;
 
 namespace ticolinea.stream.service
 {
@@ -306,69 +307,25 @@ namespace ticolinea.stream.service
                 return;
             }
 
-            string ubicacionStreams = Constantes.Global.STREAMS_FOLDER;
-            Process process = new();
-            process.StartInfo.FileName = stream.Fuente.StartsWith("srt://") ? Constantes.Global.FFMPEG_PATH_SRT : Constantes.Global.FFMPEG_PATH;
+            _ = StreamingService.IniciarStream(stream).ConfigureAwait(false);
+        }
 
-            string gcop = stream.CGOP == 1 ? $" -flags +cgop -g {stream.GOP} " : "";
-            string transcodeAudio = " -acodec copy";
-            if (!string.IsNullOrEmpty(stream.TranscodeAudio))
-                transcodeAudio = $" -acodec {stream.TranscodeAudio} -threads 0";
-
-            string frameRate = stream.Transcode == 2 ? $" -r {stream.Framerate}" : "";
-            string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p" : "";
-            pixFmt = stream.Transcode == 4 ? "-pix_fmt yuv420p -async 1" : pixFmt;
-
-#if DEBUG
-            string ffmpegOutput = $" -c copy";
-#endif
-#if !DEBUG
-            string ffmpegOutput = $" -c copy -analyzeduration 0 -probesize {stream.ProbeSize} {pixFmt} {transcodeAudio} -movflags faststart {gcop} -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
-#endif
-            //string ffmpegOutput = $" -c copy {pixFmt} {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
-            if (stream.Transcode == 3)
-            {
-                transcodeAudio = transcodeAudio.Replace("-threads 2", "");
-                ffmpegOutput = $" -c:v h264 -crf 23 -maxrate 5M -bufsize 5M -tune zerolatency {pixFmt} {transcodeAudio} -threads 1 -movflags faststart {gcop} -hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -hls_delete_threshold 15 -hls_segment_filename";
-            }
-            //string ffmpegOutput = $" -c copy {pixFmt} -map 0 -map -0:s {transcodeAudio} -movflags faststart -hls_flags +discont_start+omit_endlist+second_level_segment_duration+second_level_segment_index+temp_file -strftime 1 -hls_time [INTERVALO] -hls_list_size [SEGMENTOS] -strftime_mkdir 1 -hls_segment_filename";
-            //string ffmpegOutput = $"{pixFmt} -vcodec copy {transcodeAudio} -map 0 -map -0:s -movflags faststart -b:v 5M -individual_header_trailer 0 -f segment -segment_format mpegts -segment_time [INTERVALO] -segment_list_size [SEGMENTOS] -segment_format_options mpegts_flags=+initial_discontinuity:mpegts_copyts=1 -segment_list_type m3u8 -segment_list_flags +live -segment_list";
-
-            ffmpegOutput = ffmpegOutput.Replace("[PROBESIZE]", stream.ProbeSize.ToString());
-            ffmpegOutput = ffmpegOutput.Replace("[INTERVALO]", stream.Intervalo.ToString());
-            ffmpegOutput = ffmpegOutput.Replace("[SEGMENTOS]", stream.Segmentos.ToString());
-
-            string progress = stream.Bitrate == "Progress" ? $" -progress {ubicacionStreams}logs/{stream.StreamId}.txt " : "";
-#if DEBUG
-            string arguments = $"-y -nostdin -nostats -loglevel quiet -err_detect ignore_err -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 {frameRate}{progress} -i \"{stream.Fuente}\" {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_.m3u8";
-#endif
-#if !DEBUG
-            string arguments = $"-y -nostdin -nostats -loglevel quiet -err_detect ignore_err -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 {frameRate}{progress} -i \"{stream.Fuente}\" {ffmpegOutput} {ubicacionStreams}{stream.StreamId}_%d.ts {ubicacionStreams}{stream.StreamId}_.m3u8";
-#endif
-
-            if (stream.Fuente.StartsWith("srt://") || stream.Fuente.StartsWith("rtmp://"))
-                arguments = arguments.Replace("-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10", "");
-
-            process.StartInfo.Arguments = arguments;
-            process.StartInfo.RedirectStandardInput = false;
-            process.StartInfo.RedirectStandardOutput = false;
-            process.Start();
-
+        public static async Task ActualizaInfoCanal(int procesoId, int streamId)
+        {
             using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
                 using (var cmd = cnn.CreateCommand())
                 {
                     if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                    cmd.CommandText = "UPDATE streams_info SET proceso_id=@id_proceso, ejecutando=1 " +
-                               "WHERE stream_id=@id";
+                    cmd.CommandText = "UPDATE streams_info SET proceso_id=@id_proceso, ejecutando=1,reportado_caido=0 " +
+                                      "WHERE stream_id=@id";
 
-                    cmd.Parameters.AddWithValue("@id_proceso", process.Id);
-                    cmd.Parameters.AddWithValue("@id", stream.StreamId);
+                    cmd.Parameters.AddWithValue("@id_proceso", procesoId);
+                    cmd.Parameters.AddWithValue("@id", streamId);
 
                     await cmd.ExecuteNonQueryAsync();
                 }
             }
-            //ObtenerInfoCodec(stream.StreamId, stream.Fuente);
         }
 
         public static async Task ActualizarCanalEstado(int streamId, bool estaCaido, int procesoId)
@@ -392,6 +349,7 @@ namespace ticolinea.stream.service
                 }
             }
         }
+
 
         public static async Task VerificarStreamsCaidos()
         {
@@ -588,6 +546,27 @@ namespace ticolinea.stream.service
                         if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "DELETE FROM actividad_usuario_actualmente where fecha_inicio < @fechaFinMaxima;";
                         cmd.Parameters.AddWithValue("@fechaFinMaxima", fechaFinMaxima);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"ERROR AL MATAR CONEXIONES.{ex.Message}");
+            }
+        }
+
+        public static async Task LimpiaErrores()
+        {
+            try
+            {
+                var fechaFinMaxima = DateTimeOffset.Now.AddMinutes(-25).ToUnixTimeSeconds();
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "TRUNCATE TABLE streams_error;";
                         await cmd.ExecuteNonQueryAsync();
                     }
                 }

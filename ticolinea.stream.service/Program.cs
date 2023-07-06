@@ -42,6 +42,7 @@ RecurringJob.AddOrUpdate("remove_old_streams", () => Jobs.EliminarArchivosViejos
 RecurringJob.AddOrUpdate("kill_connections", () => Jobs.MataConexionesSinUso(), "*/5 * * * *");
 RecurringJob.AddOrUpdate("check_offline_streams", () => Jobs.VerificarStreamsCaidos(), "*/35 * * * *");
 RecurringJob.AddOrUpdate("remove_large_files", () => Jobs.EliminarArchivosGrandes(), "*/5 * * * *");
+RecurringJob.AddOrUpdate("remove_stream_errors", () => Jobs.LimpiaErrores(), Cron.Daily);
 
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
