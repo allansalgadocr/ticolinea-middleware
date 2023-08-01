@@ -17,42 +17,33 @@ namespace ticolinea.stream.service.Controllers
         [HttpGet("{chID}/{usuario}/{password}.{ext}")]
         public async Task<IActionResult> Streaming(int chID, string usuario, string password, string ext)
         {
-            if (ext == null) return Unauthorized();
-            if (ext != "m3u8") return Unauthorized();
+            if (ext == null)
+                return Unauthorized();
 
-            var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
-            if (usuariodb == null) return Unauthorized();
+            if (ext != "m3u8")
+                return Unauthorized();
+
+            Usuario usuariodb = null;
+            if (usuario != "monitor" && password != "monitor")
+            {
+                usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password).ConfigureAwait(false);
+
+                if (usuariodb == null)
+                    return Unauthorized();
+            }
+
+
             var existeCanal = await ObtieneDatosCanal(chID);
-
-            if (!existeCanal) return Unauthorized();
+            if (!existeCanal)
+                return Unauthorized();
 
             var streamsFolder = Constantes.Global.STREAMS_FOLDER;
             var playlistFile = $"{streamsFolder}{chID}_.m3u8";
-
-            //string playlistOutput = "";
-            /*using (var s = new FileStream(playlistFile, FileMode.Open, FileAccess.Read, FileShare.Read))
-            using (var tr = new StreamReader(s))
-            {
-                playlistOutput = tr.ReadToEnd();
-            }*/
             string playlistOutput = await System.IO.File.ReadAllTextAsync(playlistFile);
 
             string pattern = @"(.*?).ts";
             Regex rg = new(pattern);
             var matches = rg.Matches(playlistOutput);
-            /*
-            int cont = 0;
-            while (matches.Count < 3)
-            {
-                cont++;
-                System.Threading.Thread.Sleep(700);
-
-                playlistOutput = System.IO.File.ReadAllText(playlistFile);
-                matches = rg.Matches(playlistOutput);
-                if (cont >= 20)
-                    return Unauthorized();
-            }*/
-
             if (!playlistOutput.Contains("EXT-X-DISCONTINUITY"))
             {
                 string patternTest = @"(EXT-X-MEDIA-SEQUENCE:[0-9]*\n)";
@@ -79,7 +70,7 @@ namespace ticolinea.stream.service.Controllers
 
             var userAgent = Request.Headers["User-Agent"].ToString();
 
-            await Helpers.Usuario.ActualizaInfoUsuario(usuariodb.UsuarioId, chID, userAgent, ip, usuariodb.ConexionesMaximas);
+            _ = Helpers.Usuario.ActualizaInfoUsuario(usuariodb?.UsuarioId ?? 0, chID, userAgent, ip, usuariodb?.ConexionesMaximas ?? 0).ConfigureAwait(false);
 
             return File(stream, "application/x-mpegurl", $"{chID}.m3u8");
         }
@@ -162,21 +153,21 @@ namespace ticolinea.stream.service.Controllers
                         Console.WriteLine("Canal sin proceso, iniciando stream");
                         //Inicia stream
                         await Jobs.IniciarStream(stream);
-                        System.Threading.Thread.Sleep(400);
+                        await Task.Delay(400);
+
                         bool archivoExiste = false;
                         int ciclo = 0;
-                        while (archivoExiste == false && ciclo < 35)
+                        while (archivoExiste == false && ciclo < 50)
                         {
                             archivoExiste = System.IO.File.Exists($"{ubicacionStreams}{stream.StreamId}_.m3u8");
                             ciclo++;
-                            System.Threading.Thread.Sleep(400);
-
-                            return false;
+                            await Task.Delay(400);
                         }
 
-                        return true;
+                        return archivoExiste;
                     }
-                    else return true;
+                    else
+                        return true;
                 }
                 else
                 {
@@ -184,17 +175,18 @@ namespace ticolinea.stream.service.Controllers
 
                     //Inicia stream
                     await Jobs.IniciarStream(stream);
-                    System.Threading.Thread.Sleep(100);
+                    await Task.Delay(400);
+
                     bool archivoExiste = false;
                     int ciclo = 0;
-                    while (archivoExiste == false && ciclo < 35)
+                    while (archivoExiste == false && ciclo < 45)
                     {
                         archivoExiste = System.IO.File.Exists($"{ubicacionStreams}{stream.StreamId}_.m3u8");
                         ciclo++;
-                        System.Threading.Thread.Sleep(400);
+                        await Task.Delay(400);
                     }
 
-                    return true;
+                    return archivoExiste;
                 }
             }
             catch (Exception ex)

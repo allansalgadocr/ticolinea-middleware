@@ -41,7 +41,7 @@ namespace ticolinea.stream.service.Services
                    .Add($"{frameRate}", false)
                    .Add($"-i \"{stream.Fuente}\"", false)
                    .Add("-c copy", false)
-                   .Add("-analyzeduration 0", false)
+                   .Add($"-analyzeduration {stream.ProbeSize}", false)
                    .Add($"-probesize {stream.ProbeSize}", false)
                    .Add($"{pixFmt}", false)
                    .Add($"{transcodeAudio}", false)
@@ -71,6 +71,7 @@ namespace ticolinea.stream.service.Services
                         break;
                     case ExitedCommandEvent exited:
                         Console.WriteLine($"Process exited; Code: {exited.ExitCode}");
+                        _ = Data.Streams.InsertaStreamError(stream.StreamId, $"Finalizó {exited.ExitCode}").ConfigureAwait(false);
                         await Jobs.ActualizarCanalEstado(stream.StreamId, true, -1).ConfigureAwait(false);
                         break;
                 }

@@ -85,7 +85,9 @@ namespace ticolinea.stream.service.Helpers
 
                 using (MySqlCommand cmd = mariadb.CreateCommand())
                 {
-                    if (mariadb.State == System.Data.ConnectionState.Closed) await mariadb.OpenAsync();
+                    if (mariadb.State == System.Data.ConnectionState.Closed) 
+                        await mariadb.OpenAsync();
+
                     cmd.CommandText = sql;
                     cmd.Parameters.AddWithValue("@usuario", usuario);
                     cmd.Parameters.AddWithValue("@clave", password);
