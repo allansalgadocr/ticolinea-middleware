@@ -1076,6 +1076,178 @@ namespace ticolinea.stream.service.Controllers
             return Ok();
         }
 
+        [HttpGet("{usuario}/{password}")]
+        public async Task<IActionResult> ObtenerStreamsCaidos(string usuario, string password)
+        {
+            List<DataStream> streams = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "SELECT a.id,imagen_stream,nombre_stream,category_name,fuente_stream,reportado_caido, habilitado, iniciado, canal_epg FROM streams a INNER JOIN " +
+                                                              "streams_info b " +
+                                                              "ON a.id = b.stream_id INNER JOIN " +
+                                                              "categorias c " +
+                                                              "ON a.id_categoria = c.id and tipo=1 WHERE reportado_caido=1 and iniciado=1 and habilitado=1 order by orden;";
+
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
+                            {
+                                streams.Add(new DataStream
+                                {
+                                    Id = reader.GetInt32(0),
+                                    Imagen = reader.GetString(1),
+                                    Nombre = reader.GetString(2),
+                                    Categoria = reader.GetString(3),
+                                    Fuente = reader.GetString(4),
+                                    Ejecutando = reader.GetInt32(5),
+                                    Habilitado = reader.GetInt32(6),
+                                    Iniciado = reader.GetInt32(7),
+                                    CanalEPG = reader.GetString(8)
+                                });
+                            }
+                    }
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(streams);
+        }
+
+        [HttpGet("{usuario}/{password}/{chnId}")]
+        public async Task<IActionResult> ReiniciarStream(string usuario, string password, int chnId)
+        {
+            List<PanelCategoria> categorias = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    List<StreamDb> streams = new();
+
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
+                                        "INNER JOIN streams_info b " +
+                                        "on a.id = b.stream_id " +
+                                        $"WHERE stream_id = {chnId};";
+
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
+                            {
+                                streams.Add(new StreamDb
+                                {
+                                    Fuente = reader.GetString(0),
+                                    StreamId = reader.GetInt32(1),
+                                    ProbeSize = reader.GetInt32(2),
+                                    EsBajoDemanda = reader.GetInt32(3),
+                                    ProcesoId = reader.GetInt32(4),
+                                    TranscodeAudio = reader.GetString(5),
+                                    Intervalo = reader.GetInt16(6),
+                                    Segmentos = reader.GetInt16(7),
+                                    Framerate = reader.GetInt32(8),
+                                    Transcode = reader.GetInt32(9),
+                                    Resolucion = reader.GetString(10),
+                                    Bitrate = reader.GetString(11)
+                                });
+                            }
+                    }
+
+                    var stream = streams.FirstOrDefault();
+
+                    if (stream != null)
+                    {
+                        await Jobs.ReiniciarStream(stream);
+                        await Task.Delay(200);
+                        await Jobs.IniciarStream(stream);
+                        await Task.Delay(400);
+                        await Jobs.VerificarStream(stream);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(categorias);
+        }
+
+
+        [HttpGet("{usuario}/{password}/")]
+        public async Task<IActionResult> ReiniciarStreamsCaidos(string usuario, string password)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    List<StreamDb> streams = new();
+
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
+                                        "INNER JOIN streams_info b " +
+                                        "on a.id = b.stream_id " +
+                                        $"WHERE reportado_caido=1 and habilitado=1 and iniciado=1;";
+
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
+                            {
+                                streams.Add(new StreamDb
+                                {
+                                    Fuente = reader.GetString(0),
+                                    StreamId = reader.GetInt32(1),
+                                    ProbeSize = reader.GetInt32(2),
+                                    EsBajoDemanda = reader.GetInt32(3),
+                                    ProcesoId = reader.GetInt32(4),
+                                    TranscodeAudio = reader.GetString(5),
+                                    Intervalo = reader.GetInt16(6),
+                                    Segmentos = reader.GetInt16(7),
+                                    Framerate = reader.GetInt32(8),
+                                    Transcode = reader.GetInt32(9),
+                                    Resolucion = reader.GetString(10),
+                                    Bitrate = reader.GetString(11)
+                                });
+                            }
+                    }
+                    foreach (var stream in streams)
+                    {
+                        if (stream != null)
+                        {
+                            await Jobs.DetenerProceso(0, stream.ProcesoId);
+                            await Task.Delay(100);
+                            await Jobs.IniciarStream(stream);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok();
+        }
+
         #region Peliculas
         [HttpGet("{usuario}/{password}")]
         public async Task<IActionResult> ObtenerCategoriasPeliculas(string usuario, string password)
@@ -1132,7 +1304,7 @@ namespace ticolinea.stream.service.Controllers
                     using (var cmd = cnn.CreateCommand())
                     {
                         if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "select usuario,notas,nombre_stream from actividad_usuario_actualmente a " +
+                        cmd.CommandText = "select usuario,notas,nombre_stream,id from actividad_usuario_actualmente a " +
                                             "inner join usuarios_ticolinea b " +
                                             "on a.usuario_id = b.id " +
                                             "inner join streams_tl c " +
@@ -1145,7 +1317,7 @@ namespace ticolinea.stream.service.Controllers
                                 {
                                     Usuario = reader.GetString(0),
                                     Canal = reader.GetString(1),
-                                    Notas = reader.GetString(2),
+                                    Notas = $"{reader.GetString(3)}-{reader.GetString(2)}",
                                 });
                             }
                     }

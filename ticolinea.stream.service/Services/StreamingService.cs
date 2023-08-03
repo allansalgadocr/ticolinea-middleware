@@ -16,6 +16,7 @@ namespace ticolinea.stream.service.Services
             string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p -async 1" : "";
             string reconnect = "";
 
+            int analyzeDuration = stream.ProbeSize;
             var parameters = stream.Bitrate.Split("+", StringSplitOptions.RemoveEmptyEntries);
             if (parameters.Contains("reconnect"))
                 reconnect = "-reconnect 1 ";
@@ -27,6 +28,8 @@ namespace ticolinea.stream.service.Services
                 reconnect = reconnect + "-reconnect_on_http_error 1 ";
             if (parameters.Contains("reconnect_delay_max"))
                 reconnect = reconnect + "-reconnect_delay_max 10 ";
+            if (parameters.Contains("no_analyzeduration"))
+                analyzeDuration=stream.GOP;
 
             string processFilePath = stream.Fuente.StartsWith("srt://") ? Constantes.Global.FFMPEG_PATH_SRT : Constantes.Global.FFMPEG_PATH;
             var cmd = Cli.Wrap(processFilePath).WithValidation(CommandResultValidation.None)
@@ -41,7 +44,7 @@ namespace ticolinea.stream.service.Services
                    .Add($"{frameRate}", false)
                    .Add($"-i \"{stream.Fuente}\"", false)
                    .Add("-c copy", false)
-                   .Add($"-analyzeduration {stream.ProbeSize}", false)
+                   .Add($"-analyzeduration {analyzeDuration}", false)
                    .Add($"-probesize {stream.ProbeSize}", false)
                    .Add($"{pixFmt}", false)
                    .Add($"{transcodeAudio}", false)
