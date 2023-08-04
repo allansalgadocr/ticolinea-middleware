@@ -1090,11 +1090,11 @@ namespace ticolinea.stream.service.Controllers
                     using (var cmd = cnn.CreateCommand())
                     {
                         if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "SELECT a.id,imagen_stream,nombre_stream,category_name,fuente_stream,reportado_caido, habilitado, iniciado, canal_epg FROM streams a INNER JOIN " +
+                        cmd.CommandText = "SELECT a.id,imagen_stream,nombre_stream,category_name,fuente_stream,reportado_caido, habilitado, iniciado, canal_epg FROM streams_tl a INNER JOIN " +
                                                               "streams_info b " +
                                                               "ON a.id = b.stream_id INNER JOIN " +
-                                                              "categorias c " +
-                                                              "ON a.id_categoria = c.id and tipo=1 WHERE reportado_caido=1 and iniciado=1 and habilitado=1 order by orden;";
+                                                              "stream_categories c " +
+                                                              "ON a.id_categoria = c.id and tipo=1 WHERE reportado_caido=1 and iniciado=1 and habilitado=1 AND a.es_bajodemanda=0 order by orden;";
 
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
@@ -1304,7 +1304,7 @@ namespace ticolinea.stream.service.Controllers
                     using (var cmd = cnn.CreateCommand())
                     {
                         if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "select usuario,notas,nombre_stream,id from actividad_usuario_actualmente a " +
+                        cmd.CommandText = "select usuario,notas,nombre_stream,a.stream_id from actividad_usuario_actualmente a " +
                                             "inner join usuarios_ticolinea b " +
                                             "on a.usuario_id = b.id " +
                                             "inner join streams_tl c " +
@@ -1317,7 +1317,7 @@ namespace ticolinea.stream.service.Controllers
                                 {
                                     Usuario = reader.GetString(0),
                                     Canal = reader.GetString(1),
-                                    Notas = $"{reader.GetString(3)}-{reader.GetString(2)}",
+                                    Notas = $"{reader.GetInt32(3)}-{reader.GetString(2)}",
                                 });
                             }
                     }

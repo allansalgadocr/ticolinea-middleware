@@ -28,7 +28,7 @@ namespace ticolinea.stream.service.Services
                 reconnect = reconnect + "-reconnect_on_http_error 1 ";
             if (parameters.Contains("reconnect_delay_max"))
                 reconnect = reconnect + "-reconnect_delay_max 10 ";
-            if (parameters.Contains("no_analyzeduration"))
+            if (parameters.Contains("analyzeduration"))
                 analyzeDuration=stream.GOP;
 
             string processFilePath = stream.Fuente.StartsWith("srt://") ? Constantes.Global.FFMPEG_PATH_SRT : Constantes.Global.FFMPEG_PATH;
