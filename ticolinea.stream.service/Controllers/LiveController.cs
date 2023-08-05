@@ -24,7 +24,8 @@ namespace ticolinea.stream.service.Controllers
                 return Unauthorized();
 
             Usuario usuariodb = null;
-            if ((usuario != "monitor" && password != "monitor") || (usuario != "test" && password != "test"))
+            if ((usuario != "monitor" && password != "monitor") || 
+                (usuario != "test" && password != "test"))
             {
                 usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password).ConfigureAwait(false);
 
@@ -70,9 +71,11 @@ namespace ticolinea.stream.service.Controllers
 
             var userAgent = Request.Headers["User-Agent"].ToString();
 
-            if ((usuario != "monitor" && password != "monitor") || (usuario != "test" && password != "test"))
+            if ((usuario != "monitor" && password != "monitor") && 
+                (usuario != "test" && password != "test") &&
+                (usuario != "fibraencasapanel"))
             {
-                _ = Helpers.Usuario.ActualizaInfoUsuario(usuariodb?.UsuarioId ?? 0, chID, userAgent, ip, usuariodb?.ConexionesMaximas ?? 0).ConfigureAwait(false);
+                _ = Helpers.Usuario.ActualizaInfoUsuario(usuariodb?.UsuarioId ?? 0, chID, userAgent, ip, usuariodb?.ConexionesMaximas ?? 0);
             }
 
             return File(stream, "application/x-mpegurl", $"{chID}.m3u8");

@@ -7,37 +7,34 @@ namespace ticolinea.stream.service.Helpers
     {
         public static async Task ActualizaInfoUsuario(int usuarioId, int chnId, string userAgent, string userIp, int conexionesMaximas)
         {
-            List<int> actividades = new List<int>();
-
+            List<int> actividades = new();
             using (var conn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                if (conn.State == System.Data.ConnectionState.Closed)
-                    await conn.OpenAsync();
-
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT actividad_id FROM actividad_usuario_actualmente WHERE usuario_id=@usuarioId ORDER BY fecha_inicio DESC LIMIT 1;";
+                    if (conn.State == System.Data.ConnectionState.Closed) await conn.OpenAsync();
+
+                    cmd.CommandText = "SELECT actividad_id from actividad_usuario_actualmente WHERE usuario_id=@usuarioId ORDER BY fecha_inicio desc;";
                     cmd.Parameters.AddWithValue("@usuarioId", usuarioId);
 
                     using (var reader = await cmd.ExecuteReaderAsync())
-                    {
                         while (await reader.ReadAsync())
                         {
                             actividades.Add(reader.GetInt32(0));
                         }
-                    }
                 }
-
-                var now = DateTimeOffset.Now.ToUnixTimeSeconds();
 
                 if (actividades.Count == 0)
                 {
                     try
                     {
+                        var now = DateTimeOffset.Now.ToUnixTimeSeconds();
                         using (var cmd = conn.CreateCommand())
                         {
-                            cmd.CommandText = "INSERT INTO actividad_usuario_actualmente(usuario_id, stream_id, user_agent, usuario_ip, formato, fecha_inicio) " +
-                                              "VALUES(@usuario_id, @stream_id, @user_agent, @usuario_ip, 'HLS', @fecha_inicio);";
+                            if (conn.State == System.Data.ConnectionState.Closed) await conn.OpenAsync();
+
+                            cmd.CommandText = "INSERT INTO actividad_usuario_actualmente(usuario_id,stream_id,user_agent,usuario_ip,formato,fecha_inicio)" +
+                                       "VALUES(@usuario_id,@stream_id,@user_agent,@usuario_ip,'HLS',@fecha_inicio);";
 
                             cmd.Parameters.AddWithValue("@usuario_id", usuarioId);
                             cmd.Parameters.AddWithValue("@stream_id", chnId);
@@ -47,26 +44,29 @@ namespace ticolinea.stream.service.Helpers
 
                             await cmd.ExecuteNonQueryAsync();
                         }
+
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine("Error al insertar: " + ex.Message);
-                        // Consider logging the exception details for better error reporting.
+                        Console.WriteLine("Error al insertar." + ex.Message);
                     }
                 }
                 else
                 {
+                    var now = DateTimeOffset.Now.ToUnixTimeSeconds();
+
                     using (var cmd = conn.CreateCommand())
                     {
+                        if (conn.State == System.Data.ConnectionState.Closed) await conn.OpenAsync();
                         cmd.CommandText = "UPDATE actividad_usuario_actualmente " +
-                                          "SET stream_id = @streamid, usuario_ip = @usuarioip, user_agent = @usuarioagent, fecha_inicio = @fechaInicio " +
-                                          "WHERE actividad_id = @actividadId;";
+                                   "SET stream_id=@streamid, usuario_ip=@usuarioip, user_agent=@usuarioagent, fecha_inicio=@fechaInicio" +
+                                   " WHERE actividad_id=@actividadId;";
 
                         cmd.Parameters.AddWithValue("@streamid", chnId);
                         cmd.Parameters.AddWithValue("@usuarioip", userIp);
                         cmd.Parameters.AddWithValue("@usuarioagent", userAgent);
                         cmd.Parameters.AddWithValue("@fechaInicio", now);
-                        cmd.Parameters.AddWithValue("@actividadId", actividades[0]);
+                        cmd.Parameters.AddWithValue("@actividadId", actividades.First());
 
                         await cmd.ExecuteNonQueryAsync();
                     }
@@ -74,52 +74,38 @@ namespace ticolinea.stream.service.Helpers
             }
         }
 
-
         public static async Task<Modelos.Usuario> VerificarUsuario(string usuario, string password)
         {
-            using (var memoryCacheService = new Services.MemoryCacheService())
+            //Verifica si usuario existe
+            List<Modelos.Usuario> usuarios = new();
+            using (var mariadb = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                var datos = memoryCacheService.ObtenerDatoEnCache<Modelos.Usuario>($"{usuario}:{password}");
-                if (datos != null)
-                {
-                    return datos;
-                }
+                string sql = "SELECT id,conexiones_maximas, habilitado FROM usuarios_ticolinea " +
+                                                      "WHERE usuario = @usuario and clave = @clave and habilitado=1;";
 
-                var usuarios = new List<Modelos.Usuario>();
-                using (var mariadb = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                using (MySqlCommand cmd = mariadb.CreateCommand())
                 {
-                    string sql = "SELECT id, conexiones_maximas, habilitado FROM usuarios_ticolinea " +
-                                 "WHERE usuario = @usuario AND clave = @clave AND habilitado = 1 LIMIT 1;";
+                    if (mariadb.State == System.Data.ConnectionState.Closed)
+                        await mariadb.OpenAsync();
 
-                    using (var cmd = mariadb.CreateCommand())
+                    cmd.CommandText = sql;
+                    cmd.Parameters.AddWithValue("@usuario", usuario);
+                    cmd.Parameters.AddWithValue("@clave", password);
+
+                    using var reader = await cmd.ExecuteReaderAsync();
+                    while (await reader.ReadAsync())
                     {
-                        if (mariadb.State == System.Data.ConnectionState.Closed)
-                            await mariadb.OpenAsync();
-
-                        cmd.CommandText = sql;
-                        cmd.Parameters.AddWithValue("@usuario", usuario);
-                        cmd.Parameters.AddWithValue("@clave", password);
-
-                        using var reader = await cmd.ExecuteReaderAsync();
-                        while (await reader.ReadAsync())
+                        usuarios.Add(new Modelos.Usuario
                         {
-                            usuarios.Add(new Modelos.Usuario
-                            {
-                                UsuarioId = reader.GetInt32(0),
-                                ConexionesMaximas = reader.GetInt32(1),
-                                Habilitado = reader.GetInt32(2),
-                            });
-                        }
+                            UsuarioId = reader.GetInt32(0),
+                            ConexionesMaximas = reader.GetInt32(1),
+                            Habilitado = reader.GetInt32(2),
+                        });
                     }
                 }
-
-                var usuarioObj = usuarios.FirstOrDefault();
-                if (usuarioObj != null)
-                    memoryCacheService.GuardarEnCache($"{usuario}:{password}", usuarioObj, 10);
-
-                return usuarioObj;
             }
-        }
 
+            return usuarios.FirstOrDefault();
+        }
     }
 }

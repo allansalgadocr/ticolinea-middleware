@@ -52,7 +52,7 @@ namespace ticolinea.stream.service.Services
                    .Add("-hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time", false)
                    .Add($"-hls_time {stream.Intervalo}", false)
                    .Add($"-hls_list_size {stream.Segmentos}", false)
-                   .Add("-hls_delete_threshold 15", false)
+                   .Add("-hls_delete_threshold 10", false)
                    .Add($"-hls_segment_filename {Constantes.Global.STREAMS_FOLDER}{stream.StreamId}_%d.ts {Constantes.Global.STREAMS_FOLDER}{stream.StreamId}_.m3u8", false)
 
                );
@@ -69,7 +69,7 @@ namespace ticolinea.stream.service.Services
                         Console.WriteLine($"Out-{stream.StreamId}> {stdOut.Text}");
                         break;
                     case StandardErrorCommandEvent stdErr:
-                        _ = Data.Streams.InsertaStreamError(stream.StreamId, stdErr.Text).ConfigureAwait(false);
+                        //_ = Data.Streams.InsertaStreamError(stream.StreamId, stdErr.Text).ConfigureAwait(false);
                         Console.WriteLine($"Err-{stream.StreamId}> {stdErr.Text}");
                         break;
                     case ExitedCommandEvent exited:
