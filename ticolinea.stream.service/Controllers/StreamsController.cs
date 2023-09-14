@@ -51,6 +51,65 @@ namespace ticolinea.stream.service.Controllers
         }*/
 
         [HttpGet("{usuario}/{password}")]
+        public async Task<IActionResult> PlaylistMobile(string usuario, string password)
+        {
+            var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
+
+            if (usuariodb == null)
+                return Unauthorized();
+
+
+            StringBuilder sb = new();
+            sb.AppendLine("#EXTM3U\r\n");
+
+            Modelos.PaqueteTV paquete = null;
+            string paquetetvId="";
+            if (!string.IsNullOrEmpty(usuariodb.PaqueteTV))
+            {
+                paquete = await Data.PaqueteTV.ObtenerPaquete(usuariodb.PaqueteTV);
+                paquetetvId= paquete.IdPaquete;
+            }
+
+            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paquetetvId);
+            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paquetetvId);
+
+            foreach (var canal in bouquetCustom)
+            {
+                if (canal.CanalId < bouquet.Count() - 1)
+                {
+                    bouquet.Insert(canal.CanalId - 1, canal);
+                }
+                else
+                {
+                    bouquet.Add(canal);
+                }
+            }
+
+            //Peliculas
+            if ((paquete != null && paquete.Activo == 1 && paquete.Peliculas == 1) || string.IsNullOrEmpty(usuariodb.PaqueteTV))
+            {
+                List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
+                bouquet.AddRange(bouquetPeliculas);
+            }
+
+            foreach (var chn in bouquet)
+            {
+                sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.Tipo == 1)
+                {
+                    sb.AppendLine($"http://tv.play-latino.com:27701/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
+                }
+
+                if (chn.Tipo == 2 || chn.Tipo == 3)
+                {
+                    sb.AppendLine($"http://tv.play-latino.com:27701/Peliculas/Reproducir/{chn.Id}/{usuario}/{password}.{chn.Contenedor}\r\n");
+                }
+            }
+
+            return File(Encoding.UTF8.GetBytes(sb.ToString()), "application/x-mpegurl", $"ticolineaplay_{usuario}.m3u");
+        }
+
+        [HttpGet("{usuario}/{password}")]
         public async Task<IActionResult> Playlist(string usuario, string password)
         {
             var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
@@ -324,7 +383,7 @@ namespace ticolinea.stream.service.Controllers
                             {
                                 Id = reader.GetInt32(0),
                                 IdCategoria = reader.GetInt32(1),
-                                Categoria = reader.GetString(2).Replace("VOD/",""),
+                                Categoria = reader.GetString(2).Replace("VOD/", ""),
                                 Nombre = reader.GetString(3),
                                 Imagen = reader.GetString(4),
                                 Agregado = reader.GetInt32(5),

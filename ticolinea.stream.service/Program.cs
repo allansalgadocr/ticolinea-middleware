@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.HttpOverrides;
 using Hangfire;
-using Hangfire.InMemory;
 using ticolinea.stream.service;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -15,6 +14,7 @@ builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddLog4net();
 
 var app = builder.Build();
 

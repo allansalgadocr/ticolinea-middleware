@@ -80,8 +80,8 @@ namespace ticolinea.stream.service.Helpers
             List<Modelos.Usuario> usuarios = new();
             using (var mariadb = new MySqlConnection(Constantes.Global.MARIADB_CONN))
             {
-                string sql = "SELECT id,conexiones_maximas, habilitado FROM usuarios_ticolinea " +
-                                                      "WHERE usuario = @usuario and clave = @clave and habilitado=1;";
+                string sql = "SELECT id,conexiones_maximas, habilitado, id_paquete_tv FROM usuarios_ticolinea " +
+                             "WHERE usuario = @usuario and clave = @clave and habilitado=1;";
 
                 using (MySqlCommand cmd = mariadb.CreateCommand())
                 {
@@ -100,6 +100,7 @@ namespace ticolinea.stream.service.Helpers
                             UsuarioId = reader.GetInt32(0),
                             ConexionesMaximas = reader.GetInt32(1),
                             Habilitado = reader.GetInt32(2),
+                            PaqueteTV = reader.IsDBNull(3) ? "" : reader.GetString(3),
                         });
                     }
                 }

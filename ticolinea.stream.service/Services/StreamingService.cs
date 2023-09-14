@@ -63,19 +63,19 @@ namespace ticolinea.stream.service.Services
                 {
                     case StartedCommandEvent started:
                         Console.WriteLine($"Process started; ID: {started.ProcessId}");
-                        await Jobs.ActualizaInfoCanal(started.ProcessId, stream.StreamId).ConfigureAwait(false);
+                        await Jobs.ActualizaInfoCanal(started.ProcessId, stream.StreamId);
                         break;
                     case StandardOutputCommandEvent stdOut:
                         Console.WriteLine($"Out-{stream.StreamId}> {stdOut.Text}");
                         break;
                     case StandardErrorCommandEvent stdErr:
-                        //_ = Data.Streams.InsertaStreamError(stream.StreamId, stdErr.Text).ConfigureAwait(false);
+                        Data.Streams.InsertaStreamError(stdErr.Text);
                         Console.WriteLine($"Err-{stream.StreamId}> {stdErr.Text}");
                         break;
                     case ExitedCommandEvent exited:
                         Console.WriteLine($"Process exited; Code: {exited.ExitCode}");
-                        _ = Data.Streams.InsertaStreamError(stream.StreamId, $"Finalizó {exited.ExitCode}").ConfigureAwait(false);
-                        await Jobs.ActualizarCanalEstado(stream.StreamId, true, -1).ConfigureAwait(false);
+                        Data.Streams.InsertaStreamError($"({stream.StreamId}): Finalizó {exited.ExitCode}");
+                        await Jobs.ActualizarCanalEstado(stream.StreamId, true, -1);
                         break;
                 }
             }
