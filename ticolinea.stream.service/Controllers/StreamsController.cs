@@ -51,7 +51,7 @@ namespace ticolinea.stream.service.Controllers
         }*/
 
         [HttpGet("{usuario}/{password}")]
-        public async Task<IActionResult> PlaylistMobile(string usuario, string password)
+        public async Task<IActionResult> PlaylistMobile(string usuario, string password, string macAddress)
         {
             var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
 
@@ -97,12 +97,12 @@ namespace ticolinea.stream.service.Controllers
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
                 if (chn.Tipo == 1)
                 {
-                    sb.AppendLine($"http://tv.play-latino.com:27701/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
+                    sb.AppendLine($"http://tv.play-latino.com:27701/Live/StreamingMovil/{chn.Id}/{usuario}/{password}/{macAddress}\r\n");
                 }
 
                 if (chn.Tipo == 2 || chn.Tipo == 3)
                 {
-                    sb.AppendLine($"http://tv.play-latino.com:27701/Peliculas/Reproducir/{chn.Id}/{usuario}/{password}.{chn.Contenedor}\r\n");
+                    sb.AppendLine($"http://tv.play-latino.com:27701/Peliculas/ReproducirMovil/{chn.Id}/{macAddress}/{usuario}/{password}.{chn.Contenedor}\r\n");
                 }
             }
 

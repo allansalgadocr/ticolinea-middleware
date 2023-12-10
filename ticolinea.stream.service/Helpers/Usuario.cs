@@ -1,5 +1,6 @@
 ﻿using MySqlConnector;
 using ticolinea.stream.service.Db;
+using ticolinea.stream.service.Modelos;
 
 namespace ticolinea.stream.service.Helpers
 {
@@ -69,6 +70,48 @@ namespace ticolinea.stream.service.Helpers
                         cmd.Parameters.AddWithValue("@actividadId", actividades.First());
 
                         await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+        }
+
+        public static async Task ActualizarActividadMovil(int usuarioId, int chnId, string userAgent, string userIp, string macAddress, int tipo)
+        {
+            List<ActividadUsuario> actividades = new();
+            using (var conn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+            {
+                using (var cmd = conn.CreateCommand())
+                {
+                    if (conn.State == System.Data.ConnectionState.Closed) await conn.OpenAsync();
+
+                    cmd.CommandText = "SELECT actividad_id,mac_address from actividad_usuario_actualmente WHERE usuario_id=@usuarioId ORDER BY fecha_inicio desc;";
+                    cmd.Parameters.AddWithValue("@usuarioId", usuarioId);
+
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
+                        {
+                            actividades.Add(new ActividadUsuario
+                            {
+                                ActividadId = reader.GetInt32(0),
+                                MacAddress = reader.GetString(1)
+                            });
+                        }
+                }
+
+                if (!actividades.Any())
+                {
+                    await Data.ActividadPorUsuarios.InsertarActividadPorUsuario(conn, usuarioId, chnId, userAgent, userIp, macAddress, tipo);
+                }
+                else
+                {
+                    var actividadPorMac = actividades.FirstOrDefault(x => x.MacAddress == macAddress);
+                    if (actividadPorMac != null)
+                    {
+                       await Data.ActividadPorUsuarios.ActualizarActividadPorUsuario(conn, chnId, userAgent, userIp, actividadPorMac.ActividadId);
+                    }
+                    else
+                    {
+                        await Data.ActividadPorUsuarios.InsertarActividadPorUsuario(conn, usuarioId, chnId, userAgent, userIp, macAddress, tipo);
                     }
                 }
             }

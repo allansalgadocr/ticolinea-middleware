@@ -24,7 +24,7 @@ namespace ticolinea.stream.service.Controllers
                 return Unauthorized();
 
             Usuario usuariodb = null;
-            if ((usuario != "monitor" && password != "monitor") || 
+            if ((usuario != "monitor" && password != "monitor") ||
                 (usuario != "test" && password != "test"))
             {
                 usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password).ConfigureAwait(false);
@@ -71,12 +71,42 @@ namespace ticolinea.stream.service.Controllers
 
             var userAgent = Request.Headers["User-Agent"].ToString();
 
-            if ((usuario != "monitor" && password != "monitor") && 
+            if ((usuario != "monitor" && password != "monitor") &&
                 (usuario != "test" && password != "test") &&
                 (usuario != "fibraencasapanel"))
             {
                 _ = Helpers.Usuario.ActualizaInfoUsuario(usuariodb?.UsuarioId ?? 0, chID, userAgent, ip, usuariodb?.ConexionesMaximas ?? 0);
             }
+
+            return File(stream, "application/x-mpegurl", $"{chID}.m3u8");
+        }
+
+        [ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
+        [HttpGet("{chID}/{usuario}/{password}/{macAddress}")]
+        public async Task<IActionResult> StreamingMovil(int chID, string usuario, string password,string macAddress)
+        {
+            Usuario usuariodb = null;
+
+            if (IsRegularUser(usuario))
+            {
+                usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
+
+                if (usuariodb == null)
+                    return Unauthorized();
+            }
+
+
+            var existeCanal = await ObtieneDatosCanal(chID);
+            if (!existeCanal)
+                return Unauthorized();
+
+            var playlistOutput = await ReadPlaylistFile(chID);
+            playlistOutput = AddDiscontinuityTags(playlistOutput);
+            playlistOutput = ReplaceSegmentUrls(playlistOutput, usuario, password);
+
+            var stream = new MemoryStream(Encoding.UTF8.GetBytes(playlistOutput));
+
+            ActualizarActividadMovil(chID, usuario, password, usuariodb, macAddress);
 
             return File(stream, "application/x-mpegurl", $"{chID}.m3u8");
         }
@@ -212,6 +242,63 @@ namespace ticolinea.stream.service.Controllers
                 builder.Append(b.ToString("x2").ToLower());
 
             return builder.ToString();
+        }
+
+        private string ReplaceSegmentUrls(string playlistOutput, string usuario, string password)
+        {
+            string pattern = @"(.*?).ts";
+            Regex rg = new(pattern);
+            var matches = rg.Matches(playlistOutput);
+
+            foreach (var match in matches)
+            {
+                string token = MD5($"{usuario}{password}zxcvbnm7852{match}");
+                playlistOutput = playlistOutput.Replace(match.ToString(), $@"/Live/Hls/{usuario}/{password}/{token}/{match}");
+            }
+
+            return playlistOutput;
+        }
+
+        private string AddDiscontinuityTags(string playlistOutput)
+        {
+            if (!playlistOutput.Contains("EXT-X-DISCONTINUITY"))
+            {
+                string patternTest = @"(EXT-X-MEDIA-SEQUENCE:[0-9]*\n)";
+                Regex rgtest = new(patternTest);
+                var matchestest = rgtest.Matches(playlistOutput);
+                foreach (var match in matchestest)
+                {
+                    playlistOutput = playlistOutput.Replace(match.ToString(), $@"{match}#EXT-X-DISCONTINUITY{Environment.NewLine}");
+                }
+            }
+
+            return playlistOutput;
+        }
+
+        private void ActualizarActividadMovil(int chID, string usuario, string password, Usuario usuariodb, string macAddress)
+        {
+            var ip = "";
+            var userAgent = Request.Headers["User-Agent"].ToString();
+
+            if (Request.Headers.TryGetValue("X-Real-IP", out var forwardedIps))
+                ip = forwardedIps.First();
+
+            if (IsRegularUser(usuario) && usuariodb != null)
+            {
+                _ = Helpers.Usuario.ActualizarActividadMovil(usuariodb?.UsuarioId ?? 0, chID, userAgent, ip, macAddress, 1);
+            }
+        }
+
+        private bool IsRegularUser(string usuario)
+        {
+            return usuario != "monitor" && usuario != "test" && usuario != "fibraencasapanel";
+        }
+
+        private async Task<string> ReadPlaylistFile(int chID)
+        {
+            var streamsFolder = Constantes.Global.STREAMS_FOLDER;
+            var playlistFile = $"{streamsFolder}{chID}_.m3u8";
+            return await System.IO.File.ReadAllTextAsync(playlistFile).ConfigureAwait(false);
         }
     }
 }

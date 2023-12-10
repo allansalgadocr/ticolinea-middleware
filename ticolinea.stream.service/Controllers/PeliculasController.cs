@@ -37,6 +37,33 @@ namespace ticolinea.stream.service.Controllers
             return PhysicalFile(peliculaData.Fuente, ObtenerExtension(ext), enableRangeProcessing: true);
         }
 
+        [HttpGet("{chID}/{macAddress}/{usuario}/{password}.{ext}")]
+        public async Task<IActionResult> ReproducirMovil(int chID, string macAddress, string usuario, string password, string ext)
+        {
+            var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
+            if (usuariodb == null)
+                return Unauthorized();
+
+            var peliculaData = await ObtieneDatosPelicula(chID);
+            if (peliculaData == null)
+                return NotFound();
+
+            FileInfo fileInfo = new(peliculaData.Fuente);
+
+            if (!fileInfo.Exists)
+                return NoContent();
+
+            var ip = "";
+            if (Request.Headers.TryGetValue("X-Real-IP", out var forwardedIps))
+                ip = forwardedIps.First();
+
+            var userAgent = Request.Headers["User-Agent"].ToString();
+
+            await Helpers.Usuario.ActualizarActividadMovil(usuariodb.UsuarioId, chID, userAgent, ip, macAddress, 2);
+
+            return PhysicalFile(peliculaData.Fuente, ObtenerExtension(ext), enableRangeProcessing: true);
+        }
+
         [HttpGet("{chID}/{usuario}/{password}")]
         public async Task<IActionResult> Informacion(int chID, string usuario, string password)
         {
@@ -71,7 +98,7 @@ namespace ticolinea.stream.service.Controllers
             {
                 using (var cmd = cnn.CreateCommand())
                 {
-                    if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                     cmd.CommandText = "SELECT fuente_stream,id FROM streams_tl " +
                                         $"WHERE id = {chnId};";
 
@@ -98,7 +125,7 @@ namespace ticolinea.stream.service.Controllers
             {
                 using (var cmd = cnn.CreateCommand())
                 {
-                    if(cnn.State==System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                     cmd.CommandText = "SELECT anno,resena,pg FROM pelicula_info " +
                                         $"WHERE stream_id = {chnId};";
 
