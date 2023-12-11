@@ -66,7 +66,7 @@ namespace ticolinea.stream.service.Data
             }
         }
 
-        public static async Task<int> ObtenerCantidadConexionesActivas(int usuarioId)
+        public static async Task<int> ObtenerCantidadConexionesActivas(int usuarioId,string macAddress)
         {
             try
             {
@@ -77,8 +77,9 @@ namespace ticolinea.stream.service.Data
                         if (conn.State == System.Data.ConnectionState.Closed) 
                             await conn.OpenAsync();
 
-                        cmd.CommandText = "SELECT COUNT(actividad_id) FROM actividad_usuario_actualmente WHERE usuario_id=@usuarioId;";
+                        cmd.CommandText = "SELECT COUNT(actividad_id) FROM actividad_usuario_actualmente WHERE usuario_id=@usuarioId and mac_address != @macAddress;";
                         cmd.Parameters.AddWithValue("@usuarioId", usuarioId);
+                        cmd.Parameters.AddWithValue("@mac_address", macAddress);
 
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
@@ -92,8 +93,8 @@ namespace ticolinea.stream.service.Data
             }
             catch (Exception ex)
             {
-
-                throw;
+                Console.WriteLine("Error al obtener cantidad de conexiones activas." + ex.Message);
+                return 0;
             }
         }
     }
