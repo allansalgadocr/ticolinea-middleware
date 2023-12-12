@@ -4,6 +4,9 @@ using ticolinea.stream.service;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Logging.ClearProviders();
+builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
 // Add services to the container.
 
 builder.Services.AddHangfire(x => x.UseInMemoryStorage());

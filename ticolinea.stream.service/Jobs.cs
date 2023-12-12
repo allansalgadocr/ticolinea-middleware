@@ -538,7 +538,7 @@ namespace ticolinea.stream.service
         {
             try
             {
-                var fechaFinMaxima = DateTimeOffset.Now.AddMinutes(-10).ToUnixTimeSeconds();
+                var fechaFinMaxima = DateTimeOffset.Now.AddMinutes(-5).ToUnixTimeSeconds();
                 using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
                     using (var cmd = cnn.CreateCommand())

@@ -50,7 +50,7 @@ namespace ticolinea.stream.service.Controllers
             return Ok();
         }*/
 
-        [HttpGet("{usuario}/{password}")]
+        [HttpGet("{usuario}/{password}/{macAddress}")]
         public async Task<IActionResult> PlaylistMobile(string usuario, string password, string macAddress)
         {
             var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);

@@ -71,7 +71,7 @@ namespace ticolinea.stream.service.Data
 
                         string idPaquete = Guid.NewGuid().ToString();
 
-                        cmd.CommandText = "SELECT id_paquete_tv,nombre_paquete,fecha_creacion,activo,peliculas,series FROM paquete_tv " +
+                        cmd.CommandText = "SELECT id_paquete_tv,nombre_paquete,activo,peliculas,series FROM paquete_tv " +
                                           "WHERE id_paquete_tv=@IdPaqueteTV;";
 
                         cmd.Parameters.AddWithValue("@IdPaqueteTV", IdPaquete);
@@ -85,23 +85,6 @@ namespace ticolinea.stream.service.Data
                                 paqueteTV.Activo = reader.GetInt32(2);
                                 paqueteTV.Peliculas = reader.GetInt32(3);
                                 paqueteTV.Series= reader.GetInt32(4);
-                            }
-                        }
-                    }
-                    using (var cmd2 = cnn.CreateCommand())
-                    {
-                        cmd2.CommandText = "SELECT id_paquete_tv,stream_id,tipo FROM paquete_tv_streams " +
-                                           "WHERE id_paquete_tv=@IdPaqueteTV;";
-
-                        cmd2.Parameters.AddWithValue("@IdPaqueteTV", IdPaquete);
-
-                        using (var reader = await cmd2.ExecuteReaderAsync())
-                        {
-                            while (await reader.ReadAsync())
-                            {
-                                paqueteTV.IdPaquete = reader.GetString(0);
-                                paqueteTV.NombrePaquete = reader.GetString(1);
-                                paqueteTV.Activo = reader.GetInt32(2);
                             }
                         }
                     }

@@ -15,7 +15,10 @@ namespace ticolinea.stream.service.Controllers
 
             var conexionesActuales = await Data.ActividadPorUsuarios.ObtenerCantidadConexionesActivas(usuariodb.UsuarioId,macAddress);
             if (conexionesActuales >= usuariodb.ConexionesMaximas)
+            {
+                await Data.ActividadPorUsuarios.EliminarConexionPorMac(macAddress);
                 return StatusCode(429);
+            }
 
             return Ok();
         }

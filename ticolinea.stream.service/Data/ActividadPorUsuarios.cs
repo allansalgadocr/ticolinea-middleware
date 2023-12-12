@@ -66,7 +66,7 @@ namespace ticolinea.stream.service.Data
             }
         }
 
-        public static async Task<int> ObtenerCantidadConexionesActivas(int usuarioId,string macAddress)
+        public static async Task<int> ObtenerCantidadConexionesActivas(int usuarioId, string macAddress)
         {
             try
             {
@@ -74,12 +74,12 @@ namespace ticolinea.stream.service.Data
                 {
                     using (var cmd = conn.CreateCommand())
                     {
-                        if (conn.State == System.Data.ConnectionState.Closed) 
+                        if (conn.State == System.Data.ConnectionState.Closed)
                             await conn.OpenAsync();
 
                         cmd.CommandText = "SELECT COUNT(actividad_id) FROM actividad_usuario_actualmente WHERE usuario_id=@usuarioId and mac_address != @macAddress;";
                         cmd.Parameters.AddWithValue("@usuarioId", usuarioId);
-                        cmd.Parameters.AddWithValue("@mac_address", macAddress);
+                        cmd.Parameters.AddWithValue("@macAddress", macAddress);
 
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
@@ -95,6 +95,27 @@ namespace ticolinea.stream.service.Data
             {
                 Console.WriteLine("Error al obtener cantidad de conexiones activas." + ex.Message);
                 return 0;
+            }
+        }
+
+        public static async Task EliminarConexionPorMac(string macAddress)
+        {
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "DELETE FROM actividad_usuario_actualmente where mac_address=@macAddress;";
+                        cmd.Parameters.AddWithValue("@macAddress", macAddress);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"ERROR AL ELIMINAR CONEXION {macAddress}.{ex.Message}");
             }
         }
     }
