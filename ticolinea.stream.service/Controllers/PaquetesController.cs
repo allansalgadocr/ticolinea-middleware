@@ -68,17 +68,19 @@ namespace ticolinea.stream.service.Controllers
             return Ok(result);
         }
 
-        [HttpGet("{usuario}/{password}/{idPaquete}")]
-        public async Task<IActionResult> ObtenerAccesos(string usuario, string password, string idPaquete)
+        [HttpGet("{usuario}/{password}")]
+        public async Task<IActionResult> ObtenerAccesos(string usuario, string password)
         {
-            PaqueteFullResponse result = new PaqueteFullResponse();
+            var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
 
-            if (usuario != "tl" || password != "paquete@1234")
+            if (usuariodb == null)
                 return Unauthorized();
 
+            PaqueteFullResponse result = new PaqueteFullResponse();
             try
             {
-                var paquete = await Data.PaqueteTV.ObtenerPaquete(idPaquete);
+
+                var paquete = await Data.PaqueteTV.ObtenerPaquete(usuariodb.PaqueteTV);
                 if (paquete != null)
                 {
                     result.response = paquete;
