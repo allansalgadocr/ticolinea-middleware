@@ -287,14 +287,17 @@ namespace ticolinea.stream.service.Controllers
 
                         var now = DateTimeOffset.Now.ToUnixTimeSeconds();
                         cmd.CommandText = "INSERT INTO `usuarios_ticolinea` " +
-                                          "(`usuario`,`clave`,`fecha_vencimiento`,`habilitado`,`conexiones_maximas`,`es_restreamer`,`fecha_creacion`,`creado_por`,`bouquet`,`notas`) " +
-                                          "VALUES(@usuario,@clave,@fecha_vencimiento,@habilitado,1,0,@fecha_creacion,0,'',@notas); ";
+                                          "(`usuario`,`clave`,`fecha_vencimiento`,`habilitado`,`conexiones_maximas`,`es_restreamer`,`fecha_creacion`,`creado_por`,`bouquet`,`notas`,`es_movil`) " +
+                                          "VALUES(@usuario,@clave,@fecha_vencimiento,@habilitado,@conexionesMaximas,0,@fecha_creacion,0,'',@notas,@esMovil); ";
+
                         cmd.Parameters.AddWithValue("@usuario", panelUsuario.Usuario);
                         cmd.Parameters.AddWithValue("@clave", panelUsuario.Clave);
                         cmd.Parameters.AddWithValue("@fecha_vencimiento", fechaVencimiento);
                         cmd.Parameters.AddWithValue("@habilitado", panelUsuario.Habilitado);
+                        cmd.Parameters.AddWithValue("@conexionesMaximas", panelUsuario.ConexionesMaximas);
                         cmd.Parameters.AddWithValue("@fecha_creacion", now);
                         cmd.Parameters.AddWithValue("@notas", panelUsuario.Notas);
+                        cmd.Parameters.AddWithValue("@esMovil", panelUsuario.EsMovil);
 
                         await cmd.ExecuteNonQueryAsync();
                     }
@@ -440,12 +443,12 @@ namespace ticolinea.stream.service.Controllers
                         if (fechaVencimiento == -1)
                         {
                             cmd.CommandText = "UPDATE `usuarios_ticolinea` " +
-                                              "SET usuario=@usuario, clave=@clave, habilitado=@habilitado,notas=@notas " +
+                                              "SET usuario=@usuario, clave=@clave, habilitado=@habilitado,notas=@notas,conexiones_maximas=@conexionesMaximas,es_movil=@esMovil " +
                                               "WHERE id=@id; ";
                         }
                         else
                             cmd.CommandText = "UPDATE `usuarios_ticolinea` " +
-                                              "SET usuario=@usuario, clave=@clave, habilitado=@habilitado, fecha_vencimiento=@fecha_vencimiento,notas=@notas " +
+                                              "SET usuario=@usuario, clave=@clave, habilitado=@habilitado, fecha_vencimiento=@fecha_vencimiento,notas=@notas,conexiones_maximas=@conexionesMaximas,es_movil=@esMovil " +
                                               "WHERE id=@id; ";
 
                         cmd.Parameters.AddWithValue("@usuario", panelUsuario.Usuario);
@@ -455,6 +458,8 @@ namespace ticolinea.stream.service.Controllers
 
                         cmd.Parameters.AddWithValue("@habilitado", panelUsuario.Habilitado);
                         cmd.Parameters.AddWithValue("@notas", panelUsuario.Notas);
+                        cmd.Parameters.AddWithValue("@conexionesMaximas", panelUsuario.ConexionesMaximas);
+                        cmd.Parameters.AddWithValue("@esMovil", panelUsuario.EsMovil);
                         cmd.Parameters.AddWithValue("@id", usuarioId);
 
                         await cmd.ExecuteNonQueryAsync();
@@ -515,7 +520,7 @@ namespace ticolinea.stream.service.Controllers
                     using (var cmd = cnn.CreateCommand())
                     {
                         if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado,notas FROM usuarios_ticolinea;";
+                        cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado,notas,conexiones_maximas,es_movil FROM usuarios_ticolinea;";
 
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
@@ -528,6 +533,8 @@ namespace ticolinea.stream.service.Controllers
                                     FechaVencimiento = !reader.IsDBNull(3) ? UnixTimeStampToDateTime(reader.GetInt32(3)) : "",
                                     Habilitado = reader.GetInt32(4),
                                     Notas = reader.GetString(5),
+                                    ConexionesMaximas = reader.GetInt32(6),
+                                    EsMovil=reader.GetInt32(7)
                                 });
                             }
                     }
@@ -605,7 +612,7 @@ namespace ticolinea.stream.service.Controllers
                     using (var cmd = cnn.CreateCommand())
                     {
                         if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado,notas FROM usuarios_ticolinea WHERE id=@id;";
+                        cmd.CommandText = "SELECT id,usuario,clave,fecha_vencimiento,habilitado,notas,conexiones_maximas,es_movil FROM usuarios_ticolinea WHERE id=@id;";
                         cmd.Parameters.AddWithValue("@id", usuarioId);
 
                         using (var reader = await cmd.ExecuteReaderAsync())
@@ -618,7 +625,9 @@ namespace ticolinea.stream.service.Controllers
                                     Clave = reader.GetString(2),
                                     FechaVencimiento = !reader.IsDBNull(3) ? UnixTimeStampToDateTime(reader.GetInt32(3)) : "",
                                     Habilitado = reader.GetInt32(4),
-                                    Notas = reader.GetString(5)
+                                    Notas = reader.GetString(5),
+                                    ConexionesMaximas = reader.GetInt32(6),
+                                    EsMovil = reader.GetInt32(7)
                                 });
                             }
                     }

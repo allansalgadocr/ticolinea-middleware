@@ -93,6 +93,8 @@
         public string FechaVencimiento { get; set; } = "";
         public int Habilitado { get; set; }
         public string Notas { get; set; } = "";
+        public int ConexionesMaximas { get; set; } = 1;
+        public int EsMovil { get; set; } = 0;
     }
 
     public class Proveedores

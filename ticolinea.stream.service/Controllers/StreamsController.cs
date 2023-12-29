@@ -113,101 +113,42 @@ namespace ticolinea.stream.service.Controllers
         public async Task<IActionResult> Playlist(string usuario, string password)
         {
             var usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
-            if (usuariodb == null) return Unauthorized();
 
-            List<Modelos.Bouquet> bouquet = new();
-            List<Modelos.Bouquet> bouquetCustom = new();
+            if (usuariodb == null) 
+                return Unauthorized();
+
+           
             StringBuilder sb = new();
             sb.AppendLine("#EXTM3U\r\n");
-            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+
+            Modelos.PaqueteTV paquete = null;
+            string paquetetvId = "";
+            if (!string.IsNullOrEmpty(usuariodb.PaqueteTV))
             {
-                using (var cmd = cnn.CreateCommand())
+                paquete = await Data.PaqueteTV.ObtenerPaquete(usuariodb.PaqueteTV);
+                paquetetvId = paquete.IdPaquete;
+            }
+
+            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paquetetvId);
+            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paquetetvId);
+
+            foreach (var canal in bouquetCustom)
+            {
+                if (canal.CanalId < bouquet.Count() - 1)
                 {
-                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                    cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
-                                                            "INNER JOIN stream_categories b " +
-                                                            "on a.id_categoria = b.id " +
-                                                            "WHERE habilitado=1 and tipo=1 and canal_id=0 " +
-                                                            "order by a.orden asc;";
-
-                    using (var reader = await cmd.ExecuteReaderAsync())
-                        while (await reader.ReadAsync())
-                        {
-                            bouquet.Add(new Modelos.Bouquet
-                            {
-                                Id = reader.GetInt32(0),
-                                Nombre = reader.GetString(1),
-                                Imagen = reader.GetString(2),
-                                Categoria = reader.GetString(3),
-                                Tipo = reader.GetInt32(4),
-                                Contenedor = reader.GetString(5),
-                                CanalEPG = reader.GetString(6),
-                            });
-                        }
+                    bouquet.Insert(canal.CanalId - 1, canal);
                 }
-
-                using (var cmd = cnn.CreateCommand())
+                else
                 {
-                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                    cmd.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg, canal_id FROM streams_tl a " +
-                                                        "INNER JOIN stream_categories b " +
-                                                        "on a.id_categoria = b.id " +
-                                                        "WHERE habilitado=1 and tipo=1 and canal_id != 0 " +
-                                                        "order by a.canal_id asc;";
-
-                    using (var reader = await cmd.ExecuteReaderAsync())
-                        while (await reader.ReadAsync())
-                        {
-                            bouquetCustom.Add(new Modelos.Bouquet
-                            {
-                                Id = reader.GetInt32(0),
-                                Nombre = reader.GetString(1),
-                                Imagen = reader.GetString(2),
-                                Categoria = reader.GetString(3),
-                                Tipo = reader.GetInt32(4),
-                                Contenedor = reader.GetString(5),
-                                CanalEPG = reader.GetString(6),
-                                CanalId = reader.GetInt32(7)
-                            });
-                        }
-
-                    foreach (var canal in bouquetCustom)
-                    {
-                        if (canal.CanalId < bouquet.Count() - 1)
-                        {
-                            bouquet.Insert(canal.CanalId - 1, canal);
-                        }
-                        else
-                        {
-                            bouquet.Add(canal);
-                        }
-                    }
+                    bouquet.Add(canal);
                 }
+            }
 
-                using (var cmdPeliculas = cnn.CreateCommand())
-                {
-                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                    cmdPeliculas.CommandText = "SELECT a.id,nombre_stream,imagen_stream,b.category_name,tipo,contenedor, canal_epg FROM streams_tl a " +
-                                                            "INNER JOIN stream_categories b " +
-                                                            "on a.id_categoria = b.id " +
-                                                            "WHERE habilitado=1 and tipo=2 " +
-                                                            "order by a.id desc;";
-
-                    using (var reader = cmdPeliculas.ExecuteReader())
-                        while (await reader.ReadAsync())
-                        {
-                            bouquet.Add(new Modelos.Bouquet
-                            {
-                                Id = reader.GetInt32(0),
-                                Nombre = reader.GetString(1),
-                                Imagen = reader.GetString(2),
-                                Categoria = reader.GetString(3),
-                                Tipo = reader.GetInt32(4),
-                                Contenedor = reader.GetString(5),
-                                CanalEPG = reader.GetString(6),
-                            });
-                        }
-                }
+            //Peliculas
+            if ((paquete != null && paquete.Activo == 1 && paquete.Peliculas == 1) || string.IsNullOrEmpty(usuariodb.PaqueteTV))
+            {
+                List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
+                bouquet.AddRange(bouquetPeliculas);
             }
 
             foreach (var chn in bouquet)
@@ -215,22 +156,11 @@ namespace ticolinea.stream.service.Controllers
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
                 if (chn.Tipo == 1)
                 {
-#if !DEBUG
                     sb.AppendLine($"http://tv.play-latino.com:27701/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
-#endif
-#if DEBUG
-                    sb.AppendLine($"http://localhost:5002/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
-#endif
                 }
-
-                if (chn.Tipo == 2 || chn.Tipo == 3)
+                else if (chn.Tipo == 2 || chn.Tipo == 3)
                 {
-#if !DEBUG
                     sb.AppendLine($"http://tv.play-latino.com:27701/Peliculas/Reproducir/{chn.Id}/{usuario}/{password}.{chn.Contenedor}\r\n");
-#endif
-#if DEBUG
-                    sb.AppendLine($"http://localhost:5002/Peliculas/Reproducir/{chn.Id}/{usuario}/{password}.{chn.Contenedor}\r\n");
-#endif
                 }
             }
 
