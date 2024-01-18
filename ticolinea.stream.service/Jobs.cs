@@ -406,10 +406,10 @@ namespace ticolinea.stream.service
                             streamsCaidos++;
                             estaCaido = true;
                             sb.AppendLine($"• {stream.StreamId} - {stream.TranscodeAudio}");
+                            await DetenerProceso(stream.ProcesoId, stream.StreamId);
                         }
 
                         await ActualizarCanalEstado(stream.StreamId, estaCaido, stream.ProcesoId);
-                        await DetenerProceso(stream.ProcesoId, stream.StreamId);
                     }
                     catch (Exception ex)
                     {

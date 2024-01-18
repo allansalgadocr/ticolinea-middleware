@@ -48,6 +48,7 @@ namespace ticolinea.stream.service.Services
                    .Add($"-probesize {stream.ProbeSize}", false)
                    .Add($"{pixFmt}", false)
                    .Add($"{transcodeAudio}", false)
+                   .Add("-fflags +genpts -async 1",false)
                    .Add("-movflags faststart", false)
                    .Add("-hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time", false)
                    .Add($"-hls_time {stream.Intervalo}", false)
