@@ -90,14 +90,14 @@ namespace ticolinea.stream.service.Data
 
                     if (!string.IsNullOrEmpty(idPaqueteId))
                     {
-                        sql = @"SELECT a.id, a.nombre_stream, a.imagen_stream, b.category_name, a.tipo, a.contenedor, a.canal_epg,pp.activo
+                        sql = @"SELECT a.id,a.nombre_stream,a.imagen_stream,b.category_name,a.tipo,a.contenedor, a.canal_epg, a.canal_id
                                     FROM streams_tl a
                                     INNER JOIN stream_categories b ON a.id_categoria = b.id
                                     INNER JOIN paquete_tv_streams p ON a.id = p.stream_id
                                     INNER JOIN paquete_tv pp ON p.id_paquete_tv = pp.id_paquete_tv
                                     WHERE a.habilitado = 1 AND a.tipo = 1 AND a.canal_id != 0
                                     AND p.id_paquete_tv = @IdPaqueteTV and pp.activo = 1
-                                    ORDER BY a.orden ASC; ";
+                                    order by a.canal_id asc; ";
                     }
 
 
