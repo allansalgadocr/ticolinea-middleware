@@ -1,9 +1,11 @@
 ﻿using CliWrap;
 using CliWrap.Buffered;
+using Hangfire;
 using MySqlConnector;
 using System.Diagnostics;
 using System.Net;
 using System.Text;
+using System.Threading;
 using ticolinea.stream.service.Db;
 using ticolinea.stream.service.Modelos;
 using ticolinea.stream.service.Services;
@@ -12,6 +14,7 @@ namespace ticolinea.stream.service
 {
     public class Jobs
     {
+        [DisableConcurrentExecution(60)]
         public static async Task RevisarStreams()
         {
             List<StreamDb> streams = new();
@@ -95,6 +98,7 @@ namespace ticolinea.stream.service
             }
         }
 
+        [DisableConcurrentExecution(60)]
         public static async Task DetenerStreamsSinUso()
         {
             List<StreamDb> streams = new();
@@ -107,7 +111,7 @@ namespace ticolinea.stream.service
                                                         "INNER JOIN streams_info b on a.id = b.stream_id " +
                                                         "LEFT JOIN actividad_usuario_actualmente c " +
                                                         "on a.id = c.stream_id " +
-                                                        "WHERE es_bajodemanda = 1 AND proceso_id != -1 AND actividad_id is null and tipo=1;";
+                                                        "WHERE es_bajodemanda = 1 AND proceso_id != -1 AND actividad_id is null and a.tipo=1;";
 
                     using (var reader = await cmd.ExecuteReaderAsync())
                         while (await reader.ReadAsync())
@@ -350,7 +354,7 @@ namespace ticolinea.stream.service
             }
         }
 
-
+        [DisableConcurrentExecution(60)]
         public static async Task VerificarStreamsCaidos()
         {
 
@@ -534,6 +538,7 @@ namespace ticolinea.stream.service
         }
 
 
+        [DisableConcurrentExecution(60)]
         public static async Task MataConexionesSinUso()
         {
             try
@@ -556,6 +561,7 @@ namespace ticolinea.stream.service
             }
         }
 
+        [DisableConcurrentExecution(60)]
         public static async Task LimpiaErrores()
         {
             try
@@ -577,6 +583,7 @@ namespace ticolinea.stream.service
             }
         }
 
+        [DisableConcurrentExecution(60)]
         public static void EliminarArchivosViejos()
         {
             try
@@ -594,6 +601,7 @@ namespace ticolinea.stream.service
             }
         }
 
+        [DisableConcurrentExecution(60)]
         public static async Task EliminarArchivosGrandes()
         {
             try
@@ -647,6 +655,46 @@ namespace ticolinea.stream.service
             catch (Exception ex)
             {
                 Console.WriteLine("ERROR AL ELIMINAR ARCHIVOS VIEJOS" + ex.Message);
+            }
+        }
+
+        [DisableConcurrentExecution(60)]
+        public static void CleanUpOldJobs()
+        {
+
+            try
+            {
+                using (var connection = JobStorage.Current.GetConnection())
+                {
+                    var monitoringApi = JobStorage.Current.GetMonitoringApi();
+                    var failedJobs = monitoringApi.FailedJobs(0, 1000 /* limit */);
+
+                    while (failedJobs.Count > 0)
+                    {
+                        foreach (var job in failedJobs)
+                        {
+                            BackgroundJob.Delete(job.Key);
+                        }
+
+                        failedJobs = monitoringApi.FailedJobs(0, 1000 /* limit */);
+                    }
+
+                    var successJobs = monitoringApi.SucceededJobs(0, 1000 /* limit */);
+
+                    while (successJobs.Count > 0)
+                    {
+                        foreach (var job in successJobs)
+                        {
+                            BackgroundJob.Delete(job.Key);
+                        }
+
+                        successJobs = monitoringApi.SucceededJobs(0, 1000 /* limit */);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Optionally, implement retry mechanisms or alerting here
             }
         }
 

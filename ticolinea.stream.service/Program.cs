@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.HttpOverrides;
 using Hangfire;
 using ticolinea.stream.service;
+using Hangfire.InMemory;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,7 +9,6 @@ builder.Logging.ClearProviders();
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
 // Add services to the container.
-
 builder.Services.AddHangfire(x => x.UseInMemoryStorage());
 builder.Services.AddHangfireServer();
 builder.Services.AddHealthChecks();
@@ -39,6 +39,7 @@ DashboardOptions dashboardOptions = new DashboardOptions
 };
 
 app.UseHangfireDashboard("/dashboard", dashboardOptions);
+
 RecurringJob.AddOrUpdate("check_streams", () => Jobs.RevisarStreams(), Cron.Minutely());
 RecurringJob.AddOrUpdate("stop_not_inuse_streams", () => Jobs.DetenerStreamsSinUso(), "*/10 * * * *");
 RecurringJob.AddOrUpdate("remove_old_streams", () => Jobs.EliminarArchivosViejos(), "*/30 * * * *");
@@ -46,6 +47,8 @@ RecurringJob.AddOrUpdate("kill_connections", () => Jobs.MataConexionesSinUso(), 
 RecurringJob.AddOrUpdate("check_offline_streams", () => Jobs.VerificarStreamsCaidos(), "*/35 * * * *");
 RecurringJob.AddOrUpdate("remove_large_files", () => Jobs.EliminarArchivosGrandes(), "*/5 * * * *");
 RecurringJob.AddOrUpdate("remove_stream_errors", () => Jobs.LimpiaErrores(), Cron.Daily);
+
+RecurringJob.AddOrUpdate("cleanup", () => Jobs.CleanUpOldJobs(), Cron.Hourly);
 
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
