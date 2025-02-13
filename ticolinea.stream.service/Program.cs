@@ -21,6 +21,10 @@ builder.Services.AddLog4net();
 
 var app = builder.Build();
 
+// Append a log message to verify log4net is working
+var logger = app.Services.GetRequiredService<ILogger<Program>>();
+logger.LogInformation("Log4net integration is working! Application starting...");
+
 //app.MapHealthChecks("/healthz");
 //Jobs.SincronizarS3();
 

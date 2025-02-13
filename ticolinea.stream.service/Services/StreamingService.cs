@@ -8,9 +8,9 @@ namespace ticolinea.stream.service.Services
     {
         public static async Task IniciarStream(StreamDb stream)
         {
-            string transcodeAudio = " -acodec copy";
+            string transcodeAudio = " -acodec copy -threads 1";
             if (!string.IsNullOrEmpty(stream.TranscodeAudio))
-                transcodeAudio = $" -acodec {stream.TranscodeAudio} -threads 2";
+                transcodeAudio = $" -acodec {stream.TranscodeAudio} -threads 1";
 
             string frameRate = stream.Transcode == 2 ? $" -r {stream.Framerate}" : "";
             string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p -async 1" : "";
@@ -44,16 +44,15 @@ namespace ticolinea.stream.service.Services
                    .Add($"{frameRate}", false)
                    .Add($"-i \"{stream.Fuente}\"", false)
                    .Add("-c copy", false)
-                   .Add($"-analyzeduration {analyzeDuration}", false)
+                   .Add($"-analyzeduration {stream.ProbeSize * 2}", false)
                    .Add($"-probesize {stream.ProbeSize}", false)
                    .Add($"{pixFmt}", false)
                    .Add($"{transcodeAudio}", false)
-                   //.Add("-fflags +genpts -async 1",false)
                    .Add("-movflags faststart", false)
                    .Add("-hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time", false)
                    .Add($"-hls_time {stream.Intervalo}", false)
                    .Add($"-hls_list_size {stream.Segmentos}", false)
-                   .Add("-hls_delete_threshold 10", false)
+                   .Add("-hls_delete_threshold 15", false)
                    .Add($"-hls_segment_filename {Constantes.Global.STREAMS_FOLDER}{stream.StreamId}_%d.ts {Constantes.Global.STREAMS_FOLDER}{stream.StreamId}_.m3u8", false)
 
                );
