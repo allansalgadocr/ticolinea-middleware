@@ -5,8 +5,6 @@ using MySqlConnector;
 using System.Diagnostics;
 using System.Net;
 using System.Text;
-using System.Threading;
-using ticolinea.stream.service.Db;
 using ticolinea.stream.service.Modelos;
 using ticolinea.stream.service.Services;
 
@@ -17,85 +15,120 @@ namespace ticolinea.stream.service
         [DisableConcurrentExecution(60)]
         public static async Task RevisarStreams()
         {
-            List<StreamDb> streams = new();
-            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
-            {
-                using (var cmd = cnn.CreateCommand())
-                {
-                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                    cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate, proceso_id, cgop, gop FROM streams_tl a INNER JOIN " +
-                                                          "streams_info b " +
-                                                          "ON a.id = b.stream_id " +
-                                                          "WHERE habilitado = 1 and iniciado = 1 and es_bajodemanda=0 and tipo=1;";
+            var streams = await ObtenerStreamsActivos();
 
-                    using (var reader = await cmd.ExecuteReaderAsync())
-                        while (await reader.ReadAsync())
-                        {
-                            streams.Add(new StreamDb
-                            {
-                                Fuente = reader.GetString(0),
-                                StreamId = reader.GetInt32(1),
-                                ProbeSize = reader.GetInt32(2),
-                                EsBajoDemanda = reader.GetInt32(3),
-                                TranscodeAudio = reader.GetString(4),
-                                Intervalo = reader.GetInt16(5),
-                                Segmentos = reader.GetInt16(6),
-                                Framerate = reader.GetInt32(7),
-                                Transcode = reader.GetInt32(8),
-                                Resolucion = reader.GetString(9),
-                                Bitrate = reader.GetString(10),
-                                ProcesoId = reader.GetInt32(11),
-                                CGOP = reader.GetInt32(12),
-                                GOP = reader.GetInt32(13)
-                            });
-                        }
-                }
-            }
-
-            foreach (StreamDb stream in streams)
+            var parallelOptions = new ParallelOptions
             {
-                //ObtenerInfoCodec(stream.StreamId, stream.Fuente);
-                if (stream.ProcesoId == -1)
-                    await IniciarStream(stream);
-                else
+                MaxDegreeOfParallelism = 5 // 👈 Máximo de 5 streams a la vez
+            };
+
+            await Parallel.ForEachAsync(streams, parallelOptions, async (stream, ct) =>
+            {
+                try
                 {
-                    //Verifica si existe el proceso
-                    bool EstaCorriendoStream = await ObtenerProcesoFFMPEG(stream.ProcesoId, stream.StreamId);
-                    if (!EstaCorriendoStream)
+                    if (stream.ProcesoId == -1 || !await EstaProcesoFfmpegVivo(stream.ProcesoId, stream.StreamId))
+                    {
+                        Console.WriteLine($"🔄 Reiniciando stream {stream.StreamId}...");
                         await IniciarStream(stream);
+                    }
                 }
-            }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ Error al revisar stream {stream.StreamId}: {ex.Message}");
+                    Data.Streams.InsertaStreamError($"({stream.StreamId}) ERROR: {ex.Message}");
+                }
+            });
         }
+
+        private static async Task<bool> EstaProcesoFfmpegVivo(int procesoId, int streamId)
+        {
+            return await ObtenerProcesoFFMPEG(procesoId, streamId);
+        }
+
+        private static async Task<List<StreamDb>> ObtenerStreamsActivos()
+        {
+            var streams = new List<StreamDb>();
+
+            await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+            await cnn.OpenAsync();
+
+            await using var cmd = cnn.CreateCommand();
+            cmd.CommandText = @"
+            SELECT fuente_stream, stream_id, probesize_ondemand, es_bajodemanda, 
+                   transcode_audio, intervalo, segmentos, framerate, transcode, 
+                   resolucion, bitrate, proceso_id, cgop, gop
+            FROM streams_tl a
+            INNER JOIN streams_info b ON a.id = b.stream_id
+            WHERE habilitado = 1 AND iniciado = 1 AND es_bajodemanda = 0 AND tipo = 1;";
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                streams.Add(new StreamDb
+                {
+                    Fuente = reader.GetString(0),
+                    StreamId = reader.GetInt32(1),
+                    ProbeSize = reader.GetInt32(2),
+                    EsBajoDemanda = reader.GetInt32(3),
+                    TranscodeAudio = reader.GetString(4),
+                    Intervalo = reader.GetInt16(5),
+                    Segmentos = reader.GetInt16(6),
+                    Framerate = reader.GetInt32(7),
+                    Transcode = reader.GetInt32(8),
+                    Resolucion = reader.GetString(9),
+                    Bitrate = reader.GetString(10),
+                    ProcesoId = reader.GetInt32(11),
+                    CGOP = reader.GetInt32(12),
+                    GOP = reader.GetInt32(13)
+                });
+            }
+
+            return streams;
+        }
+
 
         public static async Task VerificarCodecsStreams(bool verificaSoloHabilitados = true)
         {
-            var extraCommand = verificaSoloHabilitados ? " and habilitado = 1" : "";
-            List<StreamDb> streams = new();
-            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+            var streams = new List<StreamDb>();
+
+            await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+            await cnn.OpenAsync();
+
+            await using (var cmd = cnn.CreateCommand())
             {
-                using (var cmd = cnn.CreateCommand())
+                var sql = "SELECT fuente_stream, id FROM streams_tl WHERE tipo = 1";
+                if (verificaSoloHabilitados)
+                    sql += " AND habilitado = 1";
+
+                cmd.CommandText = sql;
+
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
                 {
-                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                    cmd.CommandText = "SELECT fuente_stream,id FROM streams_tl " +
-                                                          $"WHERE tipo=1 {extraCommand};";
-
-                    using (var reader = await cmd.ExecuteReaderAsync())
-                        while (await reader.ReadAsync())
-                        {
-                            streams.Add(new StreamDb
-                            {
-                                Fuente = reader.GetString(0),
-                                StreamId = reader.GetInt32(1),
-
-                            });
-                        }
+                    streams.Add(new StreamDb
+                    {
+                        Fuente = reader.GetString(0),
+                        StreamId = reader.GetInt32(1),
+                    });
                 }
             }
 
-            foreach (StreamDb stream in streams)
+            // Opcional: limitar concurrencia
+            var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = 5 };
+
+            await Parallel.ForEachAsync(streams, parallelOptions, async (stream, ct) =>
             {
-                await ObtenerInfoCodec(stream.StreamId, stream.Fuente);
-            }
+                try
+                {
+                    Console.WriteLine($"🔍 Verificando codec de stream {stream.StreamId}...");
+                    await ObtenerInfoCodec(stream.StreamId, stream.Fuente);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ Error al verificar codec del stream {stream.StreamId}: {ex.Message}");
+                    Data.Streams.InsertaStreamError($"({stream.StreamId}) ERROR codec: {ex.Message}");
+                }
+            });
         }
 
         [DisableConcurrentExecution(60)]
@@ -108,10 +141,10 @@ namespace ticolinea.stream.service
                 {
                     if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                     cmd.CommandText = "SELECT a.id,b.proceso_id,c.actividad_id FROM streams_tl a " +
-                                                        "INNER JOIN streams_info b on a.id = b.stream_id " +
-                                                        "LEFT JOIN actividad_usuario_actualmente c " +
-                                                        "on a.id = c.stream_id " +
-                                                        "WHERE es_bajodemanda = 1 AND proceso_id != -1 AND actividad_id is null and a.tipo=1;";
+                                      "INNER JOIN streams_info b on a.id = b.stream_id " +
+                                      "LEFT JOIN actividad_usuario_actualmente c " +
+                                      "on a.id = c.stream_id " +
+                                      "WHERE es_bajodemanda = 1 AND proceso_id != -1 AND actividad_id is null and a.tipo=1;";
 
                     using (var reader = await cmd.ExecuteReaderAsync())
                         while (await reader.ReadAsync())
@@ -136,7 +169,7 @@ namespace ticolinea.stream.service
                     {
                         if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmdStreams.CommandText = "UPDATE streams_info SET proceso_id=-1 " +
-                                         "WHERE stream_id=@id";
+                                                 "WHERE stream_id=@id";
                         cmdStreams.Parameters.AddWithValue("@id", stream.StreamId);
                         await cmdStreams.ExecuteNonQueryAsync();
                     }
@@ -149,14 +182,14 @@ namespace ticolinea.stream.service
             try
             {
                 var result = await Cli
-                 .Wrap("/bin/pgrep")
-                 .WithArguments($"-f \"/{streamId}_.m3u\"")
-                 .ExecuteBufferedAsync();
+                    .Wrap("/bin/pgrep")
+                    .WithArguments($"-f \"/{streamId}_.m3u\"")
+                    .ExecuteBufferedAsync();
                 string output = result.StandardOutput;
                 string[] procesos = output.Split(
-                                new string[] { Environment.NewLine },
-                                StringSplitOptions.None
-                                );
+                    new string[] { Environment.NewLine },
+                    StringSplitOptions.None
+                );
 
                 foreach (string proceso in procesos)
                 {
@@ -182,20 +215,19 @@ namespace ticolinea.stream.service
             return false;
         }
 
-        public static async Task<Process> ObtenerProcesoEjecutando(int procesoId, int streamId)
+        private static async Task<Process?> ObtenerProcesoEjecutando(int procesoId, int streamId)
         {
             try
             {
-
                 var result = await Cli
-                 .Wrap("/bin/pgrep")
-                 .WithArguments($"-f \"/{streamId}_.m3u\"")
-                 .ExecuteBufferedAsync();
+                    .Wrap("/bin/pgrep")
+                    .WithArguments($"-f \"/{streamId}_.m3u\"")
+                    .ExecuteBufferedAsync();
                 string output = result.StandardOutput;
                 string[] procesos = output.Split(
-                                new string[] { Environment.NewLine },
-                                StringSplitOptions.None
-                                );
+                    new string[] { Environment.NewLine },
+                    StringSplitOptions.None
+                );
 
                 foreach (string proceso in procesos)
                 {
@@ -203,24 +235,9 @@ namespace ticolinea.stream.service
                     {
                         int.TryParse(proceso, out int proc);
                         var cmdProc = Process.GetProcessById(proc);
-                        if (cmdProc != null)
-                        {
-                            if (cmdProc.ProcessName.Contains("ffmpeg"))
-                            {
-                                return cmdProc;
-                            }
-                        }
+                        if (cmdProc != null && cmdProc.ProcessName.Contains("ffmpeg")) return cmdProc;
                     }
                 }
-
-                /*var proceso = Process.GetProcessById(procesoId);
-                if (proceso != null)
-                {
-                    if (proceso.ProcessName.Contains("ffmpeg"))
-                    {
-                        return proceso;
-                    }
-                }*/
             }
             catch (Exception ex)
             {
@@ -233,51 +250,81 @@ namespace ticolinea.stream.service
         public static async Task ReiniciarStream(StreamDb stream)
         {
             await DetenerProceso(stream.ProcesoId, stream.StreamId);
-            //IniciarStream(stream);
         }
 
         public static async Task DetenerProceso(int procesoId, int streamId)
         {
             try
             {
-                var result = await Cli
-                  .Wrap("/bin/pgrep")
-                  .WithArguments($"-f \"/{streamId}_.m3u\"")
-                  .ExecuteBufferedAsync();
-                string output = result.StandardOutput;
-                string[] procesos = output.Split(
-                                new string[] { Environment.NewLine },
-                                StringSplitOptions.None
-                                );
+                // 🛑 Detener supervisión (evita que se reinicie automáticamente)
+                StreamingService.DetenerSupervision(streamId);
 
-                foreach (string proceso in procesos)
+                // 🔍 Buscar procesos relacionados con el stream
+                var result = await Cli
+                    .Wrap("/bin/pgrep")
+                    .WithArguments($"-f \"/{streamId}_.m3u\"")
+                    .ExecuteBufferedAsync();
+
+                string output = result.StandardOutput;
+                string[] procesos = output
+                    .Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+
+                foreach (var proceso in procesos)
                 {
-                    if (!string.IsNullOrWhiteSpace(proceso))
+                    if (int.TryParse(proceso, out var pid))
                     {
-                        int.TryParse(proceso, out int proc);
-                        var cmdProc = Process.GetProcessById(proc);
-                        if (cmdProc != null)
+                        try
                         {
-                            cmdProc.Kill(true);
+                            var proc = Process.GetProcessById(pid);
+                            if (proc.HasExited) continue;
+
+                            proc.Kill(true);
+                            Console.WriteLine($"✅ Proceso {pid} detenido.");
+                        }
+                        catch (ArgumentException)
+                        {
+                            Console.WriteLine($"⚠️ Proceso con PID {pid} ya no existe.");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"❌ Error al detener proceso {pid}: {ex.Message}");
                         }
                     }
                 }
 
+                // 📝 Actualizar BD: marcar como detenido
+                await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+                await cnn.OpenAsync();
+
+                await using var cmd = cnn.CreateCommand();
+                cmd.CommandText = @"
+                            UPDATE streams_info
+                            SET ejecutando = 0, proceso_id = NULL
+                            WHERE stream_id = @id";
+
+                cmd.Parameters.AddWithValue("@id", streamId);
+                await cmd.ExecuteNonQueryAsync();
+
+                Console.WriteLine($"🗂 Stream {streamId} marcado como detenido en la base de datos.");
             }
-            catch (Exception ex) { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Error general al detener el stream {streamId}: {ex.Message}");
+            }
         }
+
 
         public static async Task<string> RunCommandAsync(int streamId)
         {
             var result = await Cli
-                  .Wrap("/bin/pgrep")
-                  .WithArguments($"-f \"/{streamId}_.m3u\"")
-                  .ExecuteBufferedAsync();
+                .Wrap("/bin/pgrep")
+                .WithArguments($"-f \"/{streamId}_.m3u\"")
+                .ExecuteBufferedAsync();
             string output = result.StandardOutput;
             string[] lines = output.Split(
-                            new string[] { Environment.NewLine },
-                            StringSplitOptions.None
-                            );
+                new string[] { Environment.NewLine },
+                StringSplitOptions.None
+            );
 
             string outs = "";
             foreach (var line in lines)
@@ -291,28 +338,29 @@ namespace ticolinea.stream.service
         public static async Task IniciarStream(StreamDb stream)
         {
             var proc = await ObtenerProcesoEjecutando(0, stream.StreamId);
+
             if (proc != null)
             {
-                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
-                {
-                    using (var cmd = cnn.CreateCommand())
-                    {
-                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "UPDATE streams_info SET proceso_id=@id_proceso, ejecutando=1 " +
-                                   "WHERE stream_id=@id";
+                await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+                await cnn.OpenAsync();
 
-                        cmd.Parameters.AddWithValue("@id_proceso", proc.Id);
-                        cmd.Parameters.AddWithValue("@id", stream.StreamId);
+                await using var cmd = cnn.CreateCommand();
+                cmd.CommandText = @"
+                    UPDATE streams_info 
+                    SET proceso_id = @id_proceso, ejecutando = 1 
+                    WHERE stream_id = @id";
 
-                        await cmd.ExecuteNonQueryAsync();
-                    }
-                }
+                cmd.Parameters.AddWithValue("@id_proceso", proc.Id);
+                cmd.Parameters.AddWithValue("@id", stream.StreamId);
 
+                await cmd.ExecuteNonQueryAsync();
                 return;
             }
 
-            _ = StreamingService.IniciarStream(stream).ConfigureAwait(false);
+            // Inicia la supervisión 24/7 del stream en un hilo separado
+            StreamingService.IniciarSupervision(stream);
         }
+
 
         public static async Task ActualizaInfoCanal(int procesoId, int streamId)
         {
@@ -321,8 +369,9 @@ namespace ticolinea.stream.service
                 using (var cmd = cnn.CreateCommand())
                 {
                     if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                    cmd.CommandText = "UPDATE streams_info SET proceso_id=@id_proceso, ejecutando=1,reportado_caido=0 " +
-                                      "WHERE stream_id=@id";
+                    cmd.CommandText =
+                        "UPDATE streams_info SET proceso_id=@id_proceso, ejecutando=1,reportado_caido=0 " +
+                        "WHERE stream_id=@id";
 
                     cmd.Parameters.AddWithValue("@id_proceso", procesoId);
                     cmd.Parameters.AddWithValue("@id", streamId);
@@ -342,11 +391,11 @@ namespace ticolinea.stream.service
                     if (estaCaido)
                     {
                         cmd.CommandText = "UPDATE streams_info SET reportado_caido=1 " +
-                                   "WHERE stream_id=@id";
+                                          "WHERE stream_id=@id";
                     }
                     else
                         cmd.CommandText = "UPDATE streams_info SET reportado_caido=0 " +
-                                  "WHERE stream_id=@id";
+                                          "WHERE stream_id=@id";
 
                     cmd.Parameters.AddWithValue("@id", streamId);
                     await cmd.ExecuteNonQueryAsync();
@@ -357,7 +406,6 @@ namespace ticolinea.stream.service
         [DisableConcurrentExecution(60)]
         public static async Task VerificarStreamsCaidos()
         {
-
             try
             {
                 StringBuilder sb = new();
@@ -370,9 +418,9 @@ namespace ticolinea.stream.service
                     {
                         if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "SELECT fuente_stream, id, nombre_stream,proceso_id FROM streams_tl a " +
-                                            "inner join streams_info b " +
-                                            "on a.id = b.stream_id " +
-                                            "WHERE habilitado = 1 AND iniciado = 1 AND omitir_verificacion = 0 and tipo = 1 and es_bajodemanda=0; ";
+                                          "inner join streams_info b " +
+                                          "on a.id = b.stream_id " +
+                                          "WHERE habilitado = 1 AND iniciado = 1 AND omitir_verificacion = 0 and tipo = 1 and es_bajodemanda=0; ";
 
                         using (var reader = await cmd.ExecuteReaderAsync())
                             while (await reader.ReadAsync())
@@ -393,7 +441,8 @@ namespace ticolinea.stream.service
                 {
                     try
                     {
-                        var args = $"-i http://localhost:27701/Live/Streaming/{stream.StreamId}/test/test.m3u8 -analyzeduration 1000000 -probesize 1000000 -v quiet -print_format json -show_streams -show_format";
+                        var args =
+                            $"-i http://localhost:27701/Live/Streaming/{stream.StreamId}/test/test.m3u8 -analyzeduration 1000000 -probesize 1000000 -v quiet -print_format json -show_streams -show_format";
                         Process probe = new();
                         probe.StartInfo.FileName = Constantes.Global.FFPROBE_PATH;
                         probe.StartInfo.Arguments = args;
@@ -420,6 +469,7 @@ namespace ticolinea.stream.service
                         Console.WriteLine("ERROR AL OBTENER INFO DE CANAL." + ex.Message);
                     }
                 }
+
                 sb.Replace("[CANT]", streamsCaidos.ToString());
                 sb.AppendLine("Por favor verificar.");
 
@@ -436,7 +486,6 @@ namespace ticolinea.stream.service
                         retval = webClient.DownloadString(url);
                     }
                 }
-
             }
             catch (Exception ex)
             {
@@ -452,7 +501,8 @@ namespace ticolinea.stream.service
                 {
                     try
                     {
-                        var args = $"-i {stream.Fuente} -analyzeduration 1000000 -probesize 1000000 -v quiet -print_format json -show_streams -show_format";
+                        var args =
+                            $"-i {stream.Fuente} -analyzeduration 1000000 -probesize 1000000 -v quiet -print_format json -show_streams -show_format";
                         Process probe = new();
                         probe.StartInfo.FileName = Constantes.Global.FFPROBE_PATH;
                         probe.StartInfo.Arguments = args;
@@ -476,7 +526,6 @@ namespace ticolinea.stream.service
                         Console.WriteLine("ERROR AL OBTENER INFO DE CANAL." + ex.Message);
                     }
                 }
-
             }
             catch (Exception ex)
             {
@@ -488,7 +537,8 @@ namespace ticolinea.stream.service
         {
             try
             {
-                var args = $"-i {fuente} -analyzeduration 512000 -probesize 512000 -v quiet -print_format json -show_streams -show_format";
+                var args =
+                    $"-i {fuente} -analyzeduration 512000 -probesize 512000 -v quiet -print_format json -show_streams -show_format";
                 Process probe = new();
                 probe.StartInfo.FileName = Constantes.Global.FFPROBE_PATH;
                 probe.StartInfo.Arguments = args;
@@ -506,7 +556,8 @@ namespace ticolinea.stream.service
                     s.CodedWidth,
                     s.AvgFrameRate
                 }).FirstOrDefault();
-                string videodbInfo = $"{videoInfo?.CodecName}|height:{videoInfo?.CodedHeight}|width:{videoInfo?.CodedWidth}|fr={videoInfo?.AvgFrameRate}";
+                string videodbInfo =
+                    $"{videoInfo?.CodecName}|height:{videoInfo?.CodedHeight}|width:{videoInfo?.CodedWidth}|fr={videoInfo?.AvgFrameRate}";
                 var audioInfo = probeData.Streams.Where(x => x.CodecType == "audio").Select(s => new
                 {
                     s.CodecName
@@ -521,7 +572,7 @@ namespace ticolinea.stream.service
                     {
                         if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                         cmd.CommandText = "UPDATE streams_tl SET audio_info=@audio_info, video_info=@video_info " +
-                                       "WHERE id=@id";
+                                          "WHERE id=@id";
 
                         cmd.Parameters.AddWithValue("@audio_info", audiodbInfo);
                         cmd.Parameters.AddWithValue("@video_info", videodbInfo);
@@ -549,7 +600,8 @@ namespace ticolinea.stream.service
                     using (var cmd = cnn.CreateCommand())
                     {
                         if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "DELETE FROM actividad_usuario_actualmente where fecha_inicio < @fechaFinMaxima;";
+                        cmd.CommandText =
+                            "DELETE FROM actividad_usuario_actualmente where fecha_inicio < @fechaFinMaxima;";
                         cmd.Parameters.AddWithValue("@fechaFinMaxima", fechaFinMaxima);
                         await cmd.ExecuteNonQueryAsync();
                     }
@@ -589,11 +641,10 @@ namespace ticolinea.stream.service
             try
             {
                 Directory.GetFiles("/home/ticolineaplay/streams")
-                        .Select(f => new FileInfo(f))
-                        .Where(f => f.CreationTime < DateTime.Now.AddMinutes(-20))
-                        .ToList()
-                        .ForEach(f => f.Delete());
-
+                    .Select(f => new FileInfo(f))
+                    .Where(f => f.CreationTime < DateTime.Now.AddMinutes(-20))
+                    .ToList()
+                    .ForEach(f => f.Delete());
             }
             catch (Exception ex)
             {
@@ -607,9 +658,9 @@ namespace ticolinea.stream.service
             try
             {
                 var files = Directory.GetFiles("/home/ticolineaplay/streams")
-                        .Select(f => new FileInfo(f))
-                        .Where(f => f.Length > 15000000)
-                        .ToList();
+                    .Select(f => new FileInfo(f))
+                    .Where(f => f.Length > 15000000)
+                    .ToList();
 
                 using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
@@ -626,10 +677,10 @@ namespace ticolinea.stream.service
                             {
                                 if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                                 cmd.CommandText = "SELECT a.id,b.proceso_id,c.actividad_id FROM streams_tl a " +
-                                                                    "INNER JOIN streams_info b on a.id = b.stream_id " +
-                                                                    "LEFT JOIN actividad_usuario_actualmente c " +
-                                                                    "on a.id = c.stream_id " +
-                                                                    $"WHERE stream_id = {chnId} AND proceso_id != -1 and tipo=1;";
+                                                  "INNER JOIN streams_info b on a.id = b.stream_id " +
+                                                  "LEFT JOIN actividad_usuario_actualmente c " +
+                                                  "on a.id = c.stream_id " +
+                                                  $"WHERE stream_id = {chnId} AND proceso_id != -1 and tipo=1;";
 
                                 using (var reader = await cmd.ExecuteReaderAsync())
                                     while (await reader.ReadAsync())
@@ -649,8 +700,6 @@ namespace ticolinea.stream.service
                         }
                     }
                 }
-
-
             }
             catch (Exception ex)
             {
@@ -661,7 +710,6 @@ namespace ticolinea.stream.service
         [DisableConcurrentExecution(60)]
         public static void CleanUpOldJobs()
         {
-
             try
             {
                 using (var connection = JobStorage.Current.GetConnection())
@@ -705,13 +753,13 @@ namespace ticolinea.stream.service
                 var watcher = new FileSystemWatcher(@"C:\inetpub\wwwroot\iptv\streams");
 
                 watcher.NotifyFilter = NotifyFilters.Attributes
-                                     | NotifyFilters.CreationTime
-                                     | NotifyFilters.DirectoryName
-                                     | NotifyFilters.FileName
-                                     | NotifyFilters.LastAccess
-                                     | NotifyFilters.LastWrite
-                                     | NotifyFilters.Security
-                                     | NotifyFilters.Size;
+                                       | NotifyFilters.CreationTime
+                                       | NotifyFilters.DirectoryName
+                                       | NotifyFilters.FileName
+                                       | NotifyFilters.LastAccess
+                                       | NotifyFilters.LastWrite
+                                       | NotifyFilters.Security
+                                       | NotifyFilters.Size;
 
                 watcher.Changed += Watcher_Changed;
                 watcher.Created += Watcher_Created;
@@ -757,6 +805,7 @@ namespace ticolinea.stream.service
             {
                 return;
             }
+
             Console.WriteLine($"Changed: {e.FullPath}");
         }
     }
