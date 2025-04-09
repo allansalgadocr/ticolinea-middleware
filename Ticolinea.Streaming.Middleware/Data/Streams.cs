@@ -11,7 +11,7 @@ namespace ticolinea.stream.service.Data
 
         public static void InsertaStreamError(string error)
         {
-            log.Error(error);
+            log.Error($"[StreamError] {error}");
         }
 
         public static async Task<List<Bouquet>> ObtenerCanalesSinOrdenAsync(string? idPaqueteId="")

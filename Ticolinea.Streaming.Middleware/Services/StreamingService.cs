@@ -3,11 +3,13 @@ using CliWrap.EventStream;
 using CliWrap;
 using CliWrap.Buffered;
 using ticolinea.stream.service.Modelos;
+using log4net;
 
 namespace ticolinea.stream.service.Services
 {
     public static class StreamingService
     {
+        private static readonly ILog _logger = LogManager.GetLogger(typeof(StreamingService));
         private static readonly Dictionary<int, CancellationTokenSource> _tokens = new();
 
         private class ProbeInfo
@@ -26,7 +28,7 @@ namespace ticolinea.stream.service.Services
             // Si ya está en ejecución, no lanzar otro
             if (_tokens.ContainsKey(stream.StreamId))
             {
-                Console.WriteLine($"⚠️ Stream {stream.StreamId} ya está siendo supervisado.");
+                _logger.Warn($"Stream {stream.StreamId} ya está siendo supervisado.");
                 return;
             }
 
@@ -40,7 +42,7 @@ namespace ticolinea.stream.service.Services
         {
             if (_tokens.TryGetValue(streamId, out var cts))
             {
-                Console.WriteLine($"🛑 Cancelando stream {streamId}...");
+                _logger.Info($"Cancelando stream {streamId}...");
                 cts.Cancel();
                 _tokens.Remove(streamId);
             }
@@ -52,21 +54,20 @@ namespace ticolinea.stream.service.Services
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                Console.WriteLine($"🔁 Iniciando/reiniciando stream {stream.StreamId}...");
+                _logger.Info($"Iniciando/reiniciando stream {stream.StreamId}...");
 
                 int exitCode = await LanzarProcesoFfmpeg(stream, cancellationToken);
 
                 if (exitCode != 0)
                 {
-                    Console.WriteLine(
-                        $"⚠️ FFmpeg falló (exitCode {exitCode}) para {stream.StreamId}. Reintentando en {retryDelaySeconds}s...");
+                    _logger.Error($"FFmpeg falló (exitCode {exitCode}) para {stream.StreamId}. Reintentando en {retryDelaySeconds}s...");
                     Data.Streams.InsertaStreamError($"({stream.StreamId}): Proceso reiniciado por error {exitCode}");
                 }
 
                 await Task.Delay(TimeSpan.FromSeconds(retryDelaySeconds), cancellationToken).ContinueWith(_ => { });
             }
 
-            Console.WriteLine($"✅ Supervisión detenida para stream {stream.StreamId}");
+            _logger.Info($"Supervisión detenida para stream {stream.StreamId}");
         }
 
         private static async Task<int> LanzarProcesoFfmpeg(StreamDb stream, CancellationToken cancellationToken)
@@ -157,19 +158,19 @@ namespace ticolinea.stream.service.Services
                     switch (cmdEvent)
                     {
                         case StartedCommandEvent started:
-                            Console.WriteLine($"🚀 Proceso iniciado: PID {started.ProcessId}");
+                            _logger.Info($"Proceso iniciado: PID {started.ProcessId}");
                             await Jobs.ActualizaInfoCanal(started.ProcessId, stream.StreamId);
                             break;
                         case StandardOutputCommandEvent stdOut:
-                            Console.WriteLine($"Out-{stream.StreamId}> {stdOut.Text}");
+                            _logger.Info($"Out-{stream.StreamId}> {stdOut.Text}");
                             break;
                         case StandardErrorCommandEvent stdErr:
-                            Console.WriteLine($"Err-{stream.StreamId}> {stdErr.Text}");
+                            _logger.Error($"Err-{stream.StreamId}> {stdErr.Text}");
                             Data.Streams.InsertaStreamError(stdErr.Text);
                             break;
                         case ExitedCommandEvent exited:
                             exitCode = exited.ExitCode;
-                            Console.WriteLine($"⛔ FFmpeg terminó para stream {stream.StreamId}; Código: {exitCode}");
+                            _logger.Info($"FFmpeg terminó para stream {stream.StreamId}; Código: {exitCode}");
                             Data.Streams.InsertaStreamError($"({stream.StreamId}): Finalizó {exitCode}");
                             await Jobs.ActualizarCanalEstado(stream.StreamId, true, -1);
                             break;
@@ -178,7 +179,7 @@ namespace ticolinea.stream.service.Services
             }
             catch (OperationCanceledException)
             {
-                Console.WriteLine($"⛔ Proceso cancelado manualmente para stream {stream.StreamId}");
+                _logger.Info($"Proceso cancelado manualmente para stream {stream.StreamId}");
             }
 
             return exitCode;
@@ -206,7 +207,7 @@ namespace ticolinea.stream.service.Services
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"⚠️ ffprobe failed or timed out: {ex.Message}");
+                _logger.Error("ffprobe failed or timed out", ex);
                 return null;
             }
         }
