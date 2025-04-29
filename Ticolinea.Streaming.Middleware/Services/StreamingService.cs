@@ -8,6 +8,8 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using log4net.Config;
+using System.Collections.Concurrent;
+using System.Text;
 
 namespace ticolinea.stream.service.Services
 {
@@ -15,6 +17,7 @@ namespace ticolinea.stream.service.Services
     {
         private static readonly ILog _logger = LogManager.GetLogger(typeof(StreamingService));
         private const string LOG_PATH = "/home/ticolineaplay/logs";
+        private const int MAX_CONSECUTIVE_FAILURES = 10;  // Maximum number of retries before giving up
         
         static StreamingService()
         {
@@ -70,7 +73,7 @@ namespace ticolinea.stream.service.Services
             }
         }
 
-        private static readonly Dictionary<int, CancellationTokenSource> _tokens = new();
+        private static readonly ConcurrentDictionary<int, CancellationTokenSource> _tokens = new();
 
         private class ProbeInfo
         {
@@ -92,87 +95,119 @@ namespace ticolinea.stream.service.Services
 
         public static void IniciarSupervision(StreamDb stream)
         {
-            if (_tokens.ContainsKey(stream.StreamId))
+            if (!_tokens.TryAdd(stream.StreamId, new CancellationTokenSource()))
             {
                 LogWithFallback($"Stream {stream.StreamId} ya está siendo supervisado.");
                 return;
             }
 
-            var cts = new CancellationTokenSource();
-            _tokens[stream.StreamId] = cts;
-
-            _ = Task.Run(() => SupervisarStream(stream, cts.Token));
+            _ = Task.Run(() => SupervisarStream(stream, _tokens[stream.StreamId].Token));
         }
 
         public static void DetenerSupervision(int streamId)
         {
-            if (_tokens.TryGetValue(streamId, out var cts))
+            if (_tokens.TryRemove(streamId, out var cts))
             {
                 LogWithFallback($"Cancelando stream {streamId}...");
                 cts.Cancel();
-                _tokens.Remove(streamId);
             }
         }
 
         private static async Task SupervisarStream(StreamDb stream, CancellationToken cancellationToken)
         {
             using var cleanupTimer = new PeriodicTimer(TimeSpan.FromMinutes(15));
+            Task? cleanupTask = null;
             
-            _ = Task.Run(async () =>
+            try
             {
-                while (await cleanupTimer.WaitForNextTickAsync(cancellationToken))
+                cleanupTask = Task.Run(async () =>
                 {
-                    await CleanupOldSegments(stream.StreamId);
-                }
-            }, cancellationToken);
-
-            const int initialRetryDelay = 5;
-            const int maxRetryDelay = 30;
-            int currentRetryDelay = initialRetryDelay;
-            int consecutiveFailures = 0;
-
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                try
-                {
-                    LogWithFallback($"Iniciando/reiniciando stream {stream.StreamId}...");
-                    int exitCode = await LanzarProcesoFfmpeg(stream, cancellationToken);
-
-                    if (exitCode == 0)
+                    try
                     {
-                        // Reset counters on success
-                        consecutiveFailures = 0;
-                        currentRetryDelay = initialRetryDelay;
+                        while (await cleanupTimer.WaitForNextTickAsync(cancellationToken))
+                        {
+                            await CleanupOldSegments(stream.StreamId);
+                        }
                     }
-                    else
+                    catch (OperationCanceledException)
                     {
+                        LogWithFallback($"Cleanup task cancelled for stream {stream.StreamId}");
+                    }
+                    catch (Exception ex)
+                    {
+                        LogWithFallback($"Error in cleanup task for stream {stream.StreamId}", ex, true);
+                    }
+                }, cancellationToken);
+
+                const int initialRetryDelay = 5;
+                const int maxRetryDelay = 30;
+                int currentRetryDelay = initialRetryDelay;
+                int consecutiveFailures = 0;
+
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        LogWithFallback($"Iniciando/reiniciando stream {stream.StreamId}...");
+                        int exitCode = await LanzarProcesoFfmpeg(stream, cancellationToken);
+
+                        if (exitCode == 0)
+                        {
+                            consecutiveFailures = 0;
+                            currentRetryDelay = initialRetryDelay;
+                        }
+                        else
+                        {
+                            consecutiveFailures++;
+                            LogWithFallback($"FFmpeg falló (exitCode {exitCode}) para {stream.StreamId}. Intento {consecutiveFailures}");
+                            Data.Streams.InsertaStreamError($"({stream.StreamId}): Proceso reiniciado por error {exitCode}");
+                            
+                            currentRetryDelay = Math.Min(currentRetryDelay * 2, maxRetryDelay);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogWithFallback($"Error inesperado en stream {stream.StreamId}", ex, true);
                         consecutiveFailures++;
-                        LogWithFallback($"FFmpeg falló (exitCode {exitCode}) para {stream.StreamId}. Intento {consecutiveFailures}");
-                        Data.Streams.InsertaStreamError($"({stream.StreamId}): Proceso reiniciado por error {exitCode}");
-                        
-                        // Exponential backoff with max limit
                         currentRetryDelay = Math.Min(currentRetryDelay * 2, maxRetryDelay);
                     }
-                }
-                catch (Exception ex)
-                {
-                    LogWithFallback($"Error inesperado en stream {stream.StreamId}", ex, true);
-                    consecutiveFailures++;
-                    currentRetryDelay = Math.Min(currentRetryDelay * 2, maxRetryDelay);
-                }
 
-                // Notify if stream is consistently failing
-                if (consecutiveFailures >= 5)
-                {
-                    LogWithFallback($"Stream {stream.StreamId} ha fallado {consecutiveFailures} veces consecutivas");
-                    // Consider implementing notification system here
-                }
+                    // Circuit breaker pattern
+                    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
+                    {
+                        LogWithFallback($"Stream {stream.StreamId} ha fallado {consecutiveFailures} veces consecutivas. Deteniendo supervisión.");
+                        Data.Streams.InsertaStreamError($"({stream.StreamId}): Supervisión detenida después de {consecutiveFailures} intentos fallidos");
+                        break;  // Exit the retry loop
+                    }
+                    else if (consecutiveFailures >= 5)
+                    {
+                        LogWithFallback($"Stream {stream.StreamId} ha fallado {consecutiveFailures} veces consecutivas");
+                        // Consider implementing notification system here
+                    }
 
-                await Task.Delay(TimeSpan.FromSeconds(currentRetryDelay), cancellationToken)
-                    .ContinueWith(_ => { });
+                    if (!cancellationToken.IsCancellationRequested)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(currentRetryDelay), cancellationToken)
+                            .ContinueWith(_ => { });
+                    }
+                }
             }
-
-            LogWithFallback($"Supervisión detenida para stream {stream.StreamId}");
+            finally
+            {
+                if (cleanupTask != null)
+                {
+                    try
+                    {
+                        await Task.WhenAny(cleanupTask, Task.Delay(5000));
+                    }
+                    catch
+                    {
+                        // Ignore any errors during cleanup task completion
+                    }
+                }
+                cleanupTimer.Dispose();
+                LogWithFallback($"Supervisión detenida para stream {stream.StreamId}");
+            }
         }
 
         private static async Task<int> LanzarProcesoFfmpeg(StreamDb stream, CancellationToken cancellationToken)
@@ -182,12 +217,10 @@ namespace ticolinea.stream.service.Services
             string? detectedAudioCodec = await GetAudioCodec(stream.Fuente);
             string transcodeAudio = " -acodec copy";
 
-            // Si el codec detectado NO es AAC → transcodificar a AAC
             if (!string.Equals(detectedAudioCodec, "aac", StringComparison.OrdinalIgnoreCase))
             {
                 transcodeAudio = " -acodec aac -b:a 128k -ar 44100 -ac 2 -threads 2";
             }
-            // Si hay un codec forzado en BD → sobrescribe lo anterior
             else if (!string.IsNullOrEmpty(stream.TranscodeAudio))
             {
                 transcodeAudio = stream.TranscodeAudio.Equals("aac", StringComparison.OrdinalIgnoreCase)
@@ -201,20 +234,16 @@ namespace ticolinea.stream.service.Services
             int analyzeDuration = stream.ProbeSize;
             var parameters = stream.Bitrate.Split("+", StringSplitOptions.RemoveEmptyEntries);
 
-            // 🌐 Agregar reconexión solo si no es SRT
-            string reconnect = "";
+            // Build reconnection arguments
+            var reconnectArgs = new List<string>();
             if (!stream.Fuente.StartsWith("srt://", StringComparison.OrdinalIgnoreCase))
             {
-                var reconnectList = new List<string>();
-                if (parameters.Contains("reconnect")) reconnectList.Add("-reconnect 1");
-                if (parameters.Contains("reconnect_streamed")) reconnectList.Add("-reconnect_streamed 1");
-                if (parameters.Contains("reconnect_on_network_error"))
-                    reconnectList.Add("-reconnect_on_network_error 1");
-                if (parameters.Contains("reconnect_on_http_error")) reconnectList.Add("-reconnect_on_http_error 1");
-                if (parameters.Contains("reconnect_delay_max")) reconnectList.Add("-reconnect_delay_max 5");
-                if (parameters.Contains("rw_timeout")) reconnectList.Add("-rw_timeout 15000000");
-
-                reconnect = string.Join(' ', reconnectList);
+                if (parameters.Contains("reconnect")) reconnectArgs.Add("-reconnect 1");
+                if (parameters.Contains("reconnect_streamed")) reconnectArgs.Add("-reconnect_streamed 1");
+                if (parameters.Contains("reconnect_on_network_error")) reconnectArgs.Add("-reconnect_on_network_error 1");
+                if (parameters.Contains("reconnect_on_http_error")) reconnectArgs.Add("-reconnect_on_http_error 1");
+                if (parameters.Contains("reconnect_delay_max")) reconnectArgs.Add("-reconnect_delay_max 5");
+                if (parameters.Contains("rw_timeout")) reconnectArgs.Add("-rw_timeout 15000000");
             }
 
             if (parameters.Contains("analyzeduration"))
@@ -224,48 +253,42 @@ namespace ticolinea.stream.service.Services
                 ? Constantes.Global.FFMPEG_PATH_SRT
                 : Constantes.Global.FFMPEG_PATH;
 
-            var cmd = Cli.Wrap(processFilePath).WithValidation(CommandResultValidation.None)
-                .WithArguments(a => a
-                    // Basic settings
-                    .Add("-y")
-                    .Add("-hide_banner")
-                    .Add("-nostdin")
-                    .Add("-nostats")
-                    .Add("-loglevel warning", false)
-                    
-                    // Error handling - important for live streams
-                    .Add("-err_detect ignore_err", false)
-                    .Add("-ignore_unknown", false)
-                    
-                    // Reconnection settings
-                    .Add(reconnect, false)
-                    
-                    // Input settings
-                    .Add("-thread_queue_size 512", false)
-                    .Add($"-i \"{stream.Fuente}\"", false)
-                    
-                    // Stream analysis
-                    .Add($"-analyzeduration {analyzeDuration}", false)
-                    .Add($"-probesize {stream.ProbeSize}", false)
-                    
-                    // Copy video stream without transcoding
-                    .Add("-c:v copy", false)
-                    
-                    // Audio handling - only transcode if needed
-                    .Add($"{transcodeAudio}", false)
-                    
-                    // M3U8 settings
-                    .Add("-f m3u8", false)
-                    .Add("-hls_time {stream.Intervalo}", false)
-                    .Add("-hls_list_size {stream.Segmentos}", false)
-                    .Add("-hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time", false)
-                    .Add("-hls_delete_threshold 10", false)
-                    .Add($"-hls_segment_filename {Constantes.Global.STREAMS_FOLDER}{stream.StreamId}_%d.ts {Constantes.Global.STREAMS_FOLDER}{stream.StreamId}_.m3u8", false)
-                    
-                    // Output settings
-                    .Add("-movflags +faststart", false)
-                    .Add("-flags +global_header", false)
-                );
+            // Build arguments using CliWrap's built-in argument builder
+            var arguments = new[]
+            {
+                "-y",
+                "-hide_banner",
+                "-nostdin",
+                "-nostats",
+                "-loglevel", "warning",
+                "-err_detect", "ignore_err",
+                "-ignore_unknown",
+                "-thread_queue_size", "512"
+            }.Concat(reconnectArgs)
+            .Concat(new[]
+            {
+                "-i", stream.Fuente,
+                "-analyzeduration", analyzeDuration.ToString(),
+                "-probesize", stream.ProbeSize.ToString(),
+                "-c:v", "copy"
+            })
+            .Concat(transcodeAudio.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .Concat(new[]
+            {
+                "-f", "m3u8",
+                "-hls_time", stream.Intervalo.ToString(),
+                "-hls_list_size", stream.Segmentos.ToString(),
+                "-hls_flags", "+discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time",
+                "-hls_delete_threshold", "15",
+                "-hls_segment_filename", $"{Constantes.Global.STREAMS_FOLDER}{stream.StreamId}_%d.ts",
+                $"{Constantes.Global.STREAMS_FOLDER}{stream.StreamId}_.m3u8",
+                "-movflags", "+faststart",
+                "-flags", "+global_header"
+            });
+
+            var cmd = Cli.Wrap(processFilePath)
+                .WithArguments(arguments, escape: true)
+                .WithValidation(CommandResultValidation.None);
 
             try
             {
