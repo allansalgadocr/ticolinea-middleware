@@ -17,75 +17,43 @@ namespace ticolinea.stream.service.Controllers
         [HttpGet("{chID}/{usuario}/{password}.{ext}")]
         public async Task<IActionResult> Streaming(int chID, string usuario, string password, string ext)
         {
-            if (ext == null)
+            if (string.IsNullOrWhiteSpace(ext) || ext.ToLower() != "m3u8")
                 return Unauthorized();
 
-            if (ext != "m3u8")
-                return Unauthorized();
-
-            Usuario usuariodb = null;
-            if ((usuario != "monitor" && password != "monitor") ||
-                (usuario != "test" && password != "test"))
+            Usuario? usuariodb = null;
+            if (!IsRegularUser(usuario))
             {
-                usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password).ConfigureAwait(false);
-
+                usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
                 if (usuariodb == null)
                     return Unauthorized();
             }
-
 
             var existeCanal = await ObtieneDatosCanal(chID);
             if (!existeCanal)
                 return Unauthorized();
 
-            var streamsFolder = Constantes.Global.STREAMS_FOLDER;
-            var playlistFile = $"{streamsFolder}{chID}_.m3u8";
+            const string streamsFolder = Constantes.Global.STREAMS_FOLDER;
+            var playlistFile = Path.Combine(streamsFolder, $"{chID}_.m3u8");
+
+            if (!System.IO.File.Exists(playlistFile))
+                return NotFound("Playlist not found");
+
             string playlistOutput = await System.IO.File.ReadAllTextAsync(playlistFile);
 
-            string pattern = @"(.*?).ts";
-            Regex rg = new(pattern);
-            var matches = rg.Matches(playlistOutput);
-            if (!playlistOutput.Contains("EXT-X-DISCONTINUITY"))
-            {
-                string patternTest = @"(EXT-X-MEDIA-SEQUENCE:[0-9]*\n)";
-                Regex rgtest = new(patternTest);
-                var matchestest = rgtest.Matches(playlistOutput);
-                foreach (var match in matchestest)
-                {
-                    playlistOutput = playlistOutput.Replace(match.ToString(), $@"{match}#EXT-X-DISCONTINUITY{Environment.NewLine}");
-                }
-            }
+            playlistOutput = AddDiscontinuityTags(playlistOutput);
+            playlistOutput = ReplaceSegmentUrls(playlistOutput);
 
-            foreach (var match in matches)
-            {
-                string token = MD5($"{usuario}{password}zxcvbnm7852{match}");
-                playlistOutput = playlistOutput.Replace(match.ToString(), $@"/Live/Hls/{usuario}/{password}/{token}/{match}");
-            }
+            if(usuariodb == null)
+                ActualizarActividadMovil(chID, usuario, password, usuariodb, "");
 
-            byte[] byteArray = Encoding.UTF8.GetBytes(playlistOutput);
-            MemoryStream stream = new(byteArray);
-
-            var ip = "";
-            if (Request.Headers.TryGetValue("X-Real-IP", out var forwardedIps))
-                ip = forwardedIps.First();
-
-            var userAgent = Request.Headers["User-Agent"].ToString();
-
-            if ((usuario != "monitor" && password != "monitor") &&
-                (usuario != "test" && password != "test") &&
-                (usuario != "fibraencasapanel"))
-            {
-                _ = Helpers.Usuario.ActualizaInfoUsuario(usuariodb?.UsuarioId ?? 0, chID, userAgent, ip, usuariodb?.ConexionesMaximas ?? 0);
-            }
-
-            return File(stream, "application/x-mpegurl", $"{chID}.m3u8");
+            return Content(playlistOutput, "application/x-mpegurl", Encoding.UTF8);
         }
 
         [ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
         [HttpGet("{chID}/{usuario}/{password}/{macAddress}")]
         public async Task<IActionResult> StreamingMovil(int chID, string usuario, string password,string macAddress)
         {
-            Usuario usuariodb = null;
+            Usuario? usuariodb = null;
 
             if (IsRegularUser(usuario))
             {
@@ -102,16 +70,15 @@ namespace ticolinea.stream.service.Controllers
 
             var playlistOutput = await ReadPlaylistFile(chID);
             playlistOutput = AddDiscontinuityTags(playlistOutput);
-            playlistOutput = ReplaceSegmentUrls(playlistOutput, usuario, password);
+            playlistOutput = ReplaceSegmentUrls(playlistOutput);
 
-            var stream = new MemoryStream(Encoding.UTF8.GetBytes(playlistOutput));
+            if(usuariodb == null)
+                ActualizarActividadMovil(chID, usuario, password, usuariodb, macAddress);
 
-            ActualizarActividadMovil(chID, usuario, password, usuariodb, macAddress);
-
-            return File(stream, "application/x-mpegurl", $"{chID}.m3u8");
+            return Content(playlistOutput, "application/x-mpegurl", Encoding.UTF8);
         }
 
-        [ResponseCache(Duration = 10, Location = ResponseCacheLocation.Any, NoStore = false)]
+        [ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
         [HttpGet("{usuario}/{password}/{token}/{segment}")]
         public async Task<IActionResult> Hls(string usuario, string password, string token, string segment)
         {
@@ -122,8 +89,6 @@ namespace ticolinea.stream.service.Controllers
             var segmentFile = $"{streamsFolder}{segment}";
             var fileBytes = await System.IO.File.ReadAllBytesAsync(segmentFile);
             MemoryStream stream = new(fileBytes);
-
-            //return PhysicalFile(segmentFile, "video/mp2t");
 
             return File(stream, "video/mp2t", segment);
         }
@@ -244,38 +209,40 @@ namespace ticolinea.stream.service.Controllers
             return builder.ToString();
         }
 
-        private string ReplaceSegmentUrls(string playlistOutput, string usuario, string password)
+        private static string ReplaceSegmentUrls(string playlistOutput)
         {
-            string pattern = @"(.*?).ts";
-            Regex rg = new(pattern);
-            var matches = rg.Matches(playlistOutput);
+            var outputBuilder = new StringBuilder();
+            var lines = playlistOutput.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
 
-            foreach (var match in matches)
+            foreach (var line in lines)
             {
-                string token = MD5($"{usuario}{password}zxcvbnm7852{match}");
-                playlistOutput = playlistOutput.Replace(match.ToString(), $@"/Live/Hls/{usuario}/{password}/{token}/{match}");
+                if (line.EndsWith(".ts"))
+                    outputBuilder.AppendLine($"http://tv.play-latino.com:27703/streams/{line}");
+                else
+                    outputBuilder.AppendLine(line);
+            }
+
+            return outputBuilder.ToString();
+        }
+
+        private static string AddDiscontinuityTags(string playlistOutput)
+        {
+            if (playlistOutput.Contains("#EXT-X-DISCONTINUITY")) return playlistOutput;
+            
+            const string mediaSequenceTag = "EXT-X-MEDIA-SEQUENCE:";
+            var index = playlistOutput.IndexOf(mediaSequenceTag, StringComparison.Ordinal);
+
+            if (index == -1) return playlistOutput;
+            var lineEnd = playlistOutput.IndexOf('\n', index);
+            if (lineEnd != -1)
+            {
+                playlistOutput = playlistOutput.Insert(lineEnd + 1, "#EXT-X-DISCONTINUITY\n");
             }
 
             return playlistOutput;
         }
 
-        private string AddDiscontinuityTags(string playlistOutput)
-        {
-            if (!playlistOutput.Contains("EXT-X-DISCONTINUITY"))
-            {
-                string patternTest = @"(EXT-X-MEDIA-SEQUENCE:[0-9]*\n)";
-                Regex rgtest = new(patternTest);
-                var matchestest = rgtest.Matches(playlistOutput);
-                foreach (var match in matchestest)
-                {
-                    playlistOutput = playlistOutput.Replace(match.ToString(), $@"{match}#EXT-X-DISCONTINUITY{Environment.NewLine}");
-                }
-            }
-
-            return playlistOutput;
-        }
-
-        private void ActualizarActividadMovil(int chID, string usuario, string password, Usuario usuariodb, string macAddress)
+        private void ActualizarActividadMovil(int chID, string usuario, string password, Usuario? usuariodb, string macAddress)
         {
             var ip = "";
             var userAgent = Request.Headers["User-Agent"].ToString();
@@ -289,12 +256,12 @@ namespace ticolinea.stream.service.Controllers
             }
         }
 
-        private bool IsRegularUser(string usuario)
+        private static bool IsRegularUser(string usuario)
         {
             return usuario != "monitor" && usuario != "test" && usuario != "fibraencasapanel";
         }
 
-        private async Task<string> ReadPlaylistFile(int chID)
+        private static async Task<string> ReadPlaylistFile(int chID)
         {
             var streamsFolder = Constantes.Global.STREAMS_FOLDER;
             var playlistFile = $"{streamsFolder}{chID}_.m3u8";

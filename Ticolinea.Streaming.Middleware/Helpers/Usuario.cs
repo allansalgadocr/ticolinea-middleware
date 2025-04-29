@@ -117,7 +117,7 @@ namespace ticolinea.stream.service.Helpers
             }
         }
 
-        public static async Task<Modelos.Usuario> VerificarUsuario(string usuario, string password)
+        public static async Task<Modelos.Usuario?> VerificarUsuario(string usuario, string password)
         {
             //Verifica si usuario existe
             List<Modelos.Usuario> usuarios = new();
