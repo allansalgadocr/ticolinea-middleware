@@ -7,8 +7,8 @@
         public const string EPG_FOLDER = "/home/ticolineaplay/EPG/";
         public const string FFMPEG_PATH_SRT = "ffmpeg";
         public const string FFMPEG_PATH = "ffmpeg";
-        public const string FFPROBE_PATH = "/home/ticolineaplay/tools/ffprobe";
-        public const string MARIADB_CONN= "server=127.0.0.1;Port=3306;uid=iptvtl;pwd=Qawsedrf7852!;database=iptv;Allow User Variables=True;SSLMode=Required;Pooling=true;Min Pool Size=5;Max Pool Size=100;Connection Lifetime=0;AllowPublicKeyRetrieval=true";
+        public const string FFPROBE_PATH = "ffprobe";
+        public const string MARIADB_CONN= "server=tl-stream-db.c0bgkuywomcr.us-east-1.rds.amazonaws.com;Port=6606;uid=admin;pwd=TC0hGxPQ5IxcIHAkxqsB;database=streamdb;Allow User Variables=True;SSLMode=Required;Pooling=true;Min Pool Size=5;Max Pool Size=100;Connection Lifetime=0;AllowPublicKeyRetrieval=True";
         public const string MOVIES_FOLDER = "/home/ticolineapeliculas/stream/";
         public const string SERIES_FOLDER = "/home/ticolineapeliculas/series/";
         public const string MOVIES_RAW = "/home/ticolineapeliculas/";
