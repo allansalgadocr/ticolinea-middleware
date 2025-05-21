@@ -21,7 +21,7 @@ namespace ticolinea.stream.service.Controllers
                 return Unauthorized();
 
             Usuario? usuariodb = null;
-            if (!IsRegularUser(usuario))
+            if (IsRegularUser(usuario))
             {
                 usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
                 if (usuariodb == null)
