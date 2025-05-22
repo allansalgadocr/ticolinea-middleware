@@ -75,19 +75,19 @@ namespace ticolinea.stream.service.Services
             int exitCode = -1;
 
             string? detectedAudioCodec = await GetAudioCodec(stream.Fuente);
-            string transcodeAudio = " -acodec copy";
+            string transcodeAudio = "-c:a copy";
 
             // Si el codec detectado NO es AAC → transcodificar a AAC
             if (!string.Equals(detectedAudioCodec, "aac", StringComparison.OrdinalIgnoreCase))
             {
-                transcodeAudio = " -acodec aac -b:a 128k -ar 44100 -ac 2 -threads 2";
+                transcodeAudio = "-c:a aac -b:a 128k -ar 44100 -ac 2 -threads 2";
             }
             // Si hay un codec forzado en BD → sobrescribe lo anterior
             else if (!string.IsNullOrEmpty(stream.TranscodeAudio))
             {
                 transcodeAudio = stream.TranscodeAudio.Equals("aac", StringComparison.OrdinalIgnoreCase)
-                    ? " -acodec aac -b:a 128k -ar 44100 -ac 2 -threads 2"
-                    : $" -acodec {stream.TranscodeAudio} -threads 2";
+                    ? "-c:a copy -threads 2"
+                    : $"-c:a {stream.TranscodeAudio} -b:a 128k -ar 44100 -ac 2 -threads 2";
             }
 
             string frameRate = stream.Transcode == 2 ? $" -r {stream.Framerate}" : "";
@@ -98,7 +98,8 @@ namespace ticolinea.stream.service.Services
 
             // 🌐 Agregar reconexión solo si no es SRT
             string reconnect = "";
-            if (!stream.Fuente.StartsWith("srt://", StringComparison.OrdinalIgnoreCase))
+            var isSrt = stream.Fuente.StartsWith("srt://", StringComparison.OrdinalIgnoreCase);
+            if (!isSrt)
             {
                 var reconnectList = new List<string>();
                 if (parameters.Contains("reconnect")) reconnectList.Add("-reconnect 1");
@@ -115,9 +116,7 @@ namespace ticolinea.stream.service.Services
             if (parameters.Contains("analyzeduration"))
                 analyzeDuration = stream.GOP;
 
-            string processFilePath = stream.Fuente.StartsWith("srt://")
-                ? Constantes.Global.FFMPEG_PATH_SRT
-                : Constantes.Global.FFMPEG_PATH;
+            var processFilePath = Constantes.Global.FFMPEG_PATH;
 
             var cmd = Cli.Wrap(processFilePath).WithValidation(CommandResultValidation.None)
                 .WithArguments(a => a
@@ -127,18 +126,18 @@ namespace ticolinea.stream.service.Services
                     .Add("-nostats")
                     .Add("-loglevel warning", false)
                     .Add("-err_detect ignore_err", false)
-                    .Add("-ignore_unknown", false)
-                    .Add("-fflags +genpts", false)
-                    .Add("-avoid_negative_ts make_zero", false)
+                    .Add(!isSrt ? "": "-ignore_unknown", false)
+                    .Add(!isSrt ? "": "-fflags +genpts", false)
+                    .Add(!isSrt ? "": "-avoid_negative_ts make_zero", false)
                     .Add($"{reconnect}", false)
                     .Add($"{frameRate}", false)
-                    .Add("-thread_queue_size 512", false) // 🧠 importante antes de -i
+                    .Add("-thread_queue_size 2048", false) // 🧠 importante antes de -i
                     .Add($"-i \"{stream.Fuente}\"", false)
-                    .Add("-c copy", false)
+                    .Add("-c:v copy", false)
+                    .Add($"{transcodeAudio}", false)
                     .Add($"-analyzeduration {analyzeDuration}", false)
                     .Add($"-probesize {stream.ProbeSize}", false)
                     .Add($"{pixFmt}", false)
-                    .Add($"{transcodeAudio}", false)
                     .Add("-movflags +faststart", false)
                     .Add("-flags +global_header", false)
                     .Add("-hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time",
