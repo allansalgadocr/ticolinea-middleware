@@ -43,9 +43,11 @@ namespace ticolinea.stream.service.Controllers
             playlistOutput = AddDiscontinuityTags(playlistOutput);
             playlistOutput = ReplaceSegmentUrls(playlistOutput);
 
-            if(usuariodb == null)
+            if (usuariodb != null)
+            {
                 ActualizarActividadMovil(chID, usuario, password, usuariodb, "");
-
+            }
+            
             return Content(playlistOutput, "application/x-mpegurl", Encoding.UTF8);
         }
 
@@ -72,8 +74,11 @@ namespace ticolinea.stream.service.Controllers
             playlistOutput = AddDiscontinuityTags(playlistOutput);
             playlistOutput = ReplaceSegmentUrls(playlistOutput);
 
-            if(usuariodb == null)
+            if (usuariodb != null)
+            {
                 ActualizarActividadMovil(chID, usuario, password, usuariodb, macAddress);
+            }
+                
 
             return Content(playlistOutput, "application/x-mpegurl", Encoding.UTF8);
         }
