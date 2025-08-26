@@ -271,29 +271,6 @@ namespace ticolinea.stream.service.Services
                             _logger.Info($"FFmpeg terminó para stream {stream.StreamId}; Código: {exitCode}");
                             Data.Streams.InsertaStreamError($"({stream.StreamId}): Finalizó con código {exitCode}");
                             await Jobs.ActualizarCanalEstado(stream.StreamId, true, -1);
-                            
-                            // Fix 4: Add process cleanup
-                            if (processId > 0)
-                            {
-                                try
-                                {
-                                    var process = Process.GetProcessById(processId);
-                                    if (process != null && !process.HasExited)
-                                    {
-                                        _logger.Info($"Limpiando proceso {processId} para stream {stream.StreamId}");
-                                        process.Kill();
-                                        process.WaitForExit(5000); // Wait up to 5 seconds
-                                    }
-                                }
-                                catch (ArgumentException)
-                                {
-                                    // Process already dead, this is normal
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.Warn($"Error al limpiar proceso {processId}: {ex.Message}");
-                                }
-                            }
                             break;
                     }
                 }

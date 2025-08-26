@@ -383,24 +383,16 @@ namespace ticolinea.stream.service
 
         public static async Task ActualizarCanalEstado(int streamId, bool estaCaido, int procesoId)
         {
-            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
-            {
-                using (var cmd = cnn.CreateCommand())
-                {
-                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                    if (estaCaido)
-                    {
-                        cmd.CommandText = "UPDATE streams_info SET reportado_caido=1 " +
-                                          "WHERE stream_id=@id";
-                    }
-                    else
-                        cmd.CommandText = "UPDATE streams_info SET reportado_caido=0 " +
-                                          "WHERE stream_id=@id";
+            await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+            await cnn.OpenAsync();
 
-                    cmd.Parameters.AddWithValue("@id", streamId);
-                    await cmd.ExecuteNonQueryAsync();
-                }
-            }
+            await using var cmd = cnn.CreateCommand();
+            cmd.CommandText = estaCaido 
+                ? "UPDATE streams_info SET reportado_caido=1 WHERE stream_id=@id"
+                : "UPDATE streams_info SET reportado_caido=0 WHERE stream_id=@id";
+
+            cmd.Parameters.AddWithValue("@id", streamId);
+            await cmd.ExecuteNonQueryAsync();
         }
 
         [DisableConcurrentExecution(60)]
