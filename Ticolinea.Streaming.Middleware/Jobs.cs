@@ -800,5 +800,176 @@ namespace ticolinea.stream.service
 
             Console.WriteLine($"Changed: {e.FullPath}");
         }
+
+        [DisableConcurrentExecution(60)]
+        public static async Task MonitorearRecursosSistema()
+        {
+            try
+            {
+                var alerts = new List<string>();
+                
+                // Check CPU usage
+                var cpuUsage = await ObtenerUsoCPU();
+                if (cpuUsage > 80)
+                {
+                    alerts.Add($"🔥 CPU: {cpuUsage:F1}% (CRÍTICO)");
+                }
+
+                // Check RAM usage
+                var ramUsage = await ObtenerUsoRAM();
+                if (ramUsage > 80)
+                {
+                    alerts.Add($"🧠 RAM: {ramUsage:F1}% (CRÍTICO)");
+                }
+
+                // Check Disk usage
+                var diskUsage = await ObtenerUsoDisco();
+                if (diskUsage > 80)
+                {
+                    alerts.Add($"💾 DISCO: {diskUsage:F1}% (CRÍTICO)");
+                }
+
+                // Send alert if any resource is over 80%
+                if (alerts.Count > 0)
+                {
+                    var message = $"🚨 ALERTA DE RECURSOS DEL SERVIDOR 🚨\n\n" +
+                                 string.Join("\n", alerts) +
+                                 $"\n\n⏰ {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
+
+                    await EnviarAlertaTelegram(message);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error al monitorear recursos del sistema: {ex.Message}");
+            }
+        }
+
+        private static async Task<double> ObtenerUsoCPU()
+        {
+            try
+            {
+                // Try vmstat first (more reliable)
+                try
+                {
+                    var result = await Cli
+                        .Wrap("sh")
+                        .WithArguments(new[] { "-c", "vmstat 1 2 | tail -1 | awk '{print 100 - $15}'" })
+                        .ExecuteBufferedAsync();
+
+                    var output = result.StandardOutput.Trim().Replace(',', '.');
+                    if (double.TryParse(output, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double cpuUsage))
+                    {
+                        return Math.Max(0, Math.Min(100, cpuUsage)); // Clamp between 0-100
+                    }
+                }
+                catch
+                {
+                    // vmstat not available, fall back to /proc/stat
+                }
+
+                // Fallback to /proc/stat parsing with proper two-sample measurement
+                var statResult = await Cli
+                    .Wrap("sh")
+                    .WithArguments(new[] { "-c", "awk '/^cpu / {idle1=$5+$6; total1=idle1+$2+$3+$4+$7+$8; print total1,idle1}' /proc/stat; sleep 1; awk '/^cpu / {idle2=$5+$6; total2=idle2+$2+$3+$4+$7+$8; print total2,idle2}' /proc/stat" })
+                    .ExecuteBufferedAsync();
+
+                var lines = statResult.StandardOutput.Trim().Split('\n');
+                if (lines.Length >= 2)
+                {
+                    var firstLine = lines[0].Split(' ');
+                    var secondLine = lines[1].Split(' ');
+                    
+                    if (firstLine.Length >= 2 && secondLine.Length >= 2 &&
+                        double.TryParse(firstLine[0], out double total1) &&
+                        double.TryParse(firstLine[1], out double idle1) &&
+                        double.TryParse(secondLine[0], out double total2) &&
+                        double.TryParse(secondLine[1], out double idle2))
+                    {
+                        var totalDiff = total2 - total1;
+                        var idleDiff = idle2 - idle1;
+                        
+                        if (totalDiff > 0)
+                        {
+                            var cpuUsageFallback = (totalDiff - idleDiff) * 100 / totalDiff;
+                            return Math.Max(0, Math.Min(100, cpuUsageFallback)); // Clamp between 0-100
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error al obtener uso de CPU: {ex.Message}");
+            }
+
+            return 0;
+        }
+
+        private static async Task<double> ObtenerUsoRAM()
+        {
+            try
+            {
+                // Use MemAvailable for more accurate memory usage (excludes caches)
+                var result = await Cli
+                    .Wrap("sh")
+                    .WithArguments(new[] { "-c", "free | awk 'NR==2{total=$2; used=$3; available=$7} END {if(available>0) printf \"%.1f\", (total-available)*100/total; else printf \"%.1f\", used*100/total}'" })
+                    .ExecuteBufferedAsync();
+
+                var output = result.StandardOutput.Trim().Replace(',', '.');
+                if (double.TryParse(output, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double ramUsage))
+                {
+                    return Math.Max(0, Math.Min(100, ramUsage)); // Clamp between 0-100
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error al obtener uso de RAM: {ex.Message}");
+            }
+
+            return 0;
+        }
+
+        private static async Task<double> ObtenerUsoDisco()
+        {
+            try
+            {
+                // Scan all mount points using portable df -P, exclude pseudo filesystems
+                var result = await Cli
+                    .Wrap("sh")
+                    .WithArguments(new[] { "-c", "df -P -x tmpfs -x devtmpfs | awk 'NR>1 {gsub(/%/, \"\", $5); if($5+0 > max) max=$5+0} END {print max+0}'" })
+                    .ExecuteBufferedAsync();
+
+                var output = result.StandardOutput.Trim().Replace(',', '.');
+                if (double.TryParse(output, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double diskUsage))
+                {
+                    return Math.Max(0, Math.Min(100, diskUsage)); // Clamp between 0-100
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error al obtener uso de disco: {ex.Message}");
+            }
+
+            return 0;
+        }
+
+        private static async Task EnviarAlertaTelegram(string message)
+        {
+            try
+            {
+                string token = "5334506189:AAG-OX79_IGuBFIzgSWF6WecoRt4AH3W4kM";
+                string chatId = "-1001723468137";
+                string url = $"https://api.telegram.org/bot{token}/sendMessage?chat_id={chatId}&text={Uri.EscapeDataString(message)}";
+
+                using (var webClient = new WebClient())
+                {
+                    await Task.Run(() => webClient.DownloadString(url));
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error al enviar alerta de Telegram: {ex.Message}");
+            }
+        }
     }
 }

@@ -44,6 +44,7 @@ RecurringJob.AddOrUpdate("kill_connections", () => Jobs.MataConexionesSinUso(), 
 RecurringJob.AddOrUpdate("check_offline_streams", () => Jobs.VerificarStreamsCaidos(), "*/35 * * * *");
 RecurringJob.AddOrUpdate("remove_large_files", () => Jobs.EliminarArchivosGrandes(), "*/5 * * * *");
 RecurringJob.AddOrUpdate("remove_stream_errors", () => Jobs.LimpiaErrores(), Cron.Daily);
+RecurringJob.AddOrUpdate("monitor_system_resources", () => Jobs.MonitorearRecursosSistema(), "*/10 * * * *"); // Every 10 minutes
 
 RecurringJob.AddOrUpdate("cleanup", () => Jobs.CleanUpOldJobs(), Cron.Hourly);
 
