@@ -32,21 +32,21 @@ namespace ticolinea.stream.service.Services
             // Thread-safe check and add
             if (_tokens.ContainsKey(stream.StreamId))
             {
-                _logger.Warn($"Stream {stream.StreamId} ya está siendo supervisado.");
+                _logger.Debug($"Stream {stream.StreamId} ya está siendo supervisado.");
                 return;
             }
 
             var cts = new CancellationTokenSource();
             if (_tokens.TryAdd(stream.StreamId, cts))
             {
-                _logger.Info($"Iniciando supervisión para stream {stream.StreamId}");
+                _logger.Debug($"Iniciando supervisión para stream {stream.StreamId}");
                 _ = Task.Run(() => SupervisarStream(stream, cts.Token), cts.Token);
             }
             else
             {
                 // Another thread added it, dispose our token
                 cts.Dispose();
-                _logger.Warn($"Stream {stream.StreamId} ya fue iniciado por otro hilo.");
+                _logger.Debug($"Stream {stream.StreamId} ya fue iniciado por otro hilo.");
             }
         }
 
@@ -55,14 +55,14 @@ namespace ticolinea.stream.service.Services
         {
             if (_tokens.TryRemove(streamId, out var cts))
             {
-                _logger.Info($"Cancelando stream {streamId}...");
+                _logger.Debug($"Cancelando stream {streamId}...");
                 try
                 {
                     cts.Cancel();
                 }
                 catch (ObjectDisposedException)
                 {
-                    _logger.Warn($"Token ya estaba cancelado para stream {streamId}");
+                    _logger.Debug($"Token ya estaba cancelado para stream {streamId}");
                 }
                 finally
                 {
@@ -79,13 +79,13 @@ namespace ticolinea.stream.service.Services
             const int baseDelaySeconds = 5;
             const int maxDelaySeconds = 300; // 5 minutes max
 
-            _logger.Info($"Iniciando supervisión para stream {stream.StreamId}");
+            _logger.Debug($"Iniciando supervisión para stream {stream.StreamId}");
 
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    _logger.Info($"Iniciando/reiniciando stream {stream.StreamId}... (intento {retryCount + 1})");
+                    _logger.Debug($"Iniciando/reiniciando stream {stream.StreamId}... (intento {retryCount + 1})");
 
                     int exitCode = await LanzarProcesoFfmpeg(stream, cancellationToken);
 
@@ -119,7 +119,7 @@ namespace ticolinea.stream.service.Services
                         // Reset retry count on success
                         if (retryCount > 0)
                         {
-                            _logger.Info($"Stream {stream.StreamId} recuperado exitosamente después de {retryCount} intentos");
+                            _logger.Debug($"Stream {stream.StreamId} recuperado exitosamente después de {retryCount} intentos");
                             retryCount = 0;
                         }
                         
@@ -129,7 +129,7 @@ namespace ticolinea.stream.service.Services
                 }
                 catch (OperationCanceledException)
                 {
-                    _logger.Info($"Supervisión cancelada para stream {stream.StreamId}");
+                    _logger.Debug($"Supervisión cancelada para stream {stream.StreamId}");
                     break;
                 }
                 catch (Exception ex)
@@ -148,7 +148,7 @@ namespace ticolinea.stream.service.Services
                 }
             }
 
-            _logger.Info($"Supervisión detenida para stream {stream.StreamId}");
+            _logger.Debug($"Supervisión detenida para stream {stream.StreamId}");
         }
 
         private static async Task<int> LanzarProcesoFfmpeg(StreamDb stream, CancellationToken cancellationToken)
@@ -184,7 +184,7 @@ namespace ticolinea.stream.service.Services
             {
                 // Auto-convert non-AAC to AAC for better compatibility
                 transcodeAudio = "-c:a aac -b:a 96k -ar 44100 -ac 2";
-                _logger.Info($"Stream {stream.StreamId}: Convirtiendo audio de {detectedAudioCodec} a AAC");
+                _logger.Debug($"Stream {stream.StreamId}: Convirtiendo audio de {detectedAudioCodec} a AAC");
             }
 
             string frameRate = stream.Transcode == 2 ? $" -r {stream.Framerate}" : "";
@@ -256,7 +256,7 @@ namespace ticolinea.stream.service.Services
                     {
                         case StartedCommandEvent started:
                             processId = started.ProcessId;
-                            _logger.Info($"Proceso iniciado: PID {processId} para stream {stream.StreamId}");
+                            _logger.Debug($"Proceso iniciado: PID {processId} para stream {stream.StreamId}");
                             await Jobs.ActualizaInfoCanal(processId, stream.StreamId);
                             break;
                         case StandardOutputCommandEvent stdOut:
@@ -268,7 +268,7 @@ namespace ticolinea.stream.service.Services
                             break;
                         case ExitedCommandEvent exited:
                             exitCode = exited.ExitCode;
-                            _logger.Info($"FFmpeg terminó para stream {stream.StreamId}; Código: {exitCode}");
+                            _logger.Debug($"FFmpeg terminó para stream {stream.StreamId}; Código: {exitCode}");
                             Data.Streams.InsertaStreamError($"({stream.StreamId}): Finalizó con código {exitCode}");
                             await Jobs.ActualizarCanalEstado(stream.StreamId, true, -1);
                             break;
@@ -277,7 +277,7 @@ namespace ticolinea.stream.service.Services
             }
             catch (OperationCanceledException)
             {
-                _logger.Info($"Proceso cancelado manualmente para stream {stream.StreamId}");
+                _logger.Debug($"Proceso cancelado manualmente para stream {stream.StreamId}");
             }
             catch (Exception ex)
             {
@@ -305,7 +305,7 @@ namespace ticolinea.stream.service.Services
 
                 if (string.IsNullOrWhiteSpace(json))
                 {
-                    _logger.Warn($"ffprobe no devolvió datos para {input}");
+                    _logger.Debug($"ffprobe no devolvió datos para {input}");
                     return null;
                 }
 
@@ -315,7 +315,7 @@ namespace ticolinea.stream.service.Services
 
                 if (audioStream == null)
                 {
-                    _logger.Warn($"No se encontró stream de audio en {input}");
+                    _logger.Debug($"No se encontró stream de audio en {input}");
                     return null;
                 }
 
@@ -324,7 +324,7 @@ namespace ticolinea.stream.service.Services
             }
             catch (OperationCanceledException)
             {
-                _logger.Warn($"ffprobe timeout para {input}");
+                _logger.Debug($"ffprobe timeout para {input}");
                 return null;
             }
             catch (Exception ex)
