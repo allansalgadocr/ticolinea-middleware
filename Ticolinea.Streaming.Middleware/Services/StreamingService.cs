@@ -168,22 +168,22 @@ namespace ticolinea.stream.service.Services
                 {
                     if (string.Equals(detectedAudioCodec, "aac", StringComparison.OrdinalIgnoreCase))
                     {
-                        transcodeAudio = "-c:a copy -threads 2";
+                        transcodeAudio = "-c:a copy";
                     }
                     else
                     {
-                        transcodeAudio = "-c:a aac -b:a 128k -ar 44100 -ac 2 -threads 2";
+                        transcodeAudio = "-c:a aac -b:a 96k -ar 44100 -ac 2";
                     }
                 }
                 else
                 {
-                    transcodeAudio = $"-c:a {stream.TranscodeAudio} -b:a 128k -ar 44100 -ac 2 -threads 2";
+                    transcodeAudio = $"-c:a {stream.TranscodeAudio} -b:a 96k -ar 44100 -ac 2";
                 }
             }
             else if (!string.Equals(detectedAudioCodec, "aac", StringComparison.OrdinalIgnoreCase))
             {
                 // Auto-convert non-AAC to AAC for better compatibility
-                transcodeAudio = "-c:a aac -b:a 128k -ar 44100 -ac 2 -threads 2";
+                transcodeAudio = "-c:a aac -b:a 96k -ar 44100 -ac 2";
                 _logger.Info($"Stream {stream.StreamId}: Convirtiendo audio de {detectedAudioCodec} a AAC");
             }
 
@@ -223,17 +223,18 @@ namespace ticolinea.stream.service.Services
                     .Add("-nostats")
                     .Add("-loglevel warning", false)
                     .Add("-err_detect ignore_err", false)
+                    .Add("-threads 1", false) // Global threading for copy operations
                     .Add(!isSrt ? "": "-ignore_unknown", false)
                     .Add(!isSrt ? "": "-fflags +genpts", false)
                     .Add(!isSrt ? "": "-avoid_negative_ts make_zero", false)
                     .Add($"{reconnect}", false)
                     .Add($"{frameRate}", false)
                     .Add("-thread_queue_size 2048", false) // 🧠 importante antes de -i
+                    .Add($"-analyzeduration {analyzeDuration}", false) // ✅ Moved before -i
+                    .Add($"-probesize {stream.ProbeSize}", false) // ✅ Moved before -i
                     .Add($"-i \"{stream.Fuente}\"", false)
                     .Add("-c:v copy", false)
                     .Add($"{transcodeAudio}", false)
-                    .Add($"-analyzeduration {analyzeDuration}", false)
-                    .Add($"-probesize {stream.ProbeSize}", false)
                     .Add($"{pixFmt}", false)
                     .Add("-movflags +faststart", false)
                     .Add("-flags +global_header", false)
