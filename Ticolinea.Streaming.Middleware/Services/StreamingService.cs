@@ -161,30 +161,15 @@ namespace ticolinea.stream.service.Services
             string transcodeAudio = "-c:a copy";
 
             // Enhanced audio conversion logic
-            if (!string.IsNullOrEmpty(stream.TranscodeAudio))
-            {
-                // User-specified audio codec takes priority
-                if (stream.TranscodeAudio.Equals("aac", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (string.Equals(detectedAudioCodec, "aac", StringComparison.OrdinalIgnoreCase))
-                    {
-                        transcodeAudio = "-c:a copy";
-                    }
-                    else
-                    {
-                        transcodeAudio = "-c:a aac -b:a 96k -ar 44100 -ac 2";
-                    }
-                }
-                else
-                {
-                    transcodeAudio = $"-c:a {stream.TranscodeAudio} -b:a 96k -ar 44100 -ac 2";
-                }
-            }
-            else if (!string.Equals(detectedAudioCodec, "aac", StringComparison.OrdinalIgnoreCase))
+            if (!string.IsNullOrEmpty(detectedAudioCodec) && !detectedAudioCodec.Contains("aac", StringComparison.OrdinalIgnoreCase))
             {
                 // Auto-convert non-AAC to AAC for better compatibility
                 transcodeAudio = "-c:a aac -b:a 96k -ar 44100 -ac 2";
                 _logger.Debug($"Stream {stream.StreamId}: Convirtiendo audio de {detectedAudioCodec} a AAC");
+            }
+            else if (!string.IsNullOrEmpty(stream.TranscodeAudio))
+            {
+                transcodeAudio = $"-c:a {stream.TranscodeAudio} -b:a 96k -ar 44100 -ac 2";
             }
 
             string frameRate = stream.Transcode == 2 ? $" -r {stream.Framerate}" : "";
@@ -223,13 +208,13 @@ namespace ticolinea.stream.service.Services
                     .Add("-nostats")
                     .Add("-loglevel warning", false)
                     .Add("-err_detect ignore_err", false)
-                    .Add("-threads 1", false) // Global threading for copy operations
-                    .Add(!isSrt ? "": "-ignore_unknown", false)
-                    .Add(!isSrt ? "": "-fflags +genpts", false)
+                    .Add("-threads 0", false) // Global threading for copy operations
+                    //.Add(!isSrt ? "": "-ignore_unknown", false)
+                    //.Add(!isSrt ? "": "-fflags +genpts", false)
                     .Add(!isSrt ? "": "-avoid_negative_ts make_zero", false)
                     .Add($"{reconnect}", false)
                     .Add($"{frameRate}", false)
-                    .Add("-thread_queue_size 2048", false) // 🧠 importante antes de -i
+                    .Add("-thread_queue_size 8192", false) // 🧠 importante antes de -i
                     .Add($"-analyzeduration {analyzeDuration}", false) // ✅ Moved before -i
                     .Add($"-probesize {stream.ProbeSize}", false) // ✅ Moved before -i
                     .Add($"-i \"{stream.Fuente}\"", false)
