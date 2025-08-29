@@ -157,20 +157,21 @@ namespace ticolinea.stream.service.Services
             int processId = -1;
 
             // Enhanced audio codec detection and conversion
-            string? detectedAudioCodec = await GetAudioCodec(stream.Fuente);
-            string transcodeAudio = "-c:a copy";
+            //string? detectedAudioCodec = await GetAudioCodec(stream.Fuente);
+            string transcodeAudio = "-c:a aac -profile:a aac_low -b:a 128k -ar 48000 -ac 2";
 
-            // Enhanced audio conversion logic
+            /*// Enhanced audio conversion logic
             if (!string.IsNullOrEmpty(detectedAudioCodec) && !detectedAudioCodec.Contains("aac", StringComparison.OrdinalIgnoreCase))
             {
                 // Auto-convert non-AAC to AAC for better compatibility
-                transcodeAudio = "-c:a aac -b:a 96k -ar 44100 -ac 2";
+                transcodeAudio = "-c:a aac -b:a 128k -ar 44100 -ac 2";
                 _logger.Debug($"Stream {stream.StreamId}: Convirtiendo audio de {detectedAudioCodec} a AAC");
             }
             else if (!string.IsNullOrEmpty(stream.TranscodeAudio))
             {
-                transcodeAudio = $"-c:a {stream.TranscodeAudio} -b:a 96k -ar 44100 -ac 2";
+                transcodeAudio = $"-c:a {stream.TranscodeAudio} -b:a 128k -ar 44100 -ac 2";
             }
+            */
 
             string frameRate = stream.Transcode == 2 ? $" -r {stream.Framerate}" : "";
             string pixFmt = stream.Transcode == 1 ? "-pix_fmt yuv420p -async 1" : "";
@@ -210,8 +211,8 @@ namespace ticolinea.stream.service.Services
                     .Add("-err_detect ignore_err", false)
                     .Add("-threads 0", false) // Global threading for copy operations
                     //.Add(!isSrt ? "": "-ignore_unknown", false)
-                    //.Add(!isSrt ? "": "-fflags +genpts", false)
-                    .Add(!isSrt ? "": "-avoid_negative_ts make_zero", false)
+                    .Add(!isSrt ? "": "-fflags +genpts -avoid_negative_ts make_zero", false)
+                    //.Add(isSrt ? "-fflags -avoid_negative_ts make_zero": "", false)
                     .Add($"{reconnect}", false)
                     .Add($"{frameRate}", false)
                     .Add("-thread_queue_size 8192", false) // 🧠 importante antes de -i
@@ -223,7 +224,8 @@ namespace ticolinea.stream.service.Services
                     .Add($"{pixFmt}", false)
                     .Add("-movflags +faststart", false)
                     .Add("-flags +global_header", false)
-                    .Add("-hls_flags +discont_start+omit_endlist+append_list+delete_segments+temp_file+split_by_time",
+                    .Add(!isSrt ? "-mpegts_flags +resend_headers+initial_discontinuity+pat_pmt_at_frames" : "", false)
+                    .Add("-hls_flags independent_segments+discont_start+append_list+omit_endlist+delete_segments+temp_file",
                         false)
                     .Add($"-hls_time {stream.Intervalo}", false)
                     .Add($"-hls_list_size {stream.Segmentos}", false)
