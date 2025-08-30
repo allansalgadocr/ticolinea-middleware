@@ -7,6 +7,7 @@ using System.Net;
 using System.Text;
 using ticolinea.stream.service.Modelos;
 using ticolinea.stream.service.Services;
+using ticolinea.stream.service.Helpers;
 
 namespace ticolinea.stream.service
 {
@@ -15,6 +16,14 @@ namespace ticolinea.stream.service
         [DisableConcurrentExecution(60)]
         public static async Task RevisarStreams()
         {
+            // Check if stream execution is allowed
+            StreamExecutionGuard.LogStreamExecutionAttempt("RevisarStreams");
+            if (!StreamExecutionGuard.CanExecuteStreams())
+            {
+                Console.WriteLine("⚠️  Stream execution disabled - skipping stream review");
+                return;
+            }
+
             var streams = await ObtenerStreamsActivos();
 
             var parallelOptions = new ParallelOptions
@@ -337,6 +346,14 @@ namespace ticolinea.stream.service
 
         public static async Task IniciarStream(StreamDb stream)
         {
+            // Check if stream execution is allowed
+            StreamExecutionGuard.LogStreamExecutionAttempt($"IniciarStream({stream.StreamId})");
+            if (!StreamExecutionGuard.CanExecuteStreams())
+            {
+                Console.WriteLine($"⚠️  Stream execution disabled - cannot start stream {stream.StreamId}");
+                return;
+            }
+
             var proc = await ObtenerProcesoEjecutando(0, stream.StreamId);
 
             if (proc != null)
@@ -358,6 +375,7 @@ namespace ticolinea.stream.service
             }
 
             // Inicia la supervisión 24/7 del stream en un hilo separado
+            // The StreamingService will handle FFmpeg process protection internally
             StreamingService.IniciarSupervision(stream);
         }
 

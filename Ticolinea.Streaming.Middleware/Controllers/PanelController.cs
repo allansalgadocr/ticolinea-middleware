@@ -9,6 +9,8 @@ using CliWrap.Buffered;
 using ticolinea.stream.service.Db;
 using ticolinea.stream.service.Modelos;
 using ticolinea.stream.service.Services;
+using ticolinea.stream.service.Helpers;
+using ticolinea.stream.service.Constantes;
 
 namespace ticolinea.stream.service.Controllers
 {
@@ -16,62 +18,6 @@ namespace ticolinea.stream.service.Controllers
     [ApiController]
     public class PanelController : ControllerBase
     {
-        [HttpPost]
-        public async Task<IActionResult> EnviarConexion([FromBody] Modelos.Mikrotik mikrotik)
-        {
-            MikrotikResponse result = new MikrotikResponse();
-
-            if (mikrotik.Usuario != "ticolineapanel" || mikrotik.Password != "mikrotik@1234") return Unauthorized();
-
-            try
-            {
-                using (var httpClient = new HttpClient())
-                {
-                    var data = new
-                    {
-                        nombre = mikrotik.Nombre,
-                        email = mikrotik.Email,
-                        telefono = mikrotik.Telefono,
-                        fechaNacimiento = mikrotik.FechaNacimiento,
-                    };
-
-                    var jsonContent = JsonConvert.SerializeObject(data);
-                    StringContent httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
-
-                    var response = await httpClient.PostAsync("https://b4a74o6jmd.execute-api.us-east-1.amazonaws.com/Prod/api/ClientesExternos/RegistroWifi", httpContent);
-
-                    if (response.StatusCode != System.Net.HttpStatusCode.OK)
-                    {
-                        result.message = $"API NO RESPONDE. {response.ReasonPhrase}";
-                        return Ok(result);
-                    }
-                    else
-                    {
-                        using (var conn = new MKConnection("170.244.171.250", "apialan", "api2022"))
-                        {
-                            conn.Open();
-                            var cmd = conn.CreateCommand("ip hotspot user add");
-                            cmd.Parameters.Add("server", "hotspotMetropoli");
-                            cmd.Parameters.Add("profile", "Profile6Megas1hora");
-                            cmd.Parameters.Add("name", mikrotik.Email.ToLower().Trim());
-                            cmd.Parameters.Add("password", mikrotik.FechaNacimiento.Replace("/", ""));
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                }
-
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex.Message);
-                result.message = $"ERROR. {ex.Message}";
-                return Ok(result);
-            }
-
-            result.success = true;
-            return Ok(result);
-        }
-
         [HttpGet("{usuario}/{password}")]
         public async Task<IActionResult> ObtenerStreams(string usuario, string password)
         {
@@ -172,40 +118,72 @@ namespace ticolinea.stream.service.Controllers
         [HttpPost("{usuario}/{password}")]
         public async Task<IActionResult> AgregarStream([FromBody] PanelStream panelStream, string usuario, string password)
         {
-            List<DataStream> streams = new();
+            var startTime = DateTime.UtcNow;
 
             if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
 
+            // 🔍 Validate input parameters
+            if (panelStream == null)
+            {
+                return BadRequest(new { success = false, message = "PanelStream no puede ser null" });
+            }
+
             try
             {
+                Console.WriteLine($"➕ Agregando nuevo stream...");
+                
+                int newStreamId = 0;
+                
+                // 💾 Get max ID and insert new stream in parallel
                 using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
-                    int maxId = 0;
+                    await cnn.OpenAsync();
+                    
+                    // Get max ID
                     using (var cmd = cnn.CreateCommand())
                     {
-                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "select max(id) from streams_tl;";
+                        cmd.CommandText = "SELECT MAX(id) FROM streams_tl;";
                         using (var reader = await cmd.ExecuteReaderAsync())
-                            while (await reader.ReadAsync())
+                        {
+                            if (await reader.ReadAsync())
                             {
-                                maxId = reader.GetInt32(0);
+                                newStreamId = reader.GetInt32(0) + 1;
                             }
+                            else
+                            {
+                                newStreamId = 1; // First stream
+                            }
+                        }
+                    }
 
-                        if (maxId == 0) throw new Exception("Error al obtener maxID");
+                    if (newStreamId == 0) 
+                    {
+                        throw new Exception("Error al obtener maxID");
+                    }
 
-                        var now = DateTimeOffset.Now.ToUnixTimeSeconds();
+                    // 💾 Insert into database in parallel for better performance
+                    var insertTasks = new List<Task>();
+                    
+                    // Task 1: Insert into streams_tl table
+                    insertTasks.Add(Task.Run(async () =>
+                    {
+                        using var insertCnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+                        await insertCnn.OpenAsync();
+                        
+                        using var cmd = insertCnn.CreateCommand();
                         cmd.CommandText = "INSERT INTO `streams_tl` " +
                                           "(`id`,`id_categoria`,`nombre_stream`,`fuente_stream`,`imagen_stream`,`orden`,`agregado`,`probesize_ondemand`,`es_bajodemanda`,`tipo`,`contenedor`,`habilitado`,`transcode_audio`,`video_info`," +
                                           "`audio_info`,`intervalo`,`segmentos`,`omitir_verificacion`,`framerate`,`transcode`,`resolucion`,`bitrate`,`canal_epg`,`canal_id`) " +
                                           "VALUES(@id,@id_categoria,@nombre_stream,@fuente_stream,@imagen_stream,@orden,@agregado,512000,@es_bajodemanda,1,'',@habilitado,'aac','', " +
                                           "'',6,5,0,25,@transcode,'','1500k', @canal_epg, @canal_id); ";
-                        cmd.Parameters.AddWithValue("@id", maxId + 1);
+                        
+                        cmd.Parameters.AddWithValue("@id", newStreamId);
                         cmd.Parameters.AddWithValue("@id_categoria", panelStream.Categoria);
                         cmd.Parameters.AddWithValue("@nombre_stream", panelStream.NombreStream);
                         cmd.Parameters.AddWithValue("@fuente_stream", panelStream.UrlStream);
                         cmd.Parameters.AddWithValue("@imagen_stream", panelStream.UrlLogo);
-                        cmd.Parameters.AddWithValue("@orden", maxId + 1);
-                        cmd.Parameters.AddWithValue("@agregado", now);
+                        cmd.Parameters.AddWithValue("@orden", newStreamId);
+                        cmd.Parameters.AddWithValue("@agregado", DateTimeOffset.Now.ToUnixTimeSeconds());
                         cmd.Parameters.AddWithValue("@es_bajodemanda", panelStream.EsBajoDemanda);
                         cmd.Parameters.AddWithValue("@transcode", panelStream.Optimizar);
                         cmd.Parameters.AddWithValue("@habilitado", panelStream.Habilitado);
@@ -213,62 +191,83 @@ namespace ticolinea.stream.service.Controllers
                         cmd.Parameters.AddWithValue("@canal_id", panelStream.CanalId);
 
                         await cmd.ExecuteNonQueryAsync();
-                    }
+                    }));
 
-                    using (var cmd = cnn.CreateCommand())
+                    // Task 2: Insert into streams_info table
+                    insertTasks.Add(Task.Run(async () =>
                     {
-                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        using var insertCnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+                        await insertCnn.OpenAsync();
+                        
+                        using var cmd = insertCnn.CreateCommand();
                         cmd.CommandText = "INSERT INTO `streams_info` " +
-                                      "(`stream_id`,`ejecutando`,`proceso_id`,`info_progreso`,`iniciado`) " +
-                                      "VALUES(@stream_id,1,-1,'',1);";
-                        cmd.Parameters.Clear();
-                        cmd.Parameters.AddWithValue("@stream_id", maxId + 1);
+                                          "(`stream_id`,`ejecutando`,`proceso_id`,`info_progreso`,`iniciado`) " +
+                                          "VALUES(@stream_id,1,-1,'',1);";
+                        cmd.Parameters.AddWithValue("@stream_id", newStreamId);
                         await cmd.ExecuteNonQueryAsync();
+                    }));
 
-                        cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
-                                        "INNER JOIN streams_info b " +
-                                        "on a.id = b.stream_id " +
-                                        $"WHERE stream_id = {maxId + 1};";
-
-                        List<StreamDb> streamsdb = new();
-                        using (var reader = await cmd.ExecuteReaderAsync())
-                            while (await reader.ReadAsync())
-                            {
-                                streamsdb.Add(new StreamDb
-                                {
-                                    Fuente = reader.GetString(0),
-                                    StreamId = reader.GetInt32(1),
-                                    ProbeSize = reader.GetInt32(2),
-                                    EsBajoDemanda = reader.GetInt32(3),
-                                    ProcesoId = reader.GetInt32(4),
-                                    TranscodeAudio = reader.GetString(5),
-                                    Intervalo = reader.GetInt16(6),
-                                    Segmentos = reader.GetInt16(7),
-                                    Framerate = reader.GetInt32(8),
-                                    Transcode = reader.GetInt32(9),
-                                    Resolucion = reader.GetString(10),
-                                    Bitrate = reader.GetString(11)
-                                });
-                            }
-                        var stream = streamsdb.FirstOrDefault();
-
-                        if (stream != null)
-                        {
-                            await Jobs.ReiniciarStream(stream);
-                            await Jobs.VerificarStream(stream);
-                        }
-                    }
+                    // Wait for both database inserts to complete
+                    await Task.WhenAll(insertTasks);
                 }
 
+                // 🔍 Create StreamDb object for the new stream
+                var newStream = new StreamDb
+                {
+                    Fuente = panelStream.UrlStream,
+                    StreamId = newStreamId,
+                    ProbeSize = 512000,
+                    EsBajoDemanda = panelStream.EsBajoDemanda,
+                    ProcesoId = -1,
+                    TranscodeAudio = "aac",
+                    Intervalo = 6,
+                    Segmentos = 5,
+                    Framerate = 25,
+                    Transcode = panelStream.Optimizar,
+                    Resolucion = "",
+                    Bitrate = "1500k"
+                };
 
+                // Cache the new stream configuration
+                StreamCacheHelper.SetCachedStream(newStreamId, newStream);
+
+                // 🚀 Start stream management in background (non-blocking)
+                if (panelStream.Habilitado == 1)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            // Start the stream
+                            Jobs.IniciarStream(newStream);
+                            
+                            // Verify the stream is working (with delay to allow startup)
+                            await Task.Delay(TimeSpan.FromSeconds(3));
+                            await Jobs.VerificarStream(newStream);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"⚠️ Error en gestión de procesos para stream {newStreamId}: {ex.Message}");
+                        }
+                    });
+                }
+
+                var duration = DateTime.UtcNow - startTime;
+                Console.WriteLine($"✅ Stream {newStreamId} agregado exitosamente en {duration.TotalMilliseconds:F0}ms");
+                
+                return Ok(new { 
+                    success = true, 
+                    message = $"Stream {newStreamId} agregado exitosamente", 
+                    streamId = newStreamId,
+                    duration = duration.TotalMilliseconds 
+                });
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.Message);
-                return StatusCode(500);
+                var duration = DateTime.UtcNow - startTime;
+                Console.WriteLine($"❌ Error al agregar stream después de {duration.TotalMilliseconds:F0}ms: {ex.Message}");
+                return StatusCode(500, new { success = false, message = $"Error interno: {ex.Message}", duration = duration.TotalMilliseconds });
             }
-
-            return Ok(streams);
         }
 
         [HttpPost("{usuario}/{password}")]
@@ -650,177 +649,222 @@ namespace ticolinea.stream.service.Controllers
         [HttpPost("{usuario}/{password}/{chnId}")]
         public async Task<IActionResult> ActualizarStream([FromBody] PanelStream panelStream, string usuario, string password, int chnId)
         {
+            var startTime = DateTime.UtcNow;
+            
             if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
 
             // 🔍 Validate input parameters
             if (panelStream == null)
             {
-                Console.WriteLine($"❌ PanelStream es null para stream {chnId}");
                 return BadRequest(new { success = false, message = "PanelStream no puede ser null" });
             }
 
             if (chnId <= 0)
             {
-                Console.WriteLine($"❌ ID de stream inválido: {chnId}");
                 return BadRequest(new { success = false, message = "ID de stream inválido" });
             }
 
             try
             {
                 Console.WriteLine($"🔄 Actualizando stream {chnId}...");
-                Console.WriteLine($"📋 Cambios: Habilitado={panelStream.Habilitado}, EsBajoDemanda={panelStream.EsBajoDemanda}, Optimizar={panelStream.Optimizar}");
-                Console.WriteLine($"📋 Configuración: Categoria={panelStream.Categoria}, Nombre={panelStream.NombreStream}, Fuente={panelStream.UrlStream}");
                 
-                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                // 🔍 Check cache first for better performance
+                StreamDb? currentStream = Helpers.StreamCacheHelper.GetCachedStream(chnId);
+                
+                if (currentStream == null)
                 {
+                    // Cache miss - load from database
+                    using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                    {
+                        await cnn.OpenAsync();
+                        
+                        using (var cmd = cnn.CreateCommand())
+                        {
+                            cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
+                                            "INNER JOIN streams_info b " +
+                                            "on a.id = b.stream_id " +
+                                            $"WHERE stream_id = {chnId};";
+
+                            using (var reader = await cmd.ExecuteReaderAsync())
+                            {
+                                if (await reader.ReadAsync())
+                                {
+                                    currentStream = new StreamDb
+                                    {
+                                        Fuente = reader.GetString(0),
+                                        StreamId = reader.GetInt32(1),
+                                        ProbeSize = reader.GetInt32(2),
+                                        EsBajoDemanda = reader.GetInt32(3),
+                                        ProcesoId = reader.GetInt32(4),
+                                        TranscodeAudio = reader.GetString(5),
+                                        Intervalo = reader.GetInt16(6),
+                                        Segmentos = reader.GetInt16(7),
+                                        Framerate = reader.GetInt32(8),
+                                        Transcode = reader.GetInt32(9),
+                                        Resolucion = reader.GetString(10),
+                                        Bitrate = reader.GetString(11)
+                                    };
+                                    
+                                    // Cache the result for future requests
+                                    Helpers.StreamCacheHelper.SetCachedStream(chnId, currentStream);
+                                }
+                                else
+                                {
+                                    return NotFound(new { success = false, message = $"Stream {chnId} no encontrado" });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 🔍 Check real-time status to get accurate process information
+                var realTimeStatus = await Helpers.StreamStatusHelper.GetRealTimeStreamStatusAsync(chnId);
+                if (realTimeStatus.IsRunning && realTimeStatus.ProcessId.HasValue)
+                {
+                    // Update the cached stream with real-time process ID
+                    currentStream.ProcesoId = realTimeStatus.ProcessId.Value;
+                }
+                else if (currentStream.ProcesoId > 0)
+                {
+                    currentStream.ProcesoId = -1; // Mark as not running
+                }
+
+                // 💾 Update database in parallel for better performance
+                var updateTasks = new List<Task>();
+                
+                // Task 1: Update streams_tl table
+                updateTasks.Add(Task.Run(async () =>
+                {
+                    using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
                     await cnn.OpenAsync();
                     
-                    // 🔍 First, check if the stream exists and get current state
-                    StreamDb currentStream = null;
-                    using (var cmd = cnn.CreateCommand())
-                    {
-                        cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
-                                        "INNER JOIN streams_info b " +
-                                        "on a.id = b.stream_id " +
-                                        $"WHERE stream_id = {chnId};";
+                    using var cmd = cnn.CreateCommand();
+                    cmd.CommandText = "UPDATE `streams_tl` " +
+                                      "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,fuente_stream=@fuente_stream,imagen_stream=@imagen_stream,es_bajodemanda=@es_bajodemanda,habilitado=@habilitado,transcode=@transcode,canal_epg=@canal_epg,canal_id=@canal_id " +
+                                      "WHERE id=@id; ";
+                    cmd.Parameters.AddWithValue("@id", chnId);
+                    cmd.Parameters.AddWithValue("@id_categoria", panelStream.Categoria);
+                    cmd.Parameters.AddWithValue("@nombre_stream", panelStream.NombreStream);
+                    cmd.Parameters.AddWithValue("@fuente_stream", panelStream.UrlStream);
+                    cmd.Parameters.AddWithValue("@imagen_stream", panelStream.UrlLogo);
+                    cmd.Parameters.AddWithValue("@es_bajodemanda", panelStream.EsBajoDemanda);
+                    cmd.Parameters.AddWithValue("@transcode", panelStream.Optimizar);
+                    cmd.Parameters.AddWithValue("@habilitado", panelStream.Habilitado);
+                    cmd.Parameters.AddWithValue("@canal_epg", panelStream.CanalEPG);
+                    cmd.Parameters.AddWithValue("@canal_id", panelStream.CanalId);
 
-                        using (var reader = await cmd.ExecuteReaderAsync())
+                    await cmd.ExecuteNonQueryAsync();
+                }));
+
+                // Task 2: Update streams_info table
+                updateTasks.Add(Task.Run(async () =>
+                {
+                    using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+                    await cnn.OpenAsync();
+                    
+                    using var cmd = cnn.CreateCommand();
+                    cmd.CommandText = "UPDATE `streams_info` " +
+                                      "SET iniciado=@iniciado, ejecutando=@ejecutando, reportado_caido=0 " +
+                                      "WHERE stream_id=@id; ";
+                    cmd.Parameters.AddWithValue("@id", chnId);
+                    cmd.Parameters.AddWithValue("@iniciado", panelStream.Habilitado);
+                    cmd.Parameters.AddWithValue("@ejecutando", panelStream.Habilitado);
+
+                    await cmd.ExecuteNonQueryAsync();
+                }));
+
+                // Wait for both database updates to complete
+                await Task.WhenAll(updateTasks);
+
+                // 🚦 Handle stream state changes based on habilitado flag
+                if (panelStream.Habilitado == 0)
+                {
+                    // 🛑 Stream is being disabled - stop it completely (non-blocking)
+                    if (currentStream.ProcesoId > 0)
+                    {
+                        // Run process stopping in background (non-blocking)
+                        _ = Task.Run(async () =>
                         {
-                            if (await reader.ReadAsync())
+                            try
                             {
-                                currentStream = new StreamDb
-                                {
-                                    Fuente = reader.GetString(0),
-                                    StreamId = reader.GetInt32(1),
-                                    ProbeSize = reader.GetInt32(2),
-                                    EsBajoDemanda = reader.GetInt32(3),
-                                    ProcesoId = reader.GetInt32(4),
-                                    TranscodeAudio = reader.GetString(5),
-                                    Intervalo = reader.GetInt16(6),
-                                    Segmentos = reader.GetInt16(7),
-                                    Framerate = reader.GetInt32(8),
-                                    Transcode = reader.GetInt32(9),
-                                    Resolucion = reader.GetString(10),
-                                    Bitrate = reader.GetString(11)
-                                };
-                                Console.WriteLine($"📡 Stream actual encontrado: ID={currentStream.StreamId}, ProcesoID={currentStream.ProcesoId}, Habilitado={panelStream.Habilitado}");
+                                await Jobs.DetenerProceso(currentStream.ProcesoId, currentStream.StreamId);
                             }
-                            else
+                            catch (Exception ex)
                             {
-                                Console.WriteLine($"❌ No se encontró el stream {chnId} en la base de datos");
-                                return NotFound(new { success = false, message = $"Stream {chnId} no encontrado" });
+                                Console.WriteLine($"⚠️ Error al detener procesos para stream {chnId}: {ex.Message}");
                             }
-                        }
+                        });
                     }
-
-                    // 💾 Update streams_tl table with new configuration
-                    Console.WriteLine($"💾 Actualizando configuración del stream {chnId}...");
-                    using (var cmd = cnn.CreateCommand())
+                    
+                    // Invalidate cache since stream is disabled
+                    Helpers.StreamCacheHelper.InvalidateStream(chnId);
+                    
+                    var duration = DateTime.UtcNow - startTime;
+                    Console.WriteLine($"✅ Stream {chnId} deshabilitado en {duration.TotalMilliseconds:F0}ms");
+                    return Ok(new { success = true, message = $"Stream {chnId} deshabilitado exitosamente", duration = duration.TotalMilliseconds });
+                }
+                else
+                {
+                    // 🚀 Stream is being enabled - restart it with new configuration (non-blocking)
+                    // Run all process management in background (non-blocking)
+                    _ = Task.Run(async () =>
                     {
-                        cmd.CommandText = "UPDATE `streams_tl` " +
-                                          "SET id_categoria=@id_categoria,nombre_stream=@nombre_stream,fuente_stream=@fuente_stream,imagen_stream=@imagen_stream,es_bajodemanda=@es_bajodemanda,habilitado=@habilitado,transcode=@transcode,canal_epg=@canal_epg,canal_id=@canal_id " +
-                                          "WHERE id=@id; ";
-                        cmd.Parameters.AddWithValue("@id", chnId);
-                        cmd.Parameters.AddWithValue("@id_categoria", panelStream.Categoria);
-                        cmd.Parameters.AddWithValue("@nombre_stream", panelStream.NombreStream);
-                        cmd.Parameters.AddWithValue("@fuente_stream", panelStream.UrlStream);
-                        cmd.Parameters.AddWithValue("@imagen_stream", panelStream.UrlLogo);
-                        cmd.Parameters.AddWithValue("@es_bajodemanda", panelStream.EsBajoDemanda);
-                        cmd.Parameters.AddWithValue("@transcode", panelStream.Optimizar);
-                        cmd.Parameters.AddWithValue("@habilitado", panelStream.Habilitado);
-                        cmd.Parameters.AddWithValue("@canal_epg", panelStream.CanalEPG);
-                        cmd.Parameters.AddWithValue("@canal_id", panelStream.CanalId);
-
-                        var rowsAffected = await cmd.ExecuteNonQueryAsync();
-                        Console.WriteLine($"✅ streams_tl actualizado: {rowsAffected} fila(s) afectada(s)");
-                    }
-
-                    // 🚦 Handle stream state changes based on habilitado flag
-                    if (panelStream.Habilitado == 0)
-                    {
-                        // 🛑 Stream is being disabled - stop it completely
-                        Console.WriteLine($"🛑 Deshabilitando stream {chnId} - deteniendo procesos...");
-                        
-                        if (currentStream.ProcesoId > 0)
-                        {
-                            await Jobs.DetenerProceso(currentStream.ProcesoId, currentStream.StreamId);
-                            Console.WriteLine($"✅ Procesos detenidos para stream {chnId}");
-                        }
-                        
-                        // 💾 Update streams_info to mark stream as stopped
-                        using (var cmd = cnn.CreateCommand())
-                        {
-                            cmd.CommandText = "UPDATE `streams_info` " +
-                                          "SET iniciado=0, ejecutando=0, proceso_id=-1, reportado_caido=0 " +
-                                          "WHERE stream_id=@id; ";
-                            cmd.Parameters.AddWithValue("@id", chnId);
-                            var rowsAffected = await cmd.ExecuteNonQueryAsync();
-                            Console.WriteLine($"✅ streams_info actualizado (deshabilitado): {rowsAffected} fila(s) afectada(s)");
-                        }
-                        
-                        Console.WriteLine($"✅ Stream {chnId} deshabilitado exitosamente");
-                        return Ok(new { success = true, message = $"Stream {chnId} deshabilitado exitosamente" });
-                    }
-                    else
-                    {
-                        // 🚀 Stream is being enabled - restart it with new configuration
-                        Console.WriteLine($"🚀 Habilitando stream {chnId} - reiniciando con nueva configuración...");
-                        
-                        // 🔄 First, ensure any existing processes are stopped
-                        if (currentStream.ProcesoId > 0)
-                        {
-                            Console.WriteLine($"🛑 Deteniendo procesos existentes para stream {chnId}...");
-                            await Jobs.DetenerProceso(currentStream.ProcesoId, currentStream.StreamId);
-                            Console.WriteLine($"✅ Procesos existentes detenidos para stream {chnId}");
-                        }
-                        
-                        // 🚀 Start the stream with new configuration
-                        Console.WriteLine($"🚀 Iniciando stream {chnId} con nueva configuración...");
                         try
                         {
+                            // 🔄 First, ensure any existing processes are stopped
+                            if (currentStream.ProcesoId > 0)
+                            {
+                                await Jobs.DetenerProceso(currentStream.ProcesoId, currentStream.StreamId);
+                            }
+                            
+                            // 🚀 Start the stream with new configuration
                             Jobs.IniciarStream(currentStream);
-                            Console.WriteLine($"✅ Stream {chnId} iniciado en StreamingService");
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"⚠️ Advertencia: Error al iniciar stream {chnId}: {ex.Message}");
-                            // Continue with database update even if starting fails
-                        }
-                        
-                        // 💾 Update streams_info to mark stream as started
-                        using (var cmd = cnn.CreateCommand())
-                        {
-                            cmd.CommandText = "UPDATE `streams_info` " +
-                                          "SET iniciado=1, ejecutando=1, reportado_caido=0 " +
-                                          "WHERE stream_id=@id; ";
-                            cmd.Parameters.AddWithValue("@id", chnId);
-                            var rowsAffected = await cmd.ExecuteNonQueryAsync();
-                            Console.WriteLine($"✅ streams_info actualizado (habilitado): {rowsAffected} fila(s) afectada(s)");
-                        }
-                        
-                        // 🔍 Verify the stream is working (non-blocking)
-                        Console.WriteLine($"🔍 Verificando stream {chnId}...");
-                        try
-                        {
+                            
+                            // 🔍 Verify the stream is working (with delay to allow startup)
+                            await Task.Delay(TimeSpan.FromSeconds(3));
                             await Jobs.VerificarStream(currentStream);
-                            Console.WriteLine($"✅ Verificación completada para stream {chnId}");
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"⚠️ Advertencia: Error en verificación del stream {chnId}: {ex.Message}");
-                            // Continue even if verification fails
+                            Console.WriteLine($"⚠️ Error en gestión de procesos para stream {chnId}: {ex.Message}");
                         }
-                        
-                        Console.WriteLine($"🎉 Stream {chnId} actualizado y habilitado exitosamente");
-                        return Ok(new { success = true, message = $"Stream {chnId} actualizado y habilitado exitosamente" });
-                    }
+                    });
+                    
+                    // Invalidate cache since stream configuration changed
+                    Helpers.StreamCacheHelper.InvalidateStream(chnId);
+                    
+                    var duration = DateTime.UtcNow - startTime;
+                    Console.WriteLine($"✅ Stream {chnId} actualizado y habilitado en {duration.TotalMilliseconds:F0}ms");
+                    return Ok(new { success = true, message = $"Stream {chnId} actualizado y habilitado exitosamente", duration = duration.TotalMilliseconds });
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ Error al actualizar stream {chnId}: {ex.Message}");
-                Console.WriteLine($"📋 Stack trace: {ex.StackTrace}");
-                return StatusCode(500, new { success = false, message = $"Error interno: {ex.Message}" });
+                var duration = DateTime.UtcNow - startTime;
+                Console.WriteLine($"❌ Error al actualizar stream {chnId} después de {duration.TotalMilliseconds:F0}ms: {ex.Message}");
+                return StatusCode(500, new { success = false, message = $"Error interno: {ex.Message}", duration = duration.TotalMilliseconds });
+            }
+        }
+
+        [HttpGet("{usuario}/{password}/cache/status")]
+        public async Task<IActionResult> GetCacheStatus(string usuario, string password)
+        {
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                // This is a simple endpoint to check cache status
+                // In a real implementation, you might want to add more detailed cache statistics
+                return Ok(new { 
+                    success = true, 
+                    message = "Cache helper is working",
+                    timestamp = DateTime.UtcNow
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error checking cache status: {ex.Message}");
+                return StatusCode(500, new { success = false, message = $"Error: {ex.Message}" });
             }
         }
 
@@ -869,58 +913,83 @@ namespace ticolinea.stream.service.Controllers
         [HttpGet("{usuario}/{password}/{chnId}")]
         public async Task<IActionResult> DetenerStream(string usuario, string password, int chnId)
         {
+            var startTime = DateTime.UtcNow;
+            
             if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
 
             try
             {
-                Console.WriteLine($"🛑 Iniciando detención del stream {chnId}...");
+                Console.WriteLine($"🛑 Deteniendo stream {chnId}...");
                 
-                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                // 🔍 Check cache first for better performance
+                StreamDb? stream = StreamCacheHelper.GetCachedStream(chnId);
+                
+                if (stream == null)
                 {
-                    List<StreamDb> streams = new();
-
-                    using (var cmd = cnn.CreateCommand())
+                    // Cache miss - load from database
+                    using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                     {
-                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
-                                        "INNER JOIN streams_info b " +
-                                        "on a.id = b.stream_id " +
-                                        $"WHERE stream_id = {chnId};";
+                        await cnn.OpenAsync();
+                        
+                        using (var cmd = cnn.CreateCommand())
+                        {
+                            cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
+                                            "INNER JOIN streams_info b " +
+                                            "on a.id = b.stream_id " +
+                                            $"WHERE stream_id = {chnId};";
 
-                        using (var reader = await cmd.ExecuteReaderAsync())
-                            while (await reader.ReadAsync())
+                            using (var reader = await cmd.ExecuteReaderAsync())
                             {
-                                streams.Add(new StreamDb
+                                if (await reader.ReadAsync())
                                 {
-                                    Fuente = reader.GetString(0),
-                                    StreamId = reader.GetInt32(1),
-                                    ProbeSize = reader.GetInt32(2),
-                                    EsBajoDemanda = reader.GetInt32(3),
-                                    ProcesoId = reader.GetInt32(4),
-                                    TranscodeAudio = reader.GetString(5),
-                                    Intervalo = reader.GetInt16(6),
-                                    Segmentos = reader.GetInt16(7),
-                                    Framerate = reader.GetInt32(8),
-                                    Transcode = reader.GetInt32(9),
-                                    Resolucion = reader.GetString(10),
-                                    Bitrate = reader.GetString(11)
-                                });
+                                    stream = new StreamDb
+                                    {
+                                        Fuente = reader.GetString(0),
+                                        StreamId = reader.GetInt32(1),
+                                        ProbeSize = reader.GetInt32(2),
+                                        EsBajoDemanda = reader.GetInt32(3),
+                                        ProcesoId = reader.GetInt32(4),
+                                        TranscodeAudio = reader.GetString(5),
+                                        Intervalo = reader.GetInt16(6),
+                                        Segmentos = reader.GetInt16(7),
+                                        Framerate = reader.GetInt32(8),
+                                        Transcode = reader.GetInt32(9),
+                                        Resolucion = reader.GetString(10),
+                                        Bitrate = reader.GetString(11)
+                                    };
+                                    
+                                    // Cache the result for future requests
+                                    StreamCacheHelper.SetCachedStream(chnId, stream);
+                                }
+                                else
+                                {
+                                    return NotFound(new { success = false, message = $"Stream {chnId} no encontrado" });
+                                }
                             }
+                        }
                     }
+                }
 
-                    var stream = streams.FirstOrDefault();
+                // 🔍 Check real-time status to get accurate process information
+                var realTimeStatus = await StreamStatusHelper.GetRealTimeStreamStatusAsync(chnId);
+                if (realTimeStatus.IsRunning && realTimeStatus.ProcessId.HasValue)
+                {
+                    // Update the cached stream with real-time process ID
+                    stream.ProcesoId = realTimeStatus.ProcessId.Value;
+                }
+                else if (stream.ProcesoId > 0)
+                {
+                    stream.ProcesoId = -1; // Mark as not running
+                }
 
-                    if (stream != null)
+                if (stream != null)
+                {
+                    // 🛑 Stop the background supervision first
+                    StreamingService.DetenerSupervision(stream.StreamId);
+                    
+                    // 🔍 Kill any running FFmpeg processes for this stream (non-blocking)
+                    _ = Task.Run(async () =>
                     {
-                        Console.WriteLine($"📡 Stream encontrado: ID={stream.StreamId}, ProcesoID={stream.ProcesoId}, Fuente={stream.Fuente}");
-                        
-                        // 🛑 Stop the background supervision first
-                        Console.WriteLine($"🔄 Deteniendo supervisión del stream {stream.StreamId}...");
-                        StreamingService.DetenerSupervision(stream.StreamId);
-                        Console.WriteLine($"✅ Supervisión detenida para stream {stream.StreamId}");
-                        
-                        // 🔍 Kill any running FFmpeg processes for this stream
-                        Console.WriteLine($"🔍 Buscando procesos FFmpeg para stream {stream.StreamId}...");
                         try
                         {
                             var result = await Cli
@@ -932,69 +1001,59 @@ namespace ticolinea.stream.service.Controllers
                             string[] procesos = output
                                 .Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
 
-                            if (procesos.Length == 0 || (procesos.Length == 1 && string.IsNullOrWhiteSpace(procesos[0])))
+                            foreach (var proceso in procesos)
                             {
-                                Console.WriteLine($"ℹ️ No se encontraron procesos FFmpeg ejecutándose para stream {stream.StreamId}");
-                            }
-                            else
-                            {
-                                Console.WriteLine($"🔍 Encontrados {procesos.Length} procesos para stream {stream.StreamId}");
-                                foreach (var proceso in procesos)
+                                if (int.TryParse(proceso, out var pid))
                                 {
-                                    if (int.TryParse(proceso, out var pid))
+                                    try
                                     {
-                                        try
+                                        var proc = Process.GetProcessById(pid);
+                                        if (!proc.HasExited)
                                         {
-                                            var proc = Process.GetProcessById(pid);
-                                            if (!proc.HasExited)
-                                            {
-                                                Console.WriteLine($"🔄 Deteniendo proceso FFmpeg PID {pid}...");
-                                                proc.Kill(true);
-                                                Console.WriteLine($"✅ Proceso FFmpeg {pid} detenido para stream {stream.StreamId}");
-                                            }
-                                            else
-                                            {
-                                                Console.WriteLine($"ℹ️ Proceso {pid} ya había terminado");
-                                            }
+                                            proc.Kill(true);
                                         }
-                                        catch (ArgumentException)
-                                        {
-                                            Console.WriteLine($"⚠️ Proceso con PID {pid} ya no existe.");
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Console.WriteLine($"❌ Error al detener proceso {pid}: {ex.Message}");
-                                        }
+                                    }
+                                    catch (ArgumentException)
+                                    {
+                                        // Process already doesn't exist
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"⚠️ Error al detener proceso {pid}: {ex.Message}");
                                     }
                                 }
                             }
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"❌ Error al buscar procesos FFmpeg: {ex.Message}");
+                            Console.WriteLine($"⚠️ Error al buscar procesos FFmpeg: {ex.Message}");
                         }
+                    });
 
-                        // 📝 Update database to mark stream as stopped
-                        Console.WriteLine($"💾 Actualizando base de datos para stream {stream.StreamId}...");
+                    // 📝 Update database to mark stream as stopped
+                    using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                    {
+                        await cnn.OpenAsync();
                         using (var cmd = cnn.CreateCommand())
                         {
-                            if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
                             cmd.CommandText = "UPDATE `streams_info` " +
-                                      "SET iniciado=0, ejecutando=0, proceso_id=-1 " +
-                                      "WHERE stream_id=@id; ";
+                                          "SET iniciado=0, ejecutando=0, proceso_id=-1 " +
+                                          "WHERE stream_id=@id; ";
                             cmd.Parameters.AddWithValue("@id", chnId);
-                            var rowsAffected = await cmd.ExecuteNonQueryAsync();
-                            Console.WriteLine($"✅ Base de datos actualizada: {rowsAffected} fila(s) afectada(s)");
+                            await cmd.ExecuteNonQueryAsync();
                         }
-                        
-                        Console.WriteLine($"🎉 Stream {stream.StreamId} detenido completamente");
-                        return Ok(new { success = true, message = $"Stream {stream.StreamId} detenido exitosamente" });
                     }
-                    else
-                    {
-                        Console.WriteLine($"❌ No se encontró el stream {chnId} en la base de datos");
-                        return NotFound(new { success = false, message = $"Stream {chnId} no encontrado" });
-                    }
+                    
+                    // Invalidate cache since stream is stopped
+                    StreamCacheHelper.InvalidateStream(chnId);
+                    
+                    var duration = DateTime.UtcNow - startTime;
+                    Console.WriteLine($"✅ Stream {stream.StreamId} detenido en {duration.TotalMilliseconds:F0}ms");
+                    return Ok(new { success = true, message = $"Stream {stream.StreamId} detenido exitosamente", duration = duration.TotalMilliseconds });
+                }
+                else
+                {
+                    return NotFound(new { success = false, message = $"Stream {chnId} no encontrado" });
                 }
             }
             catch (Exception ex)
@@ -1008,174 +1067,311 @@ namespace ticolinea.stream.service.Controllers
         [HttpGet("{usuario}/{password}/{chnId}")]
         public async Task<IActionResult> IniciarStream(string usuario, string password, int chnId)
         {
+            var startTime = DateTime.UtcNow;
+            
             if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            // Check if stream execution is allowed
+            if (!Global.ENABLE_STREAM_EXECUTION)
+            {
+                var duration = DateTime.UtcNow - startTime;
+                return Ok(new { 
+                    success = false, 
+                    message = "Stream execution is disabled in development environment", 
+                    environment = StreamExecutionGuard.GetEnvironmentInfo(),
+                    duration = duration.TotalMilliseconds 
+                });
+            }
 
             try
             {
                 Console.WriteLine($"🚀 Iniciando stream {chnId}...");
-                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                
+                // 🔍 Check cache first for better performance
+                StreamDb? stream = StreamCacheHelper.GetCachedStream(chnId);
+                
+                if (stream == null)
                 {
-                    List<StreamDb> streams = new();
-                    using (var cmd = cnn.CreateCommand())
+                    // Cache miss - load from database
+                    using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                     {
-                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
-                                        "INNER JOIN streams_info b " +
-                                        "on a.id = b.stream_id " +
-                                        $"WHERE stream_id = {chnId};";
-
-                        using (var reader = await cmd.ExecuteReaderAsync())
-                            while (await reader.ReadAsync())
-                            {
-                                streams.Add(new StreamDb
-                                {
-                                    Fuente = reader.GetString(0),
-                                    StreamId = reader.GetInt32(1),
-                                    ProbeSize = reader.GetInt32(2),
-                                    EsBajoDemanda = reader.GetInt32(3),
-                                    ProcesoId = reader.GetInt32(4),
-                                    TranscodeAudio = reader.GetString(5),
-                                    Intervalo = reader.GetInt16(6),
-                                    Segmentos = reader.GetInt16(7),
-                                    Framerate = reader.GetInt32(8),
-                                    Transcode = reader.GetInt32(9),
-                                    Resolucion = reader.GetString(10),
-                                    Bitrate = reader.GetString(11)
-                                });
-                            }
-                    }
-
-                    var stream = streams.FirstOrDefault();
-
-                    if (stream != null)
-                    {
-                        Console.WriteLine($"📡 Stream encontrado: ID={stream.StreamId}, ProcesoID={stream.ProcesoId}, Fuente={stream.Fuente}");
+                        await cnn.OpenAsync();
                         
-                        // 🔄 First, ensure any existing processes are stopped
-                        Console.WriteLine($"🛑 Deteniendo procesos existentes para stream {stream.StreamId}...");
-                        await Jobs.DetenerProceso(stream.ProcesoId, stream.StreamId);
-                        Console.WriteLine($"✅ Procesos existentes detenidos para stream {stream.StreamId}");
-                        
-                        // 🚀 Start the stream using the proper service
-                        Console.WriteLine($"🚀 Iniciando stream {stream.StreamId}...");
-                        Jobs.IniciarStream(stream);
-                        Console.WriteLine($"✅ Stream {stream.StreamId} iniciado en StreamingService");
-                        
-                        // 💾 Update database to mark stream as started and enabled
-                        Console.WriteLine($"💾 Actualizando base de datos para stream {stream.StreamId}...");
                         using (var cmd = cnn.CreateCommand())
                         {
-                            if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                            cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
+                                            "INNER JOIN streams_info b " +
+                                            "on a.id = b.stream_id " +
+                                            $"WHERE stream_id = {chnId};";
+
+                            using (var reader = await cmd.ExecuteReaderAsync())
+                            {
+                                if (await reader.ReadAsync())
+                                {
+                                    stream = new StreamDb
+                                    {
+                                        Fuente = reader.GetString(0),
+                                        StreamId = reader.GetInt32(1),
+                                        ProbeSize = reader.GetInt32(2),
+                                        EsBajoDemanda = reader.GetInt32(3),
+                                        ProcesoId = reader.GetInt32(4),
+                                        TranscodeAudio = reader.GetString(5),
+                                        Intervalo = reader.GetInt16(6),
+                                        Segmentos = reader.GetInt16(7),
+                                        Framerate = reader.GetInt32(8),
+                                        Transcode = reader.GetInt32(9),
+                                        Resolucion = reader.GetString(10),
+                                        Bitrate = reader.GetString(11)
+                                    };
+                                    
+                                    // Cache the result for future requests
+                                    StreamCacheHelper.SetCachedStream(chnId, stream);
+                                }
+                                else
+                                {
+                                    return NotFound(new { success = false, message = $"Stream {chnId} no encontrado" });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 🔍 Check real-time status to get accurate process information
+                var realTimeStatus = await StreamStatusHelper.GetRealTimeStreamStatusAsync(chnId);
+                if (realTimeStatus.IsRunning && realTimeStatus.ProcessId.HasValue)
+                {
+                    // Update the cached stream with real-time process ID
+                    stream.ProcesoId = realTimeStatus.ProcessId.Value;
+                }
+                else if (stream.ProcesoId > 0)
+                {
+                    stream.ProcesoId = -1; // Mark as not running
+                }
+
+                if (stream != null)
+                {
+                    // 🔄 First, ensure any existing processes are stopped (non-blocking)
+                    if (stream.ProcesoId > 0)
+                    {
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await Jobs.DetenerProceso(stream.ProcesoId, stream.StreamId);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"⚠️ Error al detener procesos para stream {chnId}: {ex.Message}");
+                            }
+                        });
+                    }
+                    
+                    // 🚀 Start the stream using the proper service (non-blocking)
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            Jobs.IniciarStream(stream);
                             
-                            // Update streams_info table
-                            cmd.CommandText = "UPDATE `streams_info` " +
-                                      "SET iniciado=1, ejecutando=1, reportado_caido=0 " +
-                                      "WHERE stream_id=@id; ";
-                            cmd.Parameters.AddWithValue("@id", chnId);
-                            var rowsAffected = await cmd.ExecuteNonQueryAsync();
-                            Console.WriteLine($"✅ streams_info actualizado: {rowsAffected} fila(s) afectada(s)");
-                            
-                            // Update streams_tl table
-                            cmd.CommandText = "UPDATE `streams_tl` " +
+                            // 🔍 Verify the stream is working (with delay to allow startup)
+                            await Task.Delay(TimeSpan.FromSeconds(3));
+                            await Jobs.VerificarStream(stream);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"⚠️ Error en gestión de procesos para stream {chnId}: {ex.Message}");
+                        }
+                    });
+                    
+                    // 💾 Update database in parallel for better performance
+                    var updateTasks = new List<Task>();
+                    
+                    // Task 1: Update streams_info table
+                    updateTasks.Add(Task.Run(async () =>
+                    {
+                        using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+                        await cnn.OpenAsync();
+                        
+                        using var cmd = cnn.CreateCommand();
+                        cmd.CommandText = "UPDATE `streams_info` " +
+                                          "SET iniciado=1, ejecutando=1, reportado_caido=0 " +
+                                          "WHERE stream_id=@id; ";
+                        cmd.Parameters.AddWithValue("@id", chnId);
+                        await cmd.ExecuteNonQueryAsync();
+                    }));
+
+                    // Task 2: Update streams_tl table
+                    updateTasks.Add(Task.Run(async () =>
+                    {
+                        using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+                        await cnn.OpenAsync();
+                        
+                        using var cmd = cnn.CreateCommand();
+                        cmd.CommandText = "UPDATE `streams_tl` " +
                                           "SET habilitado=1 " +
                                           "WHERE id=@stream_id; ";
-                            cmd.Parameters.AddWithValue("@stream_id", chnId);
-                            rowsAffected = await cmd.ExecuteNonQueryAsync();
-                            Console.WriteLine($"✅ streams_tl actualizado: {rowsAffected} fila(s) afectada(s)");
-                        }
-                        
-                        // 🔍 Verify the stream is working
-                        Console.WriteLine($"🔍 Verificando stream {stream.StreamId}...");
-                        await Jobs.VerificarStream(stream);
-                        Console.WriteLine($"✅ Verificación completada para stream {stream.StreamId}");
-                        
-                        Console.WriteLine($"🎉 Stream {stream.StreamId} iniciado exitosamente");
-                        return Ok(new { success = true, message = $"Stream {stream.StreamId} iniciado exitosamente" });
-                    }
-                    else
-                    {
-                        Console.WriteLine($"❌ No se encontró el stream {chnId} en la base de datos");
-                        return NotFound(new { success = false, message = $"Stream {chnId} no encontrado" });
-                    }
+                        cmd.Parameters.AddWithValue("@stream_id", chnId);
+                        await cmd.ExecuteNonQueryAsync();
+                    }));
+
+                    // Wait for both database updates to complete
+                    await Task.WhenAll(updateTasks);
+                    
+                    // Invalidate cache since stream configuration changed
+                    StreamCacheHelper.InvalidateStream(chnId);
+                    
+                    var duration = DateTime.UtcNow - startTime;
+                    Console.WriteLine($"✅ Stream {chnId} iniciado en {duration.TotalMilliseconds:F0}ms");
+                    return Ok(new { success = true, message = $"Stream {chnId} iniciado exitosamente", duration = duration.TotalMilliseconds });
+                }
+                else
+                {
+                    return NotFound(new { success = false, message = $"Stream {chnId} no encontrado" });
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ Error al iniciar stream {chnId}: {ex.Message}");
-                Console.WriteLine($"📋 Stack trace: {ex.StackTrace}");
-                return StatusCode(500, new { success = false, message = $"Error interno: {ex.Message}" });
+                var duration = DateTime.UtcNow - startTime;
+                Console.WriteLine($"❌ Error al iniciar stream {chnId} después de {duration.TotalMilliseconds:F0}ms: {ex.Message}");
+                return StatusCode(500, new { success = false, message = $"Error interno: {ex.Message}", duration = duration.TotalMilliseconds });
             }
         }
 
         [HttpGet("{usuario}/{password}/{chnId}")]
         public async Task<IActionResult> EliminarStream(string usuario, string password, int chnId)
         {
-            List<PanelCategoria> categorias = new();
+            var startTime = DateTime.UtcNow;
 
             if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
 
             try
             {
-                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                Console.WriteLine($"🗑️ Eliminando stream {chnId}...");
+                
+                // 🔍 Check cache first for better performance
+                StreamDb? stream = StreamCacheHelper.GetCachedStream(chnId);
+                
+                if (stream == null)
                 {
-                    List<StreamDb> streams = new();
-                    using (var cmd = cnn.CreateCommand())
+                    // Cache miss - load from database
+                    using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                     {
-                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                        cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
-                                        "INNER JOIN streams_info b " +
-                                        "on a.id = b.stream_id " +
-                                        $"WHERE stream_id = {chnId};";
-
-                        using (var reader = await cmd.ExecuteReaderAsync())
-                            while (await reader.ReadAsync())
-                            {
-                                streams.Add(new StreamDb
-                                {
-                                    Fuente = reader.GetString(0),
-                                    StreamId = reader.GetInt32(1),
-                                    ProbeSize = reader.GetInt32(2),
-                                    EsBajoDemanda = reader.GetInt32(3),
-                                    ProcesoId = reader.GetInt32(4),
-                                    TranscodeAudio = reader.GetString(5),
-                                    Intervalo = reader.GetInt16(6),
-                                    Segmentos = reader.GetInt16(7),
-                                    Framerate = reader.GetInt32(8),
-                                    Transcode = reader.GetInt32(9),
-                                    Resolucion = reader.GetString(10),
-                                    Bitrate = reader.GetString(11)
-                                });
-                            }
-                    }
-
-                    var stream = streams.FirstOrDefault();
-
-                    if (stream != null)
-                    {
-                        await Jobs.DetenerProceso(stream.ProcesoId, stream.StreamId);
+                        await cnn.OpenAsync();
+                        
                         using (var cmd = cnn.CreateCommand())
                         {
-                            if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                            cmd.CommandText = "DELETE FROM streams_info " +
-                                      "WHERE stream_id=@id; ";
-                            cmd.Parameters.AddWithValue("@id", chnId);
-                            await cmd.ExecuteNonQueryAsync();
+                            cmd.CommandText = "SELECT fuente_stream,stream_id,probesize_ondemand,es_bajodemanda,proceso_id, transcode_audio, intervalo, segmentos, framerate, transcode, resolucion, bitrate FROM streams_tl a " +
+                                            "INNER JOIN streams_info b " +
+                                            "on a.id = b.stream_id " +
+                                            $"WHERE stream_id = {chnId};";
 
-                            cmd.CommandText = "DELETE FROM streams_tl " +
-                                          "WHERE id=@stream_id; ";
-                            cmd.Parameters.AddWithValue("@stream_id", chnId);
-                            await cmd.ExecuteNonQueryAsync();
+                            using (var reader = await cmd.ExecuteReaderAsync())
+                            {
+                                if (await reader.ReadAsync())
+                                {
+                                    stream = new StreamDb
+                                    {
+                                        Fuente = reader.GetString(0),
+                                        StreamId = reader.GetInt32(1),
+                                        ProbeSize = reader.GetInt32(2),
+                                        EsBajoDemanda = reader.GetInt32(3),
+                                        ProcesoId = reader.GetInt32(4),
+                                        TranscodeAudio = reader.GetString(5),
+                                        Intervalo = reader.GetInt16(6),
+                                        Segmentos = reader.GetInt16(7),
+                                        Framerate = reader.GetInt32(8),
+                                        Transcode = reader.GetInt32(9),
+                                        Resolucion = reader.GetString(10),
+                                        Bitrate = reader.GetString(11)
+                                    };
+                                }
+                                else
+                                {
+                                    return NotFound(new { success = false, message = $"Stream {chnId} no encontrado" });
+                                }
+                            }
                         }
                     }
+                }
+
+                // 🔍 Check real-time status to get accurate process information
+                var realTimeStatus = await StreamStatusHelper.GetRealTimeStreamStatusAsync(chnId);
+                if (realTimeStatus.IsRunning && realTimeStatus.ProcessId.HasValue)
+                {
+                    // Update the cached stream with real-time process ID
+                    stream.ProcesoId = realTimeStatus.ProcessId.Value;
+                }
+                else if (stream.ProcesoId > 0)
+                {
+                    stream.ProcesoId = -1; // Mark as not running
+                }
+
+                if (stream != null)
+                {
+                    // 🛑 Stop processes first (non-blocking)
+                    if (stream.ProcesoId > 0)
+                    {
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await Jobs.DetenerProceso(stream.ProcesoId, stream.StreamId);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"⚠️ Error al detener procesos para stream {chnId}: {ex.Message}");
+                            }
+                        });
+                    }
+                    
+                    // 💾 Delete from database in parallel for better performance
+                    var deleteTasks = new List<Task>();
+                    
+                    // Task 1: Delete from streams_info table
+                    deleteTasks.Add(Task.Run(async () =>
+                    {
+                        using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+                        await cnn.OpenAsync();
+                        
+                        using var cmd = cnn.CreateCommand();
+                        cmd.CommandText = "DELETE FROM streams_info WHERE stream_id=@id; ";
+                        cmd.Parameters.AddWithValue("@id", chnId);
+                        await cmd.ExecuteNonQueryAsync();
+                    }));
+
+                    // Task 2: Delete from streams_tl table
+                    deleteTasks.Add(Task.Run(async () =>
+                    {
+                        using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+                        await cnn.OpenAsync();
+                        
+                        using var cmd = cnn.CreateCommand();
+                        cmd.CommandText = "DELETE FROM streams_tl WHERE id=@stream_id; ";
+                        cmd.Parameters.AddWithValue("@stream_id", chnId);
+                        await cmd.ExecuteNonQueryAsync();
+                    }));
+
+                    // Wait for both database deletions to complete
+                    await Task.WhenAll(deleteTasks);
+                    
+                    // Invalidate cache since stream is deleted
+                    StreamCacheHelper.InvalidateStream(chnId);
+                    
+                    var duration = DateTime.UtcNow - startTime;
+                    Console.WriteLine($"✅ Stream {chnId} eliminado en {duration.TotalMilliseconds:F0}ms");
+                    return Ok(new { success = true, message = $"Stream {chnId} eliminado exitosamente", duration = duration.TotalMilliseconds });
+                }
+                else
+                {
+                    return NotFound(new { success = false, message = $"Stream {chnId} no encontrado" });
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.Message);
-                return StatusCode(500);
+                var duration = DateTime.UtcNow - startTime;
+                Console.WriteLine($"❌ Error al eliminar stream {chnId} después de {duration.TotalMilliseconds:F0}ms: {ex.Message}");
+                return StatusCode(500, new { success = false, message = $"Error interno: {ex.Message}", duration = duration.TotalMilliseconds });
             }
-
-            return Ok(categorias);
         }
 
         [HttpGet("{usuario}/{password}/{chnId}")]

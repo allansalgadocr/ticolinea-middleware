@@ -3,6 +3,7 @@ using CliWrap.EventStream;
 using CliWrap;
 using CliWrap.Buffered;
 using ticolinea.stream.service.Modelos;
+using ticolinea.stream.service.Helpers;
 using log4net;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -153,6 +154,13 @@ namespace ticolinea.stream.service.Services
 
         private static async Task<int> LanzarProcesoFfmpeg(StreamDb stream, CancellationToken cancellationToken)
         {
+            // Check if FFmpeg processes are allowed
+            if (!StreamExecutionGuard.CanStartFFmpegProcesses())
+            {
+                _logger.Warn($"FFmpeg processes disabled - cannot launch FFmpeg for stream {stream.StreamId}");
+                return -1; // Return error code to indicate failure
+            }
+
             int exitCode = -1;
             int processId = -1;
 

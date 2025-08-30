@@ -1,9 +1,5 @@
 ﻿namespace ticolinea.stream.service.Modelos
 {
-    public class Panel
-    {
-    }
-
     public class PanelStream
     {
         public string NombreStream { get; set; } = string.Empty;
