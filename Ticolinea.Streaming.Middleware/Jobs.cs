@@ -13,6 +13,12 @@ namespace ticolinea.stream.service
 {
     public class Jobs
     {
+        // 🚀 SIMPLE CACHE FOR STREAM DATA - Reduces database queries
+        public static List<StreamDb>? _cachedStreams = null;
+        public static DateTime _lastCacheRefresh = DateTime.MinValue;
+        private static readonly object _cacheLock = new object();
+        private static readonly TimeSpan _cacheExpiration = TimeSpan.FromSeconds(15); // Reduced for faster updates with 155+ streams
+
         [DisableConcurrentExecution(60)]
         public static async Task RevisarStreams()
         {
@@ -28,7 +34,7 @@ namespace ticolinea.stream.service
 
             var parallelOptions = new ParallelOptions
             {
-                MaxDegreeOfParallelism = 5 // 👈 Máximo de 5 streams a la vez
+                MaxDegreeOfParallelism = 20 // 🚀 Increased for 155+ streams (was 5)
             };
 
             await Parallel.ForEachAsync(streams, parallelOptions, async (stream, ct) =>
@@ -56,6 +62,17 @@ namespace ticolinea.stream.service
 
         private static async Task<List<StreamDb>> ObtenerStreamsActivos()
         {
+            // 🚀 CACHE CHECK: Use cached data if available and recent
+            lock (_cacheLock)
+            {
+                if (_cachedStreams != null && DateTime.UtcNow - _lastCacheRefresh < _cacheExpiration)
+                {
+                    Console.WriteLine($"📦 Using cached streams data ({_cachedStreams.Count} streams)");
+                    return _cachedStreams;
+                }
+            }
+
+            // 🔍 Load from database
             var streams = new List<StreamDb>();
 
             await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
@@ -92,7 +109,26 @@ namespace ticolinea.stream.service
                 });
             }
 
+            // 🚀 Update cache with fresh data
+            lock (_cacheLock)
+            {
+                _cachedStreams = streams;
+                _lastCacheRefresh = DateTime.UtcNow;
+                Console.WriteLine($"📦 Updated cache with {streams.Count} streams");
+            }
+
             return streams;
+        }
+
+        // 🚀 Method to invalidate cache when needed
+        public static void InvalidateStreamCache()
+        {
+            lock (_cacheLock)
+            {
+                _cachedStreams = null;
+                _lastCacheRefresh = DateTime.MinValue;
+                Console.WriteLine("🗑️ Stream cache invalidated");
+            }
         }
 
 
@@ -122,8 +158,8 @@ namespace ticolinea.stream.service
                 }
             }
 
-            // Opcional: limitar concurrencia
-            var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = 5 };
+            // 🚀 Optimized for large scale (155+ streams)
+            var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = 15 };
 
             await Parallel.ForEachAsync(streams, parallelOptions, async (stream, ct) =>
             {

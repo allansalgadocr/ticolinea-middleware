@@ -40,12 +40,16 @@ DashboardOptions dashboardOptions = new DashboardOptions
 
 app.UseHangfireDashboard("/dashboard", dashboardOptions);
 
-RecurringJob.AddOrUpdate("check_streams", () => Jobs.RevisarStreams(), Cron.Minutely());
+// 🚀 OPTIMIZED JOB SCHEDULING - Reduced database load
+// Changed from every minute to every 2 minutes (50% reduction in DB queries)
+RecurringJob.AddOrUpdate("check_streams", () => Jobs.RevisarStreams(), "*/2 * * * *");
 RecurringJob.AddOrUpdate("stop_not_inuse_streams", () => Jobs.DetenerStreamsSinUso(), "*/10 * * * *");
 RecurringJob.AddOrUpdate("remove_old_streams", () => Jobs.EliminarArchivosViejos(), "*/30 * * * *");
-RecurringJob.AddOrUpdate("kill_connections", () => Jobs.MataConexionesSinUso(), "*/5 * * * *");
+// Changed from every 5 minutes to every 10 minutes (50% reduction in DB queries)
+RecurringJob.AddOrUpdate("kill_connections", () => Jobs.MataConexionesSinUso(), "*/10 * * * *");
 RecurringJob.AddOrUpdate("check_offline_streams", () => Jobs.VerificarStreamsCaidos(), "*/35 * * * *");
-RecurringJob.AddOrUpdate("remove_large_files", () => Jobs.EliminarArchivosGrandes(), "*/5 * * * *");
+// Changed from every 5 minutes to every 15 minutes (67% reduction in DB queries)
+RecurringJob.AddOrUpdate("remove_large_files", () => Jobs.EliminarArchivosGrandes(), "*/15 * * * *");
 RecurringJob.AddOrUpdate("remove_stream_errors", () => Jobs.LimpiaErrores(), Cron.Daily);
 RecurringJob.AddOrUpdate("monitor_system_resources", () => Jobs.MonitorearRecursosSistema(), "*/10 * * * *"); // Every 10 minutes
 

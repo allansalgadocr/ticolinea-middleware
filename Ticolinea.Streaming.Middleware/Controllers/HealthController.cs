@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using ticolinea.stream.service.Constantes;
 using ticolinea.stream.service.Helpers;
+using ticolinea.stream.service.Services;
 
 namespace ticolinea.stream.service.Controllers
 {
@@ -89,6 +90,52 @@ namespace ticolinea.stream.service.Controllers
             };
 
             return Ok(environmentInfo);
+        }
+
+        [HttpGet("database-performance")]
+        public IActionResult GetDatabasePerformance()
+        {
+            var performanceInfo = new
+            {
+                timestamp = DateTime.UtcNow,
+                cache = new
+                {
+                    enabled = true,
+                    cacheSize = Jobs._cachedStreams?.Count ?? 0,
+                    lastRefresh = Jobs._lastCacheRefresh,
+                    isCacheValid = Jobs._cachedStreams != null && DateTime.UtcNow - Jobs._lastCacheRefresh < TimeSpan.FromSeconds(30)
+                },
+                optimizations = new
+                {
+                    jobFrequencies = new
+                    {
+                        checkStreams = "Every 2 minutes (optimized from 1 minute)",
+                        killConnections = "Every 10 minutes (optimized from 5 minutes)",
+                        removeLargeFiles = "Every 15 minutes (optimized from 5 minutes)"
+                    },
+                    caching = new
+                    {
+                        enabled = true,
+                        expirationSeconds = 15,
+                        description = "Stream data cached to reduce database queries (optimized for 155+ streams)"
+                    },
+                    scaling = new
+                    {
+                        parallelStreams = "20 concurrent stream operations (was 5)",
+                        parallelCodecs = "15 concurrent codec checks (was 5)",
+                        targetScale = "Optimized for 155+ concurrent streams"
+                    }
+                }
+            };
+
+            return Ok(performanceInfo);
+        }
+
+        [HttpGet("streaming-performance")]
+        public IActionResult GetStreamingPerformance()
+        {
+            var streamingStats = StreamingService.GetPerformanceStats();
+            return Ok(streamingStats);
         }
     }
 }
