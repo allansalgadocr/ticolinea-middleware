@@ -779,21 +779,18 @@ namespace ticolinea.stream.service.Controllers
                 // 🚦 Handle stream state changes based on habilitado flag
                 if (panelStream.Habilitado == 0)
                 {
-                    // 🛑 Stream is being disabled - stop it completely (non-blocking)
+                    // 🛑 Stream is being disabled - stop it completely IMMEDIATELY
                     if (currentStream.ProcesoId > 0)
                     {
-                        // Run process stopping in background (non-blocking)
-                        _ = Task.Run(async () =>
+                        try
                         {
-                            try
-                            {
-                                await Jobs.DetenerProceso(currentStream.ProcesoId, currentStream.StreamId);
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"⚠️ Error al detener procesos para stream {chnId}: {ex.Message}");
-                            }
-                        });
+                            await Jobs.DetenerProceso(currentStream.ProcesoId, currentStream.StreamId);
+                            Console.WriteLine($"🛑 Proceso {currentStream.ProcesoId} detenido para stream {chnId} (deshabilitado)");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"⚠️ Error al detener procesos para stream {chnId}: {ex.Message}");
+                        }
                     }
                     
                     // Invalidate cache since stream is disabled
@@ -805,30 +802,49 @@ namespace ticolinea.stream.service.Controllers
                 }
                 else
                 {
-                    // 🚀 Stream is being enabled - restart it with new configuration (non-blocking)
-                    // Run all process management in background (non-blocking)
-                    _ = Task.Run(async () =>
+                    // 🚀 Stream is being enabled - restart it with new configuration IMMEDIATELY
+                    try
                     {
-                        try
+                        // 🔄 First, ensure any existing processes are stopped IMMEDIATELY
+                        if (currentStream.ProcesoId > 0)
                         {
-                            // 🔄 First, ensure any existing processes are stopped
-                            if (currentStream.ProcesoId > 0)
-                            {
-                                await Jobs.DetenerProceso(currentStream.ProcesoId, currentStream.StreamId);
-                            }
+                            await Jobs.DetenerProceso(currentStream.ProcesoId, currentStream.StreamId);
+                            Console.WriteLine($"🛑 Proceso anterior {currentStream.ProcesoId} detenido para stream {chnId} (actualización)");
                             
-                            // 🚀 Start the stream with new configuration
-                            Jobs.IniciarStream(currentStream);
-                            
-                            // 🔍 Verify the stream is working (with delay to allow startup)
-                            await Task.Delay(TimeSpan.FromSeconds(3));
-                            await Jobs.VerificarStream(currentStream);
+                            // 🕐 Small delay to ensure process cleanup is complete
+                            await Task.Delay(TimeSpan.FromSeconds(1));
                         }
-                        catch (Exception ex)
+                        
+                        // 🚀 Start the stream with NEW SOURCE IMMEDIATELY
+                        // Create updated stream object with new source but keep existing configuration
+                        var updatedStream = new StreamDb
                         {
-                            Console.WriteLine($"⚠️ Error en gestión de procesos para stream {chnId}: {ex.Message}");
-                        }
-                    });
+                            StreamId = currentStream.StreamId,
+                            Fuente = panelStream.UrlStream,        // ✅ NEW SOURCE/INPUT
+                            ProbeSize = currentStream.ProbeSize,   // Keep existing config
+                            EsBajoDemanda = panelStream.EsBajoDemanda, // Update demand setting
+                            TranscodeAudio = currentStream.TranscodeAudio, // Keep existing config
+                            Intervalo = currentStream.Intervalo,   // Keep existing config
+                            Segmentos = currentStream.Segmentos,   // Keep existing config
+                            Framerate = currentStream.Framerate,   // Keep existing config
+                            Transcode = panelStream.Optimizar,     // Update transcode setting
+                            Resolucion = currentStream.Resolucion, // Keep existing config
+                            Bitrate = currentStream.Bitrate        // Keep existing config
+                        };
+                        
+                        // 🚀 Force immediate stream startup bypassing circuit breaker and delays
+                        bool started = await StreamingService.ForzarInicioInmediato(updatedStream);
+                        Console.WriteLine($"🚀 Stream {chnId} inicio forzado con nueva fuente: {panelStream.UrlStream} - {(started ? "EXITOSO" : "FALLÓ")}");
+                        
+                        // 🔍 Verify the stream is working (with delay to allow startup)
+                        await Task.Delay(TimeSpan.FromSeconds(3));
+                        await Jobs.VerificarStream(updatedStream);
+                        Console.WriteLine($"✅ Stream {chnId} verificado después de actualización");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Error en gestión de procesos para stream {chnId}: {ex.Message}");
+                    }
                     
                     // Invalidate cache since stream configuration changed
                     Helpers.StreamCacheHelper.InvalidateStream(chnId);
@@ -987,48 +1003,46 @@ namespace ticolinea.stream.service.Controllers
                     // 🛑 Stop the background supervision first
                     StreamingService.DetenerSupervision(stream.StreamId);
                     
-                    // 🔍 Kill any running FFmpeg processes for this stream (non-blocking)
-                    _ = Task.Run(async () =>
+                    // 🔍 Kill any running FFmpeg processes for this stream IMMEDIATELY
+                    try
                     {
-                        try
+                        var result = await Cli
+                            .Wrap("/bin/pgrep")
+                            .WithArguments(new[] { "-f", $"/{stream.StreamId}_.m3u8" })
+                            .ExecuteBufferedAsync();
+
+                        string output = result.StandardOutput;
+                        string[] procesos = output
+                            .Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+
+                        foreach (var proceso in procesos)
                         {
-                                            var result = await Cli
-                                            .Wrap("/bin/pgrep")
-                                            .WithArguments(new[] { "-f", $"/{stream.StreamId}_.m3u8" })
-                                            .ExecuteBufferedAsync();
-
-                            string output = result.StandardOutput;
-                            string[] procesos = output
-                                .Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
-
-                            foreach (var proceso in procesos)
+                            if (int.TryParse(proceso, out var pid))
                             {
-                                if (int.TryParse(proceso, out var pid))
+                                try
                                 {
-                                    try
+                                    var proc = Process.GetProcessById(pid);
+                                    if (!proc.HasExited)
                                     {
-                                        var proc = Process.GetProcessById(pid);
-                                        if (!proc.HasExited)
-                                        {
-                                            proc.Kill(true);
-                                        }
+                                        proc.Kill(true);
+                                        Console.WriteLine($"🛑 Proceso FFmpeg {pid} terminado para stream {stream.StreamId}");
                                     }
-                                    catch (ArgumentException)
-                                    {
-                                        // Process already doesn't exist
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Console.WriteLine($"⚠️ Error al detener proceso {pid}: {ex.Message}");
-                                    }
+                                }
+                                catch (ArgumentException)
+                                {
+                                    // Process already doesn't exist
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"⚠️ Error al detener proceso {pid}: {ex.Message}");
                                 }
                             }
                         }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"⚠️ Error al buscar procesos FFmpeg: {ex.Message}");
-                        }
-                    });
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Error al buscar procesos FFmpeg: {ex.Message}");
+                    }
 
                     // 📝 Update database to mark stream as stopped
                     using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
@@ -1150,72 +1164,65 @@ namespace ticolinea.stream.service.Controllers
 
                 if (stream != null)
                 {
-                    // 🔄 First, ensure any existing processes are stopped (non-blocking)
+                    // 🔄 First, ensure any existing processes are stopped IMMEDIATELY
                     if (stream.ProcesoId > 0)
-                    {
-                        _ = Task.Run(async () =>
-                        {
-                            try
-                            {
-                                await Jobs.DetenerProceso(stream.ProcesoId, stream.StreamId);
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"⚠️ Error al detener procesos para stream {chnId}: {ex.Message}");
-                            }
-                        });
-                    }
-                    
-                    // 🚀 Start the stream using the proper service (non-blocking)
-                    _ = Task.Run(async () =>
                     {
                         try
                         {
-                            Jobs.IniciarStream(stream);
+                            await Jobs.DetenerProceso(stream.ProcesoId, stream.StreamId);
+                            Console.WriteLine($"🛑 Proceso anterior {stream.ProcesoId} detenido para stream {chnId}");
                             
-                            // 🔍 Verify the stream is working (with delay to allow startup)
-                            await Task.Delay(TimeSpan.FromSeconds(3));
-                            await Jobs.VerificarStream(stream);
+                            // 🕐 Small delay to ensure process cleanup is complete
+                            await Task.Delay(TimeSpan.FromSeconds(1));
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"⚠️ Error en gestión de procesos para stream {chnId}: {ex.Message}");
+                            Console.WriteLine($"⚠️ Error al detener procesos para stream {chnId}: {ex.Message}");
                         }
-                    });
+                    }
                     
-                    // 💾 Update database in parallel for better performance
-                    var updateTasks = new List<Task>();
-                    
-                    // Task 1: Update streams_info table
-                    updateTasks.Add(Task.Run(async () =>
+                    // 🚀 Start the stream using the proper service IMMEDIATELY
+                    try
                     {
-                        using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+                        // 🚀 Force immediate stream startup bypassing circuit breaker and delays
+                        bool started = await StreamingService.ForzarInicioInmediato(stream);
+                        Console.WriteLine($"🚀 Stream {chnId} inicio forzado - {(started ? "EXITOSO" : "FALLÓ")}");
+                        
+                        // 🔍 Verify the stream is working (with delay to allow startup)
+                        await Task.Delay(TimeSpan.FromSeconds(3));
+                        await Jobs.VerificarStream(stream);
+                        Console.WriteLine($"✅ Stream {chnId} verificado después del inicio");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Error en gestión de procesos para stream {chnId}: {ex.Message}");
+                    }
+                    
+                    // 💾 Update database IMMEDIATELY
+                    using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                    {
                         await cnn.OpenAsync();
                         
-                        using var cmd = cnn.CreateCommand();
-                        cmd.CommandText = "UPDATE `streams_info` " +
-                                          "SET iniciado=1, ejecutando=1, reportado_caido=0 " +
-                                          "WHERE stream_id=@id; ";
-                        cmd.Parameters.AddWithValue("@id", chnId);
-                        await cmd.ExecuteNonQueryAsync();
-                    }));
-
-                    // Task 2: Update streams_tl table
-                    updateTasks.Add(Task.Run(async () =>
-                    {
-                        using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
-                        await cnn.OpenAsync();
+                        // Update streams_info table
+                        using (var cmd = cnn.CreateCommand())
+                        {
+                            cmd.CommandText = "UPDATE `streams_info` " +
+                                              "SET iniciado=1, ejecutando=1, reportado_caido=0 " +
+                                              "WHERE stream_id=@id; ";
+                            cmd.Parameters.AddWithValue("@id", chnId);
+                            await cmd.ExecuteNonQueryAsync();
+                        }
                         
-                        using var cmd = cnn.CreateCommand();
-                        cmd.CommandText = "UPDATE `streams_tl` " +
-                                          "SET habilitado=1 " +
-                                          "WHERE id=@stream_id; ";
-                        cmd.Parameters.AddWithValue("@stream_id", chnId);
-                        await cmd.ExecuteNonQueryAsync();
-                    }));
-
-                    // Wait for both database updates to complete
-                    await Task.WhenAll(updateTasks);
+                        // Update streams_tl table
+                        using (var cmd = cnn.CreateCommand())
+                        {
+                            cmd.CommandText = "UPDATE `streams_tl` " +
+                                              "SET habilitado=1 " +
+                                              "WHERE id=@stream_id; ";
+                            cmd.Parameters.AddWithValue("@stream_id", chnId);
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+                    }
                     
                     // Invalidate cache since stream configuration changed
                     StreamCacheHelper.InvalidateStream(chnId);

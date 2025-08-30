@@ -75,6 +75,41 @@ namespace ticolinea.stream.service.Services
             }
         }
 
+        // Force immediate stream startup bypassing circuit breaker and delays
+        public static async Task<bool> ForzarInicioInmediato(StreamDb stream)
+        {
+            try
+            {
+                // Clear any previous failures for this stream (bypass circuit breaker)
+                _failureTracker.TryRemove(stream.StreamId, out _);
+                _lastProcessStart.TryRemove(stream.StreamId, out _);
+                
+                _logger.Debug($"Forzando inicio inmediato para stream {stream.StreamId}");
+                
+                // Start supervision (this will trigger FFmpeg immediately)
+                IniciarSupervision(stream);
+                
+                // Wait a reasonable time for startup
+                await Task.Delay(TimeSpan.FromSeconds(3));
+                
+                // Check if process actually started
+                var result = await Cli
+                    .Wrap("/bin/pgrep")
+                    .WithArguments(new[] { "-f", $"/{stream.StreamId}_.m3u8" })
+                    .ExecuteBufferedAsync();
+                
+                bool started = !string.IsNullOrEmpty(result.StandardOutput.Trim());
+                _logger.Debug($"Stream {stream.StreamId} inicio forzado: {(started ? "exitoso" : "falló")}");
+                
+                return started;
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"Error en inicio forzado para stream {stream.StreamId}: {ex.Message}");
+                return false;
+            }
+        }
+
         // Fix 2: Improved retry logic with exponential backoff
         private static async Task SupervisarStream(StreamDb stream, CancellationToken cancellationToken)
         {
