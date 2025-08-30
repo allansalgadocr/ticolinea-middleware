@@ -992,10 +992,10 @@ namespace ticolinea.stream.service.Controllers
                     {
                         try
                         {
-                            var result = await Cli
-                                .Wrap("/bin/pgrep")
-                                .WithArguments($"-f \"/{stream.StreamId}_.m3u\"")
-                                .ExecuteBufferedAsync();
+                                            var result = await Cli
+                                            .Wrap("/bin/pgrep")
+                                            .WithArguments(new[] { "-f", $"/{stream.StreamId}_.m3u8" })
+                                            .ExecuteBufferedAsync();
 
                             string output = result.StandardOutput;
                             string[] procesos = output

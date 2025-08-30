@@ -137,5 +137,12 @@ namespace ticolinea.stream.service.Controllers
             var streamingStats = StreamingService.GetPerformanceStats();
             return Ok(streamingStats);
         }
+
+        [HttpGet("batch-processing")]
+        public IActionResult GetBatchProcessingStats()
+        {
+            var batchStats = Data.Streams.GetBatchProcessingStats();
+            return Ok(batchStats);
+        }
     }
 }

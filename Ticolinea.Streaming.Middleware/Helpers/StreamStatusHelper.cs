@@ -27,7 +27,7 @@ namespace ticolinea.stream.service.Helpers
             {
                 // Check if process is actually running using pgrep
                 var result = await Cli.Wrap("/bin/pgrep")
-                    .WithArguments($"-f \"/{streamId}_.m3u\"")
+                    .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
                     .ExecuteBufferedAsync();
 
                 if (!string.IsNullOrEmpty(result.StandardOutput))

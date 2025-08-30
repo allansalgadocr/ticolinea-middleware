@@ -68,7 +68,7 @@ namespace ticolinea.stream.service
                 if (_cachedStreams != null && DateTime.UtcNow - _lastCacheRefresh < _cacheExpiration)
                 {
                     Console.WriteLine($"📦 Using cached streams data ({_cachedStreams.Count} streams)");
-                    return _cachedStreams;
+                    return _cachedStreams.ToList(); // Return a copy to prevent mutation
                 }
             }
 
@@ -228,7 +228,7 @@ namespace ticolinea.stream.service
             {
                 var result = await Cli
                     .Wrap("/bin/pgrep")
-                    .WithArguments($"-f \"/{streamId}_.m3u\"")
+                    .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
                     .ExecuteBufferedAsync();
                 string output = result.StandardOutput;
                 string[] procesos = output.Split(
@@ -266,7 +266,7 @@ namespace ticolinea.stream.service
             {
                 var result = await Cli
                     .Wrap("/bin/pgrep")
-                    .WithArguments($"-f \"/{streamId}_.m3u\"")
+                    .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
                     .ExecuteBufferedAsync();
                 string output = result.StandardOutput;
                 string[] procesos = output.Split(
@@ -307,7 +307,7 @@ namespace ticolinea.stream.service
                 // 🔍 Buscar procesos relacionados con el stream
                 var result = await Cli
                     .Wrap("/bin/pgrep")
-                    .WithArguments($"-f \"/{streamId}_.m3u\"")
+                    .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
                     .ExecuteBufferedAsync();
 
                 string output = result.StandardOutput;
@@ -344,7 +344,7 @@ namespace ticolinea.stream.service
                 await using var cmd = cnn.CreateCommand();
                 cmd.CommandText = @"
                             UPDATE streams_info
-                            SET ejecutando = 0, proceso_id = NULL
+                            SET ejecutando = 0, proceso_id = -1
                             WHERE stream_id = @id";
 
                 cmd.Parameters.AddWithValue("@id", streamId);
@@ -363,7 +363,7 @@ namespace ticolinea.stream.service
         {
             var result = await Cli
                 .Wrap("/bin/pgrep")
-                .WithArguments($"-f \"/{streamId}_.m3u\"")
+                .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
                 .ExecuteBufferedAsync();
             string output = result.StandardOutput;
             string[] lines = output.Split(
@@ -418,35 +418,14 @@ namespace ticolinea.stream.service
 
         public static async Task ActualizaInfoCanal(int procesoId, int streamId)
         {
-            using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
-            {
-                using (var cmd = cnn.CreateCommand())
-                {
-                    if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                    cmd.CommandText =
-                        "UPDATE streams_info SET proceso_id=@id_proceso, ejecutando=1,reportado_caido=0 " +
-                        "WHERE stream_id=@id";
-
-                    cmd.Parameters.AddWithValue("@id_proceso", procesoId);
-                    cmd.Parameters.AddWithValue("@id", streamId);
-
-                    await cmd.ExecuteNonQueryAsync();
-                }
-            }
+            // Use optimized batch processing
+            Data.Streams.QueueStreamUpdate(streamId, procesoId, true);
         }
 
         public static async Task ActualizarCanalEstado(int streamId, bool estaCaido, int procesoId)
         {
-            await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
-            await cnn.OpenAsync();
-
-            await using var cmd = cnn.CreateCommand();
-            cmd.CommandText = estaCaido 
-                ? "UPDATE streams_info SET reportado_caido=1 WHERE stream_id=@id"
-                : "UPDATE streams_info SET reportado_caido=0 WHERE stream_id=@id";
-
-            cmd.Parameters.AddWithValue("@id", streamId);
-            await cmd.ExecuteNonQueryAsync();
+            // Use optimized batch processing
+            Data.Streams.QueueStatusUpdate(streamId, estaCaido);
         }
 
         [DisableConcurrentExecution(60)]
@@ -483,15 +462,16 @@ namespace ticolinea.stream.service
                 }
 
 
-                foreach (StreamDb stream in streams)
+                // Optimized parallel processing with batched database updates
+                var statusUpdates = new List<(int streamId, bool isCaido)>();
+                
+                await Parallel.ForEachAsync(streams, new ParallelOptions { MaxDegreeOfParallelism = 10 }, async (stream, ct) =>
                 {
                     try
                     {
-                        var args =
-                            $"-i http://localhost:27701/Live/Streaming/{stream.StreamId}/test/test.m3u8 -analyzeduration 1000000 -probesize 1000000 -v quiet -print_format json -show_streams -show_format";
                         Process probe = new();
                         probe.StartInfo.FileName = Constantes.Global.FFPROBE_PATH;
-                        probe.StartInfo.Arguments = args;
+                        probe.StartInfo.Arguments = $"-i \"http://localhost:27701/Live/Streaming/{stream.StreamId}/test/test.m3u8\" -analyzeduration 1000000 -probesize 1000000 -v quiet -print_format json -show_streams -show_format";
                         probe.StartInfo.UseShellExecute = false;
                         probe.StartInfo.RedirectStandardOutput = true;
                         probe.StartInfo.RedirectStandardError = true;
@@ -502,18 +482,30 @@ namespace ticolinea.stream.service
                         bool estaCaido = false;
                         if (probeData?.Streams == null)
                         {
-                            streamsCaidos++;
+                            Interlocked.Increment(ref streamsCaidos);
                             estaCaido = true;
-                            sb.AppendLine($"• {stream.StreamId} - {stream.TranscodeAudio}");
+                            lock (sb)
+                            {
+                                sb.AppendLine($"• {stream.StreamId} - {stream.TranscodeAudio}");
+                            }
                             await DetenerProceso(stream.ProcesoId, stream.StreamId);
                         }
 
-                        await ActualizarCanalEstado(stream.StreamId, estaCaido, stream.ProcesoId);
+                        lock (statusUpdates)
+                        {
+                            statusUpdates.Add((stream.StreamId, estaCaido));
+                        }
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine("ERROR AL OBTENER INFO DE CANAL." + ex.Message);
                     }
+                });
+
+                // Batch all status updates at once
+                foreach (var update in statusUpdates)
+                {
+                    Data.Streams.QueueStatusUpdate(update.streamId, update.isCaido);
                 }
 
                 sb.Replace("[CANT]", streamsCaidos.ToString());
