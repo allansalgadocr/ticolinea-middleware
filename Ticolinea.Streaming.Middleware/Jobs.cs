@@ -44,7 +44,8 @@ namespace ticolinea.stream.service
                     if (stream.ProcesoId == -1 || !await EstaProcesoFfmpegVivo(stream.ProcesoId, stream.StreamId))
                     {
                         Console.WriteLine($"🔄 Reiniciando stream {stream.StreamId}...");
-                        await IniciarStream(stream);
+                        bool started = await StreamingService.ForzarInicioInmediato(stream);
+                        Console.WriteLine($"🚀 Stream {stream.StreamId} reinicio automático: {(started ? "EXITOSO" : "FALLÓ")}");
                     }
                 }
                 catch (Exception ex)

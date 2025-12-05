@@ -238,8 +238,9 @@ namespace ticolinea.stream.service.Controllers
                     {
                         try
                         {
-                            // Start the stream
-                            Jobs.IniciarStream(newStream);
+                            // Start the stream with forced immediate startup
+                            bool started = await StreamingService.ForzarInicioInmediato(newStream);
+                            Console.WriteLine($"🚀 Nuevo stream {newStreamId} iniciado: {(started ? "EXITOSO" : "FALLÓ")}");
                             
                             // Verify the stream is working (with delay to allow startup)
                             await Task.Delay(TimeSpan.FromSeconds(3));
