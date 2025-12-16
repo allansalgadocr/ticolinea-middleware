@@ -52,8 +52,31 @@ namespace ticolinea.stream.service.Controllers
         }
 
         [ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
+        [HttpGet("{chID}/mac/{macAddress}.{ext}")]
+        public async Task<IActionResult> StreamingByMac(int chID, string macAddress, string ext)
+        {
+            if (string.IsNullOrWhiteSpace(ext) || ext.ToLower() != "m3u8")
+                return Unauthorized();
+
+            // Validate MAC address against client_mac_addresses table
+            var validation = await Helpers.ClientValidation.ValidateMacAddress(macAddress);
+            if (validation == null || !validation.IsValid)
+                return Unauthorized("MAC address not authorized");
+
+            var existeCanal = await ObtieneDatosCanal(chID);
+            if (!existeCanal)
+                return Unauthorized();
+
+            var playlistOutput = await ReadPlaylistFile(chID);
+            playlistOutput = AddDiscontinuityTags(playlistOutput);
+            playlistOutput = ReplaceSegmentUrls(playlistOutput);
+
+            return Content(playlistOutput, "application/x-mpegurl", Encoding.UTF8);
+        }
+
+        [ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
         [HttpGet("{chID}/{usuario}/{password}/{macAddress}")]
-        public async Task<IActionResult> StreamingMovil(int chID, string usuario, string password,string macAddress)
+        public async Task<IActionResult> StreamingMovil(int chID, string usuario, string password, string macAddress)
         {
             Usuario? usuariodb = null;
 

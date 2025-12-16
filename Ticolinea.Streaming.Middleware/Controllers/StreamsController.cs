@@ -167,6 +167,146 @@ namespace ticolinea.stream.service.Controllers
             return File(Encoding.UTF8.GetBytes(sb.ToString()), "application/x-mpegurl", $"ticolineaplay_{usuario}.m3u");
         }
 
+        /// <summary>
+        /// Get playlist by MAC address - validates MAC against ClientMacAddress table
+        /// </summary>
+        [HttpGet("PlaylistByMac/{macAddress}")]
+        public async Task<IActionResult> PlaylistByMac(string macAddress)
+        {
+            // Validate MAC address and get client/provider info
+            var validation = await Helpers.ClientValidation.ValidateMacAddress(macAddress);
+            
+            if (validation == null || !validation.IsValid)
+                return Unauthorized("MAC address not found or not authorized");
+
+            // Use provider URL for streaming URLs
+            var providerBaseUrl = validation.ProviderUrl.TrimEnd('/');
+            
+            StringBuilder sb = new();
+            sb.AppendLine("#EXTM3U\r\n");
+
+            // Get client's channels based on their packages
+            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(validation.PaqueteTvId);
+            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(validation.PaqueteTvId);
+
+            // Merge lists: custom ordered channels take priority, then fill with unordered channels
+            // Assign high CanalId to unordered channels so they appear after ordered ones
+            int maxCustomOrder = bouquetCustom.Any() ? bouquetCustom.Max(c => c.CanalId) : 0;
+            int autoOrder = maxCustomOrder + 1;
+            foreach (var canal in bouquet)
+            {
+                if (canal.CanalId == 0)
+                    canal.CanalId = autoOrder++;
+            }
+            
+            // Combine and sort by CanalId
+            bouquet.AddRange(bouquetCustom);
+            bouquet = bouquet.OrderBy(c => c.CanalId).ToList();
+
+            // Include movies if client has access (check package for movies access)
+            if (string.IsNullOrEmpty(validation.PaqueteTvId))
+            {
+                List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
+                bouquet.AddRange(bouquetPeliculas);
+            }
+            else
+            {
+                // Check if package includes movies
+                var paquete = await Data.PaqueteTV.ObtenerPaquete(validation.PaqueteTvId);
+                if (paquete != null && paquete.Activo == 1 && paquete.Peliculas == 1)
+                {
+                    List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
+                    bouquet.AddRange(bouquetPeliculas);
+                }
+            }
+
+            foreach (var chn in bouquet)
+            {
+                sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.Tipo == 1)
+                {
+                    // Use provider URL for live streaming
+                    sb.AppendLine($"{providerBaseUrl}/Live/StreamingByMac/{chn.Id}/mac/{macAddress}.m3u8\r\n");
+                }
+                else if (chn.Tipo == 2 || chn.Tipo == 3)
+                {
+                    // Use provider URL for movies/series
+                    sb.AppendLine($"{providerBaseUrl}/Peliculas/Reproducir/{chn.Id}/mac/{macAddress}.{chn.Contenedor}\r\n");
+                }
+            }
+
+            return File(Encoding.UTF8.GetBytes(sb.ToString()), "application/x-mpegurl", $"ticolineaplay_mac_{macAddress}.m3u");
+        }
+
+        /// <summary>
+        /// Get playlist by credentials - validates username/password against ClientCredentials table
+        /// </summary>
+        [HttpGet("PlaylistByCredentials/{username}/{password}")]
+        public async Task<IActionResult> PlaylistByCredentials(string username, string password)
+        {
+            // Validate credentials and get client/provider info
+            var validation = await Helpers.ClientValidation.ValidateCredentials(username, password);
+            
+            if (validation == null || !validation.IsValid)
+                return Unauthorized("Invalid credentials");
+
+            // Use provider URL for streaming URLs
+            var providerBaseUrl = validation.ProviderUrl.TrimEnd('/');
+            
+            StringBuilder sb = new();
+            sb.AppendLine("#EXTM3U\r\n");
+
+            // Get client's channels based on their packages
+            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(validation.PaqueteTvId);
+            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(validation.PaqueteTvId);
+
+            // Merge lists: custom ordered channels take priority, then fill with unordered channels
+            int maxCustomOrder = bouquetCustom.Any() ? bouquetCustom.Max(c => c.CanalId) : 0;
+            int autoOrder = maxCustomOrder + 1;
+            foreach (var canal in bouquet)
+            {
+                if (canal.CanalId == 0)
+                    canal.CanalId = autoOrder++;
+            }
+            
+            // Combine and sort by CanalId
+            bouquet.AddRange(bouquetCustom);
+            bouquet = bouquet.OrderBy(c => c.CanalId).ToList();
+
+            // Include movies if client has access (check package for movies access)
+            if (string.IsNullOrEmpty(validation.PaqueteTvId))
+            {
+                List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
+                bouquet.AddRange(bouquetPeliculas);
+            }
+            else
+            {
+                // Check if package includes movies
+                var paquete = await Data.PaqueteTV.ObtenerPaquete(validation.PaqueteTvId);
+                if (paquete != null && paquete.Activo == 1 && paquete.Peliculas == 1)
+                {
+                    List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
+                    bouquet.AddRange(bouquetPeliculas);
+                }
+            }
+
+            foreach (var chn in bouquet)
+            {
+                sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.Tipo == 1)
+                {
+                    // Use provider URL for live streaming
+                    sb.AppendLine($"{providerBaseUrl}/Live/Streaming/{chn.Id}/{username}/{password}.m3u8\r\n");
+                }
+                else if (chn.Tipo == 2 || chn.Tipo == 3)
+                {
+                    // Use provider URL for movies/series
+                    sb.AppendLine($"{providerBaseUrl}/Peliculas/Reproducir/{chn.Id}/{username}/{password}.{chn.Contenedor}\r\n");
+                }
+            }
+
+            return File(Encoding.UTF8.GetBytes(sb.ToString()), "application/x-mpegurl", $"ticolineaplay_{username}.m3u");
+        }
 
         [HttpGet("{usuario}/{password}")]
         public async Task<IActionResult> PlaylistApi(string usuario, string password)
