@@ -2,6 +2,7 @@
 using MySqlConnector;
 using System.Text;
 using ticolinea.stream.service.Db;
+using ticolinea.stream.service.Helpers;
 
 namespace ticolinea.stream.service.Controllers
 {
@@ -9,6 +10,123 @@ namespace ticolinea.stream.service.Controllers
     [ApiController]
     public class StreamsController : ControllerBase
     {
+        /// <summary>
+        /// Get playlist by JWT token - validates token and uses claims for authorization
+        /// </summary>
+        [HttpGet("PlaylistByToken")]
+        public async Task<IActionResult> PlaylistByToken([FromQuery] string? token = null)
+        {
+            // Extract token from query or header
+            var extractedToken = token ?? TokenValidation.ExtractToken(Request);
+            
+            // Validate token
+            var validation = TokenValidation.ValidateToken(extractedToken);
+            if (validation == null || !validation.IsValid)
+                return Unauthorized("Invalid or expired token");
+
+            // Use provider URL from token claims
+            var providerBaseUrl = validation.ProviderUrl.TrimEnd('/');
+            if (string.IsNullOrEmpty(providerBaseUrl))
+                providerBaseUrl = "http://tv.play-latino.com:27701";
+
+            StringBuilder sb = new();
+            sb.AppendLine("#EXTM3U\r\n");
+
+            // Get channels based on package from token claims
+            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(validation.PaqueteTvId);
+            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(validation.PaqueteTvId);
+
+            // Merge lists: custom ordered channels take priority
+            int maxCustomOrder = bouquetCustom.Any() ? bouquetCustom.Max(c => c.CanalId) : 0;
+            int autoOrder = maxCustomOrder + 1;
+            foreach (var canal in bouquet)
+            {
+                if (canal.CanalId == 0)
+                    canal.CanalId = autoOrder++;
+            }
+
+            bouquet.AddRange(bouquetCustom);
+            bouquet = bouquet.OrderBy(c => c.CanalId).ToList();
+
+            // Include movies if allowed by token claims
+            if (validation.MoviesAllowed)
+            {
+                List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
+                bouquet.AddRange(bouquetPeliculas);
+            }
+
+            // Build playlist with token-based URLs
+            foreach (var chn in bouquet)
+            {
+                sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.Tipo == 1)
+                {
+                    sb.AppendLine($"{providerBaseUrl}/Live/StreamingByToken/{chn.Id}.m3u8?token={validation.Token}\r\n");
+                }
+                else if (chn.Tipo == 2 || chn.Tipo == 3)
+                {
+                    sb.AppendLine($"{providerBaseUrl}/Peliculas/ReproducirByToken/{chn.Id}.{chn.Contenedor}?token={validation.Token}\r\n");
+                }
+            }
+
+            return File(Encoding.UTF8.GetBytes(sb.ToString()), "application/x-mpegurl", $"ticolineaplay_token.m3u");
+        }
+
+        /// <summary>
+        /// Get playlist by JWT token for mobile devices
+        /// </summary>
+        [HttpGet("PlaylistMobileByToken")]
+        public async Task<IActionResult> PlaylistMobileByToken([FromQuery] string? token = null)
+        {
+            var extractedToken = token ?? TokenValidation.ExtractToken(Request);
+            var validation = TokenValidation.ValidateToken(extractedToken);
+            
+            if (validation == null || !validation.IsValid)
+                return Unauthorized("Invalid or expired token");
+
+            var providerBaseUrl = validation.ProviderUrl.TrimEnd('/');
+            if (string.IsNullOrEmpty(providerBaseUrl))
+                providerBaseUrl = "http://tv.play-latino.com:27701";
+
+            StringBuilder sb = new();
+            sb.AppendLine("#EXTM3U\r\n");
+
+            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(validation.PaqueteTvId);
+            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(validation.PaqueteTvId);
+
+            int maxCustomOrder = bouquetCustom.Any() ? bouquetCustom.Max(c => c.CanalId) : 0;
+            int autoOrder = maxCustomOrder + 1;
+            foreach (var canal in bouquet)
+            {
+                if (canal.CanalId == 0)
+                    canal.CanalId = autoOrder++;
+            }
+
+            bouquet.AddRange(bouquetCustom);
+            bouquet = bouquet.OrderBy(c => c.CanalId).ToList();
+
+            if (validation.MoviesAllowed)
+            {
+                List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
+                bouquet.AddRange(bouquetPeliculas);
+            }
+
+            foreach (var chn in bouquet)
+            {
+                sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.Tipo == 1)
+                {
+                    sb.AppendLine($"{providerBaseUrl}/Live/StreamingMovilByToken/{chn.Id}?token={validation.Token}\r\n");
+                }
+                else if (chn.Tipo == 2 || chn.Tipo == 3)
+                {
+                    sb.AppendLine($"{providerBaseUrl}/Peliculas/ReproducirMovilByToken/{chn.Id}.{chn.Contenedor}?token={validation.Token}\r\n");
+                }
+            }
+
+            return File(Encoding.UTF8.GetBytes(sb.ToString()), "application/x-mpegurl", $"ticolineaplay_token_mobile.m3u");
+        }
+
 
         /*[HttpGet]
         public async Task<IActionResult> Reordenar()

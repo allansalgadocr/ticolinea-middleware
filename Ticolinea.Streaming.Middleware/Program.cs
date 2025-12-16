@@ -1,9 +1,26 @@
 using Microsoft.AspNetCore.HttpOverrides;
 using Hangfire;
 using ticolinea.stream.service;
+using ticolinea.stream.service.Config;
+using ticolinea.stream.service.Helpers;
 using Hangfire.InMemory;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configure JWT settings for token validation
+var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
+TokenValidation.Initialize(jwtSettings);
+
+// Log JWT settings status
+Console.WriteLine("=== JWT Settings Loaded ===");
+Console.WriteLine($"  Issuer: {(string.IsNullOrEmpty(jwtSettings.Issuer) ? "(not set)" : jwtSettings.Issuer)}");
+Console.WriteLine($"  Audience: {(string.IsNullOrEmpty(jwtSettings.Audience) ? "(not set)" : jwtSettings.Audience)}");
+Console.WriteLine($"  NodeProviderId: {(string.IsNullOrEmpty(jwtSettings.NodeProviderId) ? "(not set)" : jwtSettings.NodeProviderId)}");
+Console.WriteLine($"  PublicKey: {(string.IsNullOrEmpty(jwtSettings.PublicKey) ? "(not set)" : "configured (" + jwtSettings.PublicKey.Length + " chars)")}");
+Console.WriteLine($"  PanelApiUrl: {(string.IsNullOrEmpty(jwtSettings.PanelApiUrl) ? "(not set)" : jwtSettings.PanelApiUrl)}");
+Console.WriteLine($"  AccessTokenExpiryMinutes: {jwtSettings.AccessTokenExpiryMinutes}");
+Console.WriteLine($"  RefreshTokenExpiryDays: {jwtSettings.RefreshTokenExpiryDays}");
+Console.WriteLine("===========================");
 
 builder.Logging.ClearProviders();
 builder.Logging.SetMinimumLevel(LogLevel.Warning);

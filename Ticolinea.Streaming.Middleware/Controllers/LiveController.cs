@@ -4,6 +4,7 @@ using MySqlConnector;
 using System.Text;
 using System.Text.RegularExpressions;
 using ticolinea.stream.service.Db;
+using ticolinea.stream.service.Helpers;
 using ticolinea.stream.service.Modelos;
 
 namespace ticolinea.stream.service.Controllers
@@ -12,6 +13,63 @@ namespace ticolinea.stream.service.Controllers
     [ApiController]
     public class LiveController : ControllerBase
     {
+        /// <summary>
+        /// Stream by JWT token - validates token and serves HLS playlist
+        /// </summary>
+        [ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
+        [HttpGet("{chID}.{ext}")]
+        public async Task<IActionResult> StreamingByToken(int chID, string ext, [FromQuery] string? token = null)
+        {
+            if (string.IsNullOrWhiteSpace(ext) || ext.ToLower() != "m3u8")
+                return Unauthorized();
+
+            // Extract and validate token
+            var extractedToken = token ?? TokenValidation.ExtractToken(Request);
+            var validation = TokenValidation.ValidateToken(extractedToken);
+            
+            if (validation == null || !validation.IsValid)
+                return Unauthorized("Invalid or expired token");
+
+            // Validate MAC if present in token claims
+            if (!string.IsNullOrEmpty(validation.Mac))
+            {
+                // MAC is bound - could add additional MAC validation here if needed
+            }
+
+            var existeCanal = await ObtieneDatosCanal(chID);
+            if (!existeCanal)
+                return Unauthorized();
+
+            var playlistOutput = await ReadPlaylistFile(chID);
+            playlistOutput = AddDiscontinuityTags(playlistOutput);
+            playlistOutput = ReplaceSegmentUrls(playlistOutput);
+
+            return Content(playlistOutput, "application/x-mpegurl", Encoding.UTF8);
+        }
+
+        /// <summary>
+        /// Stream by JWT token for mobile - validates token and serves HLS playlist
+        /// </summary>
+        [ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
+        [HttpGet("{chID}")]
+        public async Task<IActionResult> StreamingMovilByToken(int chID, [FromQuery] string? token = null)
+        {
+            var extractedToken = token ?? TokenValidation.ExtractToken(Request);
+            var validation = TokenValidation.ValidateToken(extractedToken);
+            
+            if (validation == null || !validation.IsValid)
+                return Unauthorized("Invalid or expired token");
+
+            var existeCanal = await ObtieneDatosCanal(chID);
+            if (!existeCanal)
+                return Unauthorized();
+
+            var playlistOutput = await ReadPlaylistFile(chID);
+            playlistOutput = AddDiscontinuityTags(playlistOutput);
+            playlistOutput = ReplaceSegmentUrls(playlistOutput);
+
+            return Content(playlistOutput, "application/x-mpegurl", Encoding.UTF8);
+        }
 
         [ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
         [HttpGet("{chID}/{usuario}/{password}.{ext}")]
@@ -20,7 +78,7 @@ namespace ticolinea.stream.service.Controllers
             if (string.IsNullOrWhiteSpace(ext) || ext.ToLower() != "m3u8")
                 return Unauthorized();
 
-            Usuario? usuariodb = null;
+            Modelos.Usuario? usuariodb = null;
             if (IsRegularUser(usuario))
             {
                 usuariodb = await Helpers.Usuario.VerificarUsuario(usuario, password);
@@ -78,7 +136,7 @@ namespace ticolinea.stream.service.Controllers
         [HttpGet("{chID}/{usuario}/{password}/{macAddress}")]
         public async Task<IActionResult> StreamingMovil(int chID, string usuario, string password, string macAddress)
         {
-            Usuario? usuariodb = null;
+            Modelos.Usuario? usuariodb = null;
 
             if (IsRegularUser(usuario))
             {
@@ -270,7 +328,7 @@ namespace ticolinea.stream.service.Controllers
             return playlistOutput;
         }
 
-        private void ActualizarActividadMovil(int chID, string usuario, string password, Usuario? usuariodb, string macAddress)
+        private void ActualizarActividadMovil(int chID, string usuario, string password, Modelos.Usuario? usuariodb, string macAddress)
         {
             var ip = "";
             var userAgent = Request.Headers["User-Agent"].ToString();
