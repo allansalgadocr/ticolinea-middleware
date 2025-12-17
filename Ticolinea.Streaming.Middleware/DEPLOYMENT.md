@@ -26,6 +26,34 @@ This streaming middleware serves HLS playlists and manages stream processes. It 
 | `appsettings.main.json` | Main provider overrides |
 | `appsettings.fibraencasa.json` | Fibra en Casa provider overrides |
 | `appsettings.{provider}.json` | Add new providers here |
+| `appsettings.{Environment}.json` | Environment-specific overrides (Production, Development, etc.) |
+
+### Configuration Loading Order
+
+The application loads configuration files in the following order (later files override earlier ones):
+
+1. **`appsettings.json`** - Base configuration (always loaded)
+2. **`appsettings.{ASPNETCORE_ENVIRONMENT}.json`** - Environment-specific overrides
+   - Example: If `ASPNETCORE_ENVIRONMENT=Production`, loads `appsettings.Production.json`
+3. **`appsettings.{PROVIDER}.json`** - Provider-specific overrides (if `PROVIDER` is set)
+   - Example: If `PROVIDER=main`, loads `appsettings.main.json`
+   - Example: If `PROVIDER=fibraencasa`, loads `appsettings.fibraencasa.json`
+
+**Important Notes:**
+- `ASPNETCORE_ENVIRONMENT` and `PROVIDER` are **independent** variables
+- Setting `ASPNETCORE_ENVIRONMENT=Production` will load `appsettings.Production.json`
+- The `PROVIDER` variable controls which provider config file is loaded
+- When `PROVIDER=main` (or not set, defaults to "main"), it loads `appsettings.main.json`
+- Provider config files override environment config files, so `appsettings.main.json` will override settings from `appsettings.Production.json`
+
+**Example Scenarios:**
+
+| ASPNETCORE_ENVIRONMENT | PROVIDER | Files Loaded |
+|------------------------|----------|--------------|
+| `Production` | `main` | `appsettings.json` → `appsettings.Production.json` → `appsettings.main.json` |
+| `Production` | `fibraencasa` | `appsettings.json` → `appsettings.Production.json` → `appsettings.fibraencasa.json` |
+| `Development` | `main` | `appsettings.json` → `appsettings.Development.json` → `appsettings.main.json` |
+| `Production` | (not set, defaults to `main`) | `appsettings.json` → `appsettings.Production.json` → `appsettings.main.json` |
 
 ## Environment Variables
 
@@ -112,6 +140,12 @@ TimeoutStopSec=30
 [Install]
 WantedBy=multi-user.target
 ```
+
+**Note:** With the above configuration:
+- `ASPNETCORE_ENVIRONMENT=Production` loads `appsettings.Production.json`
+- `PROVIDER=main` loads `appsettings.main.json` (provider configs override environment configs)
+- Configuration loading order: `appsettings.json` → `appsettings.Production.json` → `appsettings.main.json`
+- Settings in `appsettings.main.json` will override matching settings from `appsettings.Production.json`
 
 ### 5. Start Service
 

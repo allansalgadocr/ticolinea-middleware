@@ -11,7 +11,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Support provider-specific configuration via PROVIDER environment variable
 // Usage: PROVIDER=fibraencasa dotnet run
 var provider = Environment.GetEnvironmentVariable("PROVIDER") ?? "main";
-if (!string.IsNullOrEmpty(provider) && provider != "main")
+if (!string.IsNullOrEmpty(provider))
 {
     builder.Configuration.AddJsonFile($"appsettings.{provider}.json", optional: true, reloadOnChange: true);
 }
