@@ -41,7 +41,7 @@ namespace ticolinea.stream.service.Controllers
                                 Titulo = reader.GetString(4),
                                 ImagenGrande = reader.GetString(5),
                                 StreamId = reader.GetInt32(6),
-                                URL = $"http://tv.play-latino.com:27701/Peliculas/Reproducir/{reader.GetInt32(6)}/{usuario}/{password}.{reader.GetString(9)}",
+                                URL = $"{Constantes.Global.SEGMENT_BASE_URL}/Peliculas/Reproducir/{reader.GetInt32(6)}/{usuario}/{password}.{reader.GetString(9)}",
                                 ResenaEpisodio = reader.GetValue(7)?.ToString(),
                                 ResenaSerie = reader.GetValue(8)?.ToString(),
                                 TituloEpisodio = reader.GetString(10),
@@ -87,7 +87,7 @@ namespace ticolinea.stream.service.Controllers
                                 Contenedor = reader.GetString(5),
                                 Resena = reader.GetString(6),
                                 Titulo = reader.GetString(7),
-                                URL = $"http://tv.play-latino.com:27701/Peliculas/Reproducir/{reader.GetInt32(8)}/{usuario}/{password}.{reader.GetString(5)}"
+                                URL = $"{Constantes.Global.SEGMENT_BASE_URL}/Peliculas/Reproducir/{reader.GetInt32(8)}/{usuario}/{password}.{reader.GetString(5)}"
                             });
                         }
                 }

@@ -27,7 +27,7 @@ namespace ticolinea.stream.service.Controllers
             // Use provider URL from token claims
             var providerBaseUrl = validation.ProviderUrl.TrimEnd('/');
             if (string.IsNullOrEmpty(providerBaseUrl))
-                providerBaseUrl = "http://tv.play-latino.com:27701";
+                providerBaseUrl = Constantes.Global.SEGMENT_BASE_URL;
 
             StringBuilder sb = new();
             sb.AppendLine("#EXTM3U\r\n");
@@ -86,7 +86,7 @@ namespace ticolinea.stream.service.Controllers
 
             var providerBaseUrl = validation.ProviderUrl.TrimEnd('/');
             if (string.IsNullOrEmpty(providerBaseUrl))
-                providerBaseUrl = "http://tv.play-latino.com:27701";
+                providerBaseUrl = Constantes.Global.SEGMENT_BASE_URL;
 
             StringBuilder sb = new();
             sb.AppendLine("#EXTM3U\r\n");
@@ -215,12 +215,12 @@ namespace ticolinea.stream.service.Controllers
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
                 if (chn.Tipo == 1)
                 {
-                    sb.AppendLine($"http://tv.play-latino.com:27701/Live/StreamingMovil/{chn.Id}/{usuario}/{password}/{macAddress}\r\n");
+                    sb.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/Live/StreamingMovil/{chn.Id}/{usuario}/{password}/{macAddress}\r\n");
                 }
 
                 if (chn.Tipo == 2 || chn.Tipo == 3)
                 {
-                    sb.AppendLine($"http://tv.play-latino.com:27701/Peliculas/ReproducirMovil/{chn.Id}/{macAddress}/{usuario}/{password}.{chn.Contenedor}\r\n");
+                    sb.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/Peliculas/ReproducirMovil/{chn.Id}/{macAddress}/{usuario}/{password}.{chn.Contenedor}\r\n");
                 }
             }
 
@@ -274,11 +274,11 @@ namespace ticolinea.stream.service.Controllers
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
                 if (chn.Tipo == 1)
                 {
-                    sb.AppendLine($"http://tv.play-latino.com:27701/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
+                    sb.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
                 }
                 else if (chn.Tipo == 2 || chn.Tipo == 3)
                 {
-                    sb.AppendLine($"http://tv.play-latino.com:27701/Peliculas/Reproducir/{chn.Id}/{usuario}/{password}.{chn.Contenedor}\r\n");
+                    sb.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/Peliculas/Reproducir/{chn.Id}/{usuario}/{password}.{chn.Contenedor}\r\n");
                 }
             }
 
@@ -594,7 +594,7 @@ namespace ticolinea.stream.service.Controllers
         {
             string url = string.Empty;
 #if !DEBUG
-            url = $"http://tv.play-latino.com:27701/Live/Streaming/{streamId}/{usuario}/{password}.m3u8";
+            url = $"{Constantes.Global.SEGMENT_BASE_URL}/Live/Streaming/{streamId}/{usuario}/{password}.m3u8";
 #endif
 #if DEBUG
             url = $"http://localhost:5002/Live/Streaming/{streamId}/{usuario}/{password}.m3u8";
@@ -605,7 +605,7 @@ namespace ticolinea.stream.service.Controllers
         private string obtenerURLPeliculas(int streamId, string usuario, string password, string contenedor)
         {
             string url = string.Empty;
-            url = $"http://tv.play-latino.com:27701/Peliculas/Reproducir/{streamId}/{usuario}/{password}.{contenedor}";
+            url = $"{Constantes.Global.SEGMENT_BASE_URL}/Peliculas/Reproducir/{streamId}/{usuario}/{password}.{contenedor}";
 
             return url;
         }
@@ -718,7 +718,7 @@ namespace ticolinea.stream.service.Controllers
                 if (chn.Tipo == 1)
                 {
 #if !DEBUG
-                    sb.AppendLine($"http://tv.play-latino.com:27701/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
+                    sb.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
 #endif
 #if DEBUG
                     sb.AppendLine($"http://192.168.0.5:5002/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
@@ -726,7 +726,7 @@ namespace ticolinea.stream.service.Controllers
                 }
 
                 if (chn.Tipo == 2)
-                    sb.AppendLine($"http://tv.play-latino.com:27701/Peliculas/Reproducir/{chn.Id}/{usuario}/{password}.{chn.Contenedor}\r\n");
+                    sb.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/Peliculas/Reproducir/{chn.Id}/{usuario}/{password}.{chn.Contenedor}\r\n");
             }
 
             return File(Encoding.UTF8.GetBytes(sb.ToString()), "application/x-mpegurl", $"ticolineaplay_{usuario}.m3u");

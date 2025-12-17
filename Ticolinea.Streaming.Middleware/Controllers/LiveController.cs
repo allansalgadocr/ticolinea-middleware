@@ -90,7 +90,7 @@ namespace ticolinea.stream.service.Controllers
             if (!existeCanal)
                 return Unauthorized();
 
-            const string streamsFolder = Constantes.Global.STREAMS_FOLDER;
+            var streamsFolder = Constantes.Global.STREAMS_FOLDER;
             var playlistFile = Path.Combine(streamsFolder, $"{chID}_.m3u8");
 
             if (!System.IO.File.Exists(playlistFile))
@@ -303,7 +303,7 @@ namespace ticolinea.stream.service.Controllers
             foreach (var line in lines)
             {
                 if (line.EndsWith(".ts"))
-                    outputBuilder.AppendLine($"http://tv.play-latino.com:27703/streams/{line}");
+                    outputBuilder.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/streams/{line}");
                 else
                     outputBuilder.AppendLine(line);
             }

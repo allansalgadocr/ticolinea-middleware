@@ -2,25 +2,50 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Hangfire;
 using ticolinea.stream.service;
 using ticolinea.stream.service.Config;
+using ticolinea.stream.service.Constantes;
 using ticolinea.stream.service.Helpers;
 using Hangfire.InMemory;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure JWT settings for token validation
+// Support provider-specific configuration via PROVIDER environment variable
+// Usage: PROVIDER=fibraencasa dotnet run
+var provider = Environment.GetEnvironmentVariable("PROVIDER") ?? "main";
+if (!string.IsNullOrEmpty(provider) && provider != "main")
+{
+    builder.Configuration.AddJsonFile($"appsettings.{provider}.json", optional: true, reloadOnChange: true);
+}
+
+// Configure settings from appsettings
+var streamingSettings = builder.Configuration.GetSection(StreamingSettings.SectionName).Get<StreamingSettings>() ?? new StreamingSettings();
+var databaseSettings = builder.Configuration.GetSection(DatabaseSettings.SectionName).Get<DatabaseSettings>() ?? new DatabaseSettings();
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
+
+// Initialize global settings
+Global.Initialize(streamingSettings, databaseSettings);
 TokenValidation.Initialize(jwtSettings);
 
-// Log JWT settings status
-Console.WriteLine("=== JWT Settings Loaded ===");
+// Log startup configuration
+Console.WriteLine("========================================");
+Console.WriteLine($"  STREAMING NODE STARTING");
+Console.WriteLine($"  Provider: {streamingSettings.ProviderId} ({streamingSettings.ProviderName})");
+Console.WriteLine("========================================");
+Console.WriteLine();
+Console.WriteLine("=== Database Settings ===");
+Console.WriteLine($"  ConnectionString: {(string.IsNullOrEmpty(databaseSettings.ConnectionString) ? "(not set)" : "configured")}");
+Console.WriteLine();
+Console.WriteLine("=== Streaming Settings ===");
+Console.WriteLine($"  StreamsFolder: {streamingSettings.StreamsFolder}");
+Console.WriteLine($"  SegmentBaseUrl: {streamingSettings.SegmentBaseUrl}");
+Console.WriteLine($"  EnableStreamExecution: {streamingSettings.EnableStreamExecution}");
+Console.WriteLine();
+Console.WriteLine("=== JWT Settings ===");
 Console.WriteLine($"  Issuer: {(string.IsNullOrEmpty(jwtSettings.Issuer) ? "(not set)" : jwtSettings.Issuer)}");
 Console.WriteLine($"  Audience: {(string.IsNullOrEmpty(jwtSettings.Audience) ? "(not set)" : jwtSettings.Audience)}");
 Console.WriteLine($"  NodeProviderId: {(string.IsNullOrEmpty(jwtSettings.NodeProviderId) ? "(not set)" : jwtSettings.NodeProviderId)}");
 Console.WriteLine($"  PublicKey: {(string.IsNullOrEmpty(jwtSettings.PublicKey) ? "(not set)" : "configured (" + jwtSettings.PublicKey.Length + " chars)")}");
 Console.WriteLine($"  PanelApiUrl: {(string.IsNullOrEmpty(jwtSettings.PanelApiUrl) ? "(not set)" : jwtSettings.PanelApiUrl)}");
-Console.WriteLine($"  AccessTokenExpiryMinutes: {jwtSettings.AccessTokenExpiryMinutes}");
-Console.WriteLine($"  RefreshTokenExpiryDays: {jwtSettings.RefreshTokenExpiryDays}");
-Console.WriteLine("===========================");
+Console.WriteLine("========================================");
 
 builder.Logging.ClearProviders();
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
