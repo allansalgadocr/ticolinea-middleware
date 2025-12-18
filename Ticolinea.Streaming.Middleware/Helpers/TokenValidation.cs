@@ -178,6 +178,12 @@ namespace ticolinea.stream.service.Helpers
                     System.Text.Encoding.UTF8,
                     "application/json"
                 );
+                
+                // Add API key header if configured
+                if (!string.IsNullOrEmpty(_settings.PanelApiKey))
+                {
+                    request.Headers.Add("X-Auth-API-Key", _settings.PanelApiKey);
+                }
 
                 var response = await _httpClient.SendAsync(request);
                 

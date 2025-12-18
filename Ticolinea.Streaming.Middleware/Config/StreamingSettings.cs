@@ -68,6 +68,12 @@ namespace ticolinea.stream.service.Config
         /// Base URL for streaming node (e.g., http://tv.play-latino.com:27701)
         /// </summary>
         public string SegmentBaseUrl { get; set; } = "http://tv.play-latino.com:27701";
+
+        /// <summary>
+        /// Base URL for streams server (e.g., http://tv.play-latino.com:27703)
+        /// Used for fetching stream segments from another server
+        /// </summary>
+        public string StreamsBaseUrl { get; set; } = "http://tv.play-latino.com:27703";
     }
 
     public class DatabaseSettings

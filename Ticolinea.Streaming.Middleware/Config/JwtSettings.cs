@@ -30,6 +30,11 @@ namespace ticolinea.stream.service.Config
         public string? PanelApiUrl { get; set; }
         
         /// <summary>
+        /// API Key for authenticating with Panel API (X-Auth-API-Key header)
+        /// </summary>
+        public string? PanelApiKey { get; set; }
+        
+        /// <summary>
         /// Cache duration in seconds for introspection results (default 60s)
         /// </summary>
         public int IntrospectCacheSeconds { get; set; } = 60;

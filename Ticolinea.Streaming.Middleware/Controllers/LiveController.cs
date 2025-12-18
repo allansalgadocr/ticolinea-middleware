@@ -303,7 +303,7 @@ namespace ticolinea.stream.service.Controllers
             foreach (var line in lines)
             {
                 if (line.EndsWith(".ts"))
-                    outputBuilder.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/streams/{line}");
+                    outputBuilder.AppendLine($"{Constantes.Global.STREAMS_BASE_URL}/streams/{line}");
                 else
                     outputBuilder.AppendLine(line);
             }

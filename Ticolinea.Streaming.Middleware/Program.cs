@@ -13,13 +13,45 @@ var builder = WebApplication.CreateBuilder(args);
 var provider = Environment.GetEnvironmentVariable("PROVIDER") ?? "main";
 if (!string.IsNullOrEmpty(provider))
 {
-    builder.Configuration.AddJsonFile($"appsettings.{provider}.json", optional: true, reloadOnChange: true);
+    var providerConfigFile = $"appsettings.{provider}.json";
+    var configPath = Path.Combine(builder.Environment.ContentRootPath, providerConfigFile);
+    var fileExists = File.Exists(configPath);
+    
+    Console.WriteLine($"=== Configuration Loading ===");
+    Console.WriteLine($"Provider: {provider}");
+    Console.WriteLine($"Config file: {providerConfigFile}");
+    Console.WriteLine($"Content root: {builder.Environment.ContentRootPath}");
+    Console.WriteLine($"Config path: {configPath}");
+    Console.WriteLine($"Config file exists: {fileExists}");
+    
+    builder.Configuration.AddJsonFile(providerConfigFile, optional: true, reloadOnChange: true);
+    
+    if (!fileExists)
+    {
+        Console.WriteLine($"WARNING: {providerConfigFile} not found at {configPath}");
+        Console.WriteLine($"This may cause configuration values to be missing!");
+    }
+    Console.WriteLine();
 }
 
 // Configure settings from appsettings
 var streamingSettings = builder.Configuration.GetSection(StreamingSettings.SectionName).Get<StreamingSettings>() ?? new StreamingSettings();
 var databaseSettings = builder.Configuration.GetSection(DatabaseSettings.SectionName).Get<DatabaseSettings>() ?? new DatabaseSettings();
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
+
+// Debug: Check raw configuration values
+var dbSection = builder.Configuration.GetSection(DatabaseSettings.SectionName);
+var jwtSection = builder.Configuration.GetSection(JwtSettings.SectionName);
+Console.WriteLine($"=== Configuration Debug ===");
+Console.WriteLine($"Database section exists: {dbSection.Exists()}");
+Console.WriteLine($"Database ConnectionString from config: {(string.IsNullOrEmpty(dbSection["ConnectionString"]) ? "(empty)" : "***configured***")}");
+Console.WriteLine($"JWT section exists: {jwtSection.Exists()}");
+Console.WriteLine($"JWT Issuer from config: {(string.IsNullOrEmpty(jwtSection["Issuer"]) ? "(empty)" : jwtSection["Issuer"])}");
+Console.WriteLine($"JWT Audience from config: {(string.IsNullOrEmpty(jwtSection["Audience"]) ? "(empty)" : jwtSection["Audience"])}");
+Console.WriteLine($"JWT NodeProviderId from config: {(string.IsNullOrEmpty(jwtSection["NodeProviderId"]) ? "(empty)" : jwtSection["NodeProviderId"])}");
+Console.WriteLine($"JWT PublicKey from config: {(string.IsNullOrEmpty(jwtSection["PublicKey"]) ? "(empty)" : "***configured***")}");
+Console.WriteLine($"JWT PanelApiUrl from config: {(string.IsNullOrEmpty(jwtSection["PanelApiUrl"]) ? "(empty)" : jwtSection["PanelApiUrl"])}");
+Console.WriteLine();
 
 // Initialize global settings
 Global.Initialize(streamingSettings, databaseSettings);
@@ -37,6 +69,7 @@ Console.WriteLine();
 Console.WriteLine("=== Streaming Settings ===");
 Console.WriteLine($"  StreamsFolder: {streamingSettings.StreamsFolder}");
 Console.WriteLine($"  SegmentBaseUrl: {streamingSettings.SegmentBaseUrl}");
+Console.WriteLine($"  StreamsBaseUrl: {streamingSettings.StreamsBaseUrl}");
 Console.WriteLine($"  EnableStreamExecution: {streamingSettings.EnableStreamExecution}");
 Console.WriteLine();
 Console.WriteLine("=== JWT Settings ===");

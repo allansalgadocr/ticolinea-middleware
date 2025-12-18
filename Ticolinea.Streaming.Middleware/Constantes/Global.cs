@@ -39,6 +39,7 @@ namespace ticolinea.stream.service.Constantes
 
         // URLs
         public static string SEGMENT_BASE_URL => _streamingSettings?.SegmentBaseUrl ?? "http://tv.play-latino.com:27701";
+        public static string STREAMS_BASE_URL => _streamingSettings?.StreamsBaseUrl ?? "http://tv.play-latino.com:27703";
 
         // Database
         public static string MARIADB_CONN => _databaseSettings?.ConnectionString ?? "";
