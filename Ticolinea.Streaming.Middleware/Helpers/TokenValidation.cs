@@ -162,6 +162,50 @@ namespace ticolinea.stream.service.Helpers
         }
 
         /// <summary>
+        /// Check if user account is still active by calling Panel API
+        /// </summary>
+        public static async Task<bool> CheckUserStatusFromPanel(string accessToken)
+        {
+            if (_settings == null || string.IsNullOrEmpty(_settings.PanelApiUrl))
+                return false;
+
+            try
+            {
+                // Call Panel API status endpoint to check if user is still active
+                var statusUrl = $"{_settings.PanelApiUrl.TrimEnd('/')}/auth/status";
+                var request = new HttpRequestMessage(HttpMethod.Post, statusUrl);
+                request.Content = new StringContent(
+                    JsonSerializer.Serialize(new { accessToken }),
+                    System.Text.Encoding.UTF8,
+                    "application/json"
+                );
+                
+                // Add API key header if configured
+                if (!string.IsNullOrEmpty(_settings.PanelApiKey))
+                {
+                    request.Headers.Add("X-Auth-API-Key", _settings.PanelApiKey);
+                }
+
+                var response = await _httpClient.SendAsync(request);
+                
+                if (!response.IsSuccessStatusCode)
+                    return false;
+
+                var content = await response.Content.ReadAsStringAsync();
+                var statusResponse = JsonSerializer.Deserialize<StatusResponse>(content, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                return statusResponse?.Valid ?? false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Call panel API to refresh tokens - checks user is still active
         /// </summary>
         public static async Task<RefreshResponse?> RefreshTokensFromPanel(string refreshToken)
@@ -330,6 +374,14 @@ namespace ticolinea.stream.service.Helpers
         public string? AccessToken { get; set; }
         public string? RefreshToken { get; set; }
         public int ExpiresIn { get; set; }
+        public string? ProviderUrl { get; set; }
+        public string? Error { get; set; }
+    }
+
+    public class StatusResponse
+    {
+        public bool Valid { get; set; }
+        public bool NeedsRefresh { get; set; }
         public string? Error { get; set; }
     }
 }

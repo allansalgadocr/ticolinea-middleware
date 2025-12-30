@@ -39,7 +39,8 @@ namespace ticolinea.stream.service.Controllers
                 access_token = refreshResponse.AccessToken,
                 refresh_token = refreshResponse.RefreshToken ?? request.RefreshToken, // Return new refresh token if rotated
                 expires_in = refreshResponse.ExpiresIn,
-                token_type = "Bearer"
+                token_type = "Bearer",
+                providerUrl = refreshResponse.ProviderUrl
             });
         }
 
@@ -67,23 +68,36 @@ namespace ticolinea.stream.service.Controllers
         }
 
         /// <summary>
-        /// Check token expiry status without full validation
-        /// Useful for clients to decide if they need to refresh
+        /// Check token expiry status and user account status
+        /// Validates token locally first, then checks with Panel API if user is still active
         /// </summary>
         [HttpGet]
-        public IActionResult Status([FromQuery] string? token = null)
+        public async Task<IActionResult> Status([FromQuery] string? token = null)
         {
             var extractedToken = token ?? TokenValidation.ExtractToken(Request);
             
             if (string.IsNullOrWhiteSpace(extractedToken))
                 return BadRequest(new { error = "token_required" });
 
+            // First validate token locally (fast check)
             var validation = TokenValidation.ValidateToken(extractedToken);
+            
+            if (validation == null || !validation.IsValid)
+            {
+                return Ok(new
+                {
+                    valid = false,
+                    needsRefresh = true
+                });
+            }
+
+            // Token is valid locally, now check with Panel API if user account is still active
+            var userStatus = await TokenValidation.CheckUserStatusFromPanel(extractedToken);
             
             return Ok(new
             {
-                valid = validation?.IsValid ?? false,
-                needsRefresh = validation == null || !validation.IsValid
+                valid = userStatus,
+                needsRefresh = !userStatus
             });
         }
     }

@@ -68,7 +68,7 @@ namespace ticolinea.stream.service.Helpers
                         {
                             cmdPackages.CommandText = @"
                                 SELECT DISTINCT cp.id_paquete_tv
-                                FROM client_packages cp
+                                FROM client_package cp
                                 INNER JOIN paquete_tv pt ON cp.id_paquete_tv = pt.id_paquete_tv
                                 WHERE cp.client_id = @clientId
                                 AND pt.activo = 1;";
@@ -159,7 +159,7 @@ namespace ticolinea.stream.service.Helpers
                         {
                             cmdPackages.CommandText = @"
                                 SELECT DISTINCT cp.id_paquete_tv
-                                FROM client_packages cp
+                                FROM client_package cp
                                 INNER JOIN paquete_tv pt ON cp.id_paquete_tv = pt.id_paquete_tv
                                 WHERE cp.client_id = @clientId
                                 AND pt.activo = 1;";
