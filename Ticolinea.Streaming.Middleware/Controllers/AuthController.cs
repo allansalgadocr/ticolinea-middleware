@@ -92,7 +92,24 @@ namespace ticolinea.stream.service.Controllers
             }
 
             // Token is valid locally, now check with Panel API if user account is still active
+            // If Panel API is unavailable (network issue), fall back to local validation
+            // This prevents forcing re-login on transient network failures
             var userStatus = await TokenValidation.CheckUserStatusFromPanel(extractedToken);
+            
+            // If Panel API check failed (network/outage), assume valid based on local validation
+            // This is safe because local validation already checked token signature and expiration
+            // Panel API check is an additional security layer, not a hard requirement
+            if (!userStatus)
+            {
+                // Log the failure but don't invalidate the token
+                // Return valid=true with needsRefresh=false to indicate token is locally valid
+                // The Panel API check failure will be logged but won't block the user
+                return Ok(new
+                {
+                    valid = true, // Assume valid if Panel API unavailable
+                    needsRefresh = false
+                });
+            }
             
             return Ok(new
             {

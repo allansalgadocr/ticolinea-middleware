@@ -86,10 +86,16 @@ namespace ticolinea.stream.service.Helpers
                 }
 
                 // Validate providerId matches this node
-                if (!string.IsNullOrEmpty(_settings.NodeProviderId) &&
-                    !string.Equals(result.ProviderId, _settings.NodeProviderId, StringComparison.OrdinalIgnoreCase))
+                // Normalize both values for comparison (case-insensitive, no spaces)
+                if (!string.IsNullOrEmpty(_settings.NodeProviderId))
                 {
-                    return null; // Token is for a different provider node
+                    var normalizedTokenProviderId = NormalizeProviderId(result.ProviderId);
+                    var normalizedNodeProviderId = NormalizeProviderId(_settings.NodeProviderId);
+                    
+                    if (!string.Equals(normalizedTokenProviderId, normalizedNodeProviderId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return null; // Token is for a different provider node
+                    }
                 }
 
                 return result;
@@ -307,6 +313,21 @@ namespace ticolinea.stream.service.Helpers
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Normalize provider ID for comparison (case-insensitive, no spaces)
+        /// </summary>
+        private static string NormalizeProviderId(string providerId)
+        {
+            if (string.IsNullOrWhiteSpace(providerId))
+                return providerId;
+
+            return providerId
+                .ToLowerInvariant()
+                .Replace(" ", "")
+                .Replace("-", "")
+                .Replace("_", "");
         }
     }
 
