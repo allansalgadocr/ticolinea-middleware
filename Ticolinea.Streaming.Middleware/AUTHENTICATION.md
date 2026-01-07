@@ -13,7 +13,7 @@ The Streaming Middleware validates JWT tokens issued by the Panel API (`ticoline
 └────────┬────────┘                    └────────┬─────────┘
          │                                       │
          │ 1. Request streams with token         │
-         │    GET /Streams/PlaylistByToken?token │
+         │    GET /Streams/PlaylistByToken/PlaylistByToken?token=... │
          ├───────────────────────────────────────▶
          │                                       │
          │                                       │ 2. Validate JWT token
@@ -245,7 +245,7 @@ Located in: `Controllers/AuthController.cs`
 
 ### PlaylistByToken Endpoint
 
-**Endpoint:** `GET /Streams/PlaylistByToken?token=...`
+**Endpoint:** `GET /Streams/PlaylistByToken/PlaylistByToken?token=...`
 
 **Process:**
 1. Extracts token from query parameter
