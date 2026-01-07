@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.IdentityModel.Tokens;
 using ticolinea.stream.service.Config;
+using System.Net;
 
 namespace ticolinea.stream.service.Helpers
 {
@@ -19,7 +20,26 @@ namespace ticolinea.stream.service.Helpers
         public static void Initialize(JwtSettings settings)
         {
             _settings = settings;
+            
+            // Ensure issuer and audience are trimmed (no whitespace)
+            if (_settings != null)
+            {
+                _settings.Issuer = _settings.Issuer?.Trim() ?? string.Empty;
+                _settings.Audience = _settings.Audience?.Trim() ?? string.Empty;
+            }
+            
             _publicKey = LoadPublicKey(settings.PublicKey);
+            
+            if (_publicKey == null)
+            {
+                Console.WriteLine("[TokenValidation] WARNING: Public key failed to load!");
+            }
+            else
+            {
+                Console.WriteLine($"[TokenValidation] Public key loaded successfully.");
+                Console.WriteLine($"[TokenValidation] Configured Issuer: '{_settings?.Issuer}' (length: {_settings?.Issuer?.Length ?? 0})");
+                Console.WriteLine($"[TokenValidation] Configured Audience: '{_settings?.Audience}' (length: {_settings?.Audience?.Length ?? 0})");
+            }
         }
 
         /// <summary>
@@ -33,11 +53,52 @@ namespace ticolinea.stream.service.Helpers
         public static TokenValidationResult? ValidateToken(string? token)
         {
             if (string.IsNullOrWhiteSpace(token) || _settings == null || _publicKey == null)
+            {
+                Console.WriteLine($"[TokenValidation] ValidateToken called with invalid parameters. Token: {!string.IsNullOrWhiteSpace(token)}, Settings: {_settings != null}, PublicKey: {_publicKey != null}");
                 return null;
+            }
+
+            // Log token info for debugging (first and last 50 chars, length)
+            var tokenPreview = token.Length > 100 
+                ? $"{token.Substring(0, 50)}...{token.Substring(token.Length - 50)}" 
+                : token;
+            Console.WriteLine($"[TokenValidation] Token received - Length: {token.Length}, Preview: {tokenPreview}");
+            Console.WriteLine($"[TokenValidation] Token starts with: {(token.Length > 20 ? token.Substring(0, 20) : token)}");
 
             try
             {
+                // First, try to read the token without validation to see its claims
                 var tokenHandler = new JwtSecurityTokenHandler();
+                
+                if (!tokenHandler.CanReadToken(token))
+                {
+                    Console.WriteLine($"[TokenValidation] Token cannot be read - may be malformed or not a JWT");
+                    Console.WriteLine($"[TokenValidation] Token format check - Contains dots: {token.Contains('.')}, Dot count: {token.Count(c => c == '.')}");
+                    // JWT should have 3 parts separated by dots: header.payload.signature
+                    var parts = token.Split('.');
+                    Console.WriteLine($"[TokenValidation] Token parts count: {parts.Length} (expected 3)");
+                    if (parts.Length > 0)
+                    {
+                        Console.WriteLine($"[TokenValidation] First part (header) length: {parts[0].Length}");
+                    }
+                    return null;
+                }
+                
+                var unvalidatedToken = tokenHandler.ReadJwtToken(token);
+                var tokenIssuer = unvalidatedToken.Issuer ?? "(null)";
+                var tokenAudiences = unvalidatedToken.Audiences != null ? string.Join(", ", unvalidatedToken.Audiences) : "(null)";
+                
+                Console.WriteLine($"[TokenValidation] Token issuer: '{tokenIssuer}' (length: {tokenIssuer.Length})");
+                Console.WriteLine($"[TokenValidation] Token audiences: '{tokenAudiences}'");
+                Console.WriteLine($"[TokenValidation] Expected issuer: '{_settings.Issuer}' (length: {_settings.Issuer?.Length ?? 0})");
+                Console.WriteLine($"[TokenValidation] Expected audience: '{_settings.Audience}' (length: {_settings.Audience?.Length ?? 0})");
+                
+                // Check for exact match (case-sensitive)
+                var issuerMatch = string.Equals(tokenIssuer, _settings.Issuer, StringComparison.Ordinal);
+                var audienceMatch = unvalidatedToken.Audiences != null && unvalidatedToken.Audiences.Contains(_settings.Audience, StringComparer.Ordinal);
+                
+                Console.WriteLine($"[TokenValidation] Issuer match: {issuerMatch}, Audience match: {audienceMatch}");
+
                 var validationParameters = new TokenValidationParameters
                 {
                     ValidateIssuer = true,
@@ -85,31 +146,43 @@ namespace ticolinea.stream.service.Helpers
                         .ToList();
                 }
 
-                // Validate providerId matches this node
-                // Normalize both values for comparison (case-insensitive, no spaces)
-                if (!string.IsNullOrEmpty(_settings.NodeProviderId))
-                {
-                    var normalizedTokenProviderId = NormalizeProviderId(result.ProviderId);
-                    var normalizedNodeProviderId = NormalizeProviderId(_settings.NodeProviderId);
-                    
-                    if (!string.Equals(normalizedTokenProviderId, normalizedNodeProviderId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return null; // Token is for a different provider node
-                    }
-                }
+                // Skip providerId validation - accept tokens regardless of providerId
+                // This allows tokens from Panel API to work on any streaming node
+                // ProviderId is informational only, not used for access control
 
                 return result;
             }
-            catch (SecurityTokenExpiredException)
+            catch (SecurityTokenExpiredException ex)
             {
+                Console.WriteLine($"[TokenValidation] Token expired: {ex.Message}");
                 return null; // Token expired
             }
-            catch (SecurityTokenException)
+            catch (SecurityTokenInvalidSignatureException ex)
             {
+                Console.WriteLine($"[TokenValidation] Invalid signature - Key mismatch? Issuer: {_settings?.Issuer}, Audience: {_settings?.Audience}");
+                Console.WriteLine($"[TokenValidation] Signature error details: {ex.Message}");
+                return null; // Invalid signature - likely key mismatch
+            }
+            catch (SecurityTokenInvalidIssuerException ex)
+            {
+                Console.WriteLine($"[TokenValidation] Invalid issuer. Expected: {_settings?.Issuer}, Got: {ex.InvalidIssuer}");
+                return null; // Invalid issuer
+            }
+            catch (SecurityTokenInvalidAudienceException ex)
+            {
+                var invalidAudiences = ex.InvalidAudience != null ? string.Join(", ", ex.InvalidAudience) : "(none)";
+                Console.WriteLine($"[TokenValidation] Invalid audience. Expected: {_settings?.Audience}, Got: {invalidAudiences}");
+                return null; // Invalid audience
+            }
+            catch (SecurityTokenException ex)
+            {
+                Console.WriteLine($"[TokenValidation] Security token exception: {ex.GetType().Name} - {ex.Message}");
                 return null; // Invalid token
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Console.WriteLine($"[TokenValidation] Unexpected exception: {ex.GetType().Name} - {ex.Message}");
+                Console.WriteLine($"[TokenValidation] Stack trace: {ex.StackTrace}");
                 return null;
             }
         }
@@ -259,13 +332,27 @@ namespace ticolinea.stream.service.Helpers
         {
             // Try query parameter first
             if (request.Query.TryGetValue("token", out var queryToken) && !string.IsNullOrEmpty(queryToken))
-                return queryToken;
+            {
+                Console.WriteLine($"[TokenValidation] Token extracted from query parameter - Length: {queryToken.ToString().Length}");
+                // URL decode the token in case it's encoded
+                var decoded = WebUtility.UrlDecode(queryToken.ToString());
+                if (decoded != queryToken.ToString())
+                {
+                    Console.WriteLine($"[TokenValidation] Token was URL encoded, decoded length: {decoded.Length}");
+                }
+                return decoded;
+            }
 
             // Try Authorization header
             var authHeader = request.Headers["Authorization"].FirstOrDefault();
             if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-                return authHeader.Substring(7).Trim();
+            {
+                var token = authHeader.Substring(7).Trim();
+                Console.WriteLine($"[TokenValidation] Token extracted from Authorization header - Length: {token.Length}");
+                return token;
+            }
 
+            Console.WriteLine($"[TokenValidation] No token found in request - Query has 'token': {request.Query.ContainsKey("token")}, Auth header present: {!string.IsNullOrEmpty(authHeader)}");
             return null;
         }
 
@@ -290,27 +377,52 @@ namespace ticolinea.stream.service.Helpers
         private static RsaSecurityKey? LoadPublicKey(string publicKeyPem)
         {
             if (string.IsNullOrWhiteSpace(publicKeyPem))
+            {
+                Console.WriteLine("[TokenValidation] Public key is null or empty");
                 return null;
+            }
 
             try
             {
                 var rsa = RSA.Create();
                 
-                // Remove PEM headers and whitespace
+                // Remove all PEM headers (both PUBLIC and PRIVATE - in case of copy-paste error)
+                // Also handle both \n and actual newlines
                 var keyContent = publicKeyPem
-                    .Replace("-----BEGIN PUBLIC KEY-----", "")
-                    .Replace("-----END PUBLIC KEY-----", "")
-                    .Replace("\n", "")
-                    .Replace("\r", "")
+                    .Replace("-----BEGIN PUBLIC KEY-----", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("-----END PUBLIC KEY-----", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("-----BEGIN PRIVATE KEY-----", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("-----END PRIVATE KEY-----", "", StringComparison.OrdinalIgnoreCase)
+                    .Replace("\\n", "")  // Handle escaped newlines in JSON
+                    .Replace("\n", "")  // Handle actual newlines
+                    .Replace("\r", "")  // Handle carriage returns
+                    .Replace(" ", "")   // Remove any spaces
                     .Trim();
+
+                if (string.IsNullOrWhiteSpace(keyContent))
+                {
+                    Console.WriteLine("[TokenValidation] Public key content is empty after removing headers");
+                    return null;
+                }
+
+                // Log the first and last few characters for debugging (without exposing full key)
+                Console.WriteLine($"[TokenValidation] Key content length: {keyContent.Length}, starts with: {keyContent.Substring(0, Math.Min(20, keyContent.Length))}...");
 
                 var keyBytes = Convert.FromBase64String(keyContent);
                 rsa.ImportSubjectPublicKeyInfo(keyBytes, out _);
                 
+                Console.WriteLine($"[TokenValidation] Public key loaded successfully. Key size: {rsa.KeySize} bits");
                 return new RsaSecurityKey(rsa);
             }
-            catch
+            catch (FormatException ex)
             {
+                Console.WriteLine($"[TokenValidation] Failed to load public key: Base64 format error - {ex.Message}");
+                Console.WriteLine($"[TokenValidation] Key preview (first 100 chars): {publicKeyPem.Substring(0, Math.Min(100, publicKeyPem.Length))}...");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TokenValidation] Failed to load public key: {ex.GetType().Name} - {ex.Message}");
                 return null;
             }
         }

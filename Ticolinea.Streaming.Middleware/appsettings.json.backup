@@ -6,9 +6,11 @@
     }
   },
   "AllowedHosts": "*",
+  
   "Database": {
     "ConnectionString": "server=localhost;Port=3306;uid=root;pwd=password;database=streamdb;Allow User Variables=True;SSLMode=None;Pooling=true;Min Pool Size=20;Max Pool Size=150;Connection Lifetime=600;Default Command Timeout=30;AllowPublicKeyRetrieval=True"
   },
+
   "Streaming": {
     "ProviderId": "main",
     "ProviderName": "Main Provider",
@@ -28,7 +30,7 @@
   "Jwt": {
     "Issuer": "ticolinea.panel",
     "Audience": "streaming-node",
-    "PublicKey": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlzpC3AiboY+2n9NvaqNG\nGJTvpxUe5ouub5N+ajWYSMpJhzXTXWAOgbaylt4GR96j+XMWAc1QqotjQX7CkF2u\nENTTCjENTiYvJm7dTX3nxN7bjxrfxcFoAC6XF2J0IPL+lpE6kqeaPRLp0JLOn4lW\n3s9F8oo5ww/8I2fs68ZIUT6gPcGHxWWpyVMmYIrsrkDLBNhVPeqfxrHSmUjsdmIE\nguKrB8gfoqVZK0/bq7KomyNRNB+QVRIJaMjX4/XdT6Ci8hgro3+9tijAv8LRS6AE\nFi1bgp86jR1/6z+FGsjdAS6VhD0TxohXxhgsigQQyBbwFq0dvjb4v2d0zKaNx7Pq\nFQIDAQAB\n-----END PUBLIC KEY-----\n",
+    "PublicKey": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlzpC3AiboY+2n9NvaqNG\nGJTvpxUe5ouub5N+ajWYSMpJhzXTXWAOgbaylt4GR96j+XMWAc1QqotjQX7CkF2u\nENTTCjENTiYvJm7dTX3nxN7bjxrfxcFoAC6XF2J0IPL+lpE6kqeaPRLp0JLOn4lW\n3s9F8oo5ww/8I2fs68ZIUT6gPcGHxWWpyVMmYIrsrkDLBNhVPeqfxrHSmUjsdmIE\nguKrB8gfoqVZK0/bq7KomyNRNB+QVRIJaMjX4/XdT6Ci8hgro3+9tijAv8LRS6AE\nFi1bgp86jR1/6z+FGsjdAS6VhD0TxohXxhgsigQQyBbwFq0dvjb4v2d0zKaNx7Pq\nFQIDAQAB\n-----END PUBLIC KEY-----",
     "NodeProviderId": "main",
     "PanelApiUrl": "http://tv.play-latino.com:27702/api/v2",
     "PanelApiKey": "JqPeJ041RuJBF9WQSk7j7456ryqt79V6cSYFUgbv13cEDFlfPo7vSWPQGicdpHQl",
