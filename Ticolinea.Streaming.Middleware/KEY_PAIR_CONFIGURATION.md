@@ -45,7 +45,7 @@ RSA keys come in **pairs**:
     "Issuer": "ticolinea.panel",
     "Audience": "streaming-node",
     "PrivateKey": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----",
-    "AccessTokenExpiryMinutes": 5,
+    "AccessTokenExpiryMinutes": 60,
     "RefreshTokenExpiryDays": 364
   }
 }
@@ -337,4 +337,3 @@ echo "\"PublicKey\": \"$PUBLIC_KEY_JSON\""
 
 **Last Updated:** January 2025  
 **Maintained By:** Ticolinea Development Team
-

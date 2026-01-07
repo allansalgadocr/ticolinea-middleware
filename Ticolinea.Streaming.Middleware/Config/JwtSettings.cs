@@ -40,9 +40,9 @@ namespace ticolinea.stream.service.Config
         public int IntrospectCacheSeconds { get; set; } = 60;
         
         /// <summary>
-        /// Access token expiry in minutes (default 5)
+        /// Access token expiry in minutes (default 60)
         /// </summary>
-        public int AccessTokenExpiryMinutes { get; set; } = 5;
+        public int AccessTokenExpiryMinutes { get; set; } = 60;
         
         /// <summary>
         /// Refresh token expiry in days (default 30)

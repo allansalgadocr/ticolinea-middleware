@@ -192,7 +192,7 @@ This tells the middleware where to call for token refresh.
     "PublicKey": "RSA public key in PEM format",
     "NodeProviderId": "main",
     "PanelApiUrl": "http://tv.play-latino.com:27702/api/v2",
-    "AccessTokenExpiryMinutes": 5,
+    "AccessTokenExpiryMinutes": 60,
     "RefreshTokenExpiryDays": 364
   }
 }
@@ -245,10 +245,14 @@ Located in: `Controllers/AuthController.cs`
 
 ### PlaylistByToken Endpoint
 
-**Endpoint:** `GET /Streams/PlaylistByToken/PlaylistByToken?token=...`
+**Endpoint:** `GET /Streams/PlaylistByToken/PlaylistByToken`
+
+**Query Params:**
+- `token` (optional if using `Authorization: Bearer ...`)
+- `includeToken` (default: `true`) - when `false`, playlist URLs omit `?token=...`
 
 **Process:**
-1. Extracts token from query parameter
+1. Extracts token from query parameter or `Authorization` header
 2. Validates token using `TokenValidation.ValidateToken()`
 3. Checks provider ID matches this node
 4. Filters streams based on user's `packageIds`
@@ -266,7 +270,7 @@ For stream access, tokens must have:
 ## Security Features
 
 1. **Signature Validation**: All tokens are cryptographically verified
-2. **Expiration Checking**: Access tokens expire in 5 minutes
+2. **Expiration Checking**: Access tokens expire in 60 minutes
 3. **Provider Isolation**: Only tokens for this provider are accepted
 4. **User Status Check**: Refresh requires Panel API to verify user is active
 5. **Token Type Validation**: Refresh tokens cannot be used as access tokens
@@ -341,4 +345,3 @@ Can override settings for production environment.
 - **"token_expired"**: Access token expired (normal, use refresh)
 - **"refresh_failed"**: User was deactivated or Panel API unreachable
 - **"provider mismatch"**: Token is for different provider node
-

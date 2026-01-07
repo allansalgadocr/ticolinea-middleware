@@ -14,7 +14,9 @@ namespace ticolinea.stream.service.Controllers
         /// Get playlist by JWT token - validates token and uses claims for authorization
         /// </summary>
         [HttpGet("PlaylistByToken")]
-        public async Task<IActionResult> PlaylistByToken([FromQuery] string? token = null)
+        public async Task<IActionResult> PlaylistByToken(
+            [FromQuery] string? token = null,
+            [FromQuery] bool includeToken = true)
         {
             // Extract token from query or header
             var extractedToken = token ?? TokenValidation.ExtractToken(Request);
@@ -56,16 +58,17 @@ namespace ticolinea.stream.service.Controllers
             }
 
             // Build playlist with token-based URLs
+            var tokenSuffix = includeToken ? $"?token={validation.Token}" : string.Empty;
             foreach (var chn in bouquet)
             {
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
                 if (chn.Tipo == 1)
                 {
-                    sb.AppendLine($"{providerBaseUrl}/Live/StreamingByToken/{chn.Id}.m3u8?token={validation.Token}\r\n");
+                    sb.AppendLine($"{providerBaseUrl}/Live/StreamingByToken/{chn.Id}.m3u8{tokenSuffix}\r\n");
                 }
                 else if (chn.Tipo == 2 || chn.Tipo == 3)
                 {
-                    sb.AppendLine($"{providerBaseUrl}/Peliculas/ReproducirByToken/{chn.Id}.{chn.Contenedor}?token={validation.Token}\r\n");
+                    sb.AppendLine($"{providerBaseUrl}/Peliculas/ReproducirByToken/{chn.Id}.{chn.Contenedor}{tokenSuffix}\r\n");
                 }
             }
 
@@ -76,7 +79,9 @@ namespace ticolinea.stream.service.Controllers
         /// Get playlist by JWT token for mobile devices
         /// </summary>
         [HttpGet("PlaylistMobileByToken")]
-        public async Task<IActionResult> PlaylistMobileByToken([FromQuery] string? token = null)
+        public async Task<IActionResult> PlaylistMobileByToken(
+            [FromQuery] string? token = null,
+            [FromQuery] bool includeToken = true)
         {
             var extractedToken = token ?? TokenValidation.ExtractToken(Request);
             var validation = TokenValidation.ValidateToken(extractedToken);
@@ -111,16 +116,17 @@ namespace ticolinea.stream.service.Controllers
                 bouquet.AddRange(bouquetPeliculas);
             }
 
+            var tokenSuffix = includeToken ? $"?token={validation.Token}" : string.Empty;
             foreach (var chn in bouquet)
             {
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
                 if (chn.Tipo == 1)
                 {
-                    sb.AppendLine($"{providerBaseUrl}/Live/StreamingMovilByToken/{chn.Id}?token={validation.Token}\r\n");
+                    sb.AppendLine($"{providerBaseUrl}/Live/StreamingMovilByToken/{chn.Id}{tokenSuffix}\r\n");
                 }
                 else if (chn.Tipo == 2 || chn.Tipo == 3)
                 {
-                    sb.AppendLine($"{providerBaseUrl}/Peliculas/ReproducirMovilByToken/{chn.Id}.{chn.Contenedor}?token={validation.Token}\r\n");
+                    sb.AppendLine($"{providerBaseUrl}/Peliculas/ReproducirMovilByToken/{chn.Id}.{chn.Contenedor}{tokenSuffix}\r\n");
                 }
             }
 
