@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Diagnostics;
 using ticolinea.stream.service.Constantes;
 using ticolinea.stream.service.Helpers;
 using ticolinea.stream.service.Services;
@@ -15,6 +16,8 @@ namespace ticolinea.stream.service.Controllers
             var dbStats = await ConnectionPoolMonitor.GetPoolStatsAsync();
             var connectionInfo = await ConnectionPoolMonitor.GetConnectionInfoAsync();
             var isHealthy = await ConnectionPoolMonitor.TestConnectionAsync();
+            var process = Process.GetCurrentProcess();
+            var processUptime = DateTime.UtcNow - process.StartTime.ToUniversalTime();
 
             var healthStatus = new
             {
@@ -33,6 +36,8 @@ namespace ticolinea.stream.service.Controllers
                 system = new
                 {
                     uptime = Environment.TickCount64,
+                    processUptimeSeconds = (long)processUptime.TotalSeconds,
+                    processUptimeMs = (long)processUptime.TotalMilliseconds,
                     memoryUsage = GC.GetTotalMemory(false),
                     processorCount = Environment.ProcessorCount,
                     osVersion = Environment.OSVersion.ToString()
