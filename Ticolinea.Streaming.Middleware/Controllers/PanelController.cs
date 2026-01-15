@@ -1,12 +1,8 @@
-﻿using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using MikrotikDotNet;
+﻿using Microsoft.AspNetCore.Mvc;
 using MySqlConnector;
-using Newtonsoft.Json;
 using System.Diagnostics;
 using CliWrap;
 using CliWrap.Buffered;
-using ticolinea.stream.service.Db;
 using ticolinea.stream.service.Modelos;
 using ticolinea.stream.service.Services;
 using ticolinea.stream.service.Helpers;
