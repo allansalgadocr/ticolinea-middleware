@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using CliWrap.EventStream;
 using CliWrap;
 using CliWrap.Buffered;
@@ -26,6 +26,8 @@ namespace ticolinea.stream.service.Services
         
         private static readonly ConcurrentDictionary<int, DateTime> _lastLogTime = new();
         private static readonly TimeSpan _logThrottleInterval = TimeSpan.FromSeconds(4);
+        private static readonly ConcurrentDictionary<int, DateTime> _lastBufferAlert = new();
+        private static readonly TimeSpan _bufferAlertThrottleInterval = TimeSpan.FromMinutes(10);
 
         private class ProbeInfo
         {
@@ -72,6 +74,8 @@ namespace ticolinea.stream.service.Services
                 {
                     cts.Dispose(); // ✅ Proper disposal
                 }
+
+                CleanupStreamState(streamId);
             }
         }
 
@@ -128,6 +132,11 @@ namespace ticolinea.stream.service.Services
 
                     int exitCode = await LanzarProcesoFfmpeg(stream, cancellationToken);
 
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
                     if (exitCode != 0)
                     {
                         retryCount++;
@@ -149,7 +158,6 @@ namespace ticolinea.stream.service.Services
                         delaySeconds = Math.Max(1, delaySeconds + jitter);
 
                         _logger.Error($"FFmpeg falló (exitCode {exitCode}) para {stream.StreamId}. Reintentando en {delaySeconds}s...");
-                        Data.Streams.InsertaStreamError($"({stream.StreamId}): Proceso reiniciado por error {exitCode} (intento {retryCount})");
                         
                         await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
                     }
@@ -175,7 +183,6 @@ namespace ticolinea.stream.service.Services
                 {
                     retryCount++;
                     _logger.Error($"Error inesperado en supervisión del stream {stream.StreamId}: {ex.Message}", ex);
-                    Data.Streams.InsertaStreamError($"({stream.StreamId}): Error inesperado: {ex.Message}");
                     
                     if (retryCount >= maxRetries)
                     {
@@ -190,6 +197,11 @@ namespace ticolinea.stream.service.Services
 
             _logger.Debug($"Supervisión detenida para stream {stream.StreamId}");
             _tokens.TryRemove(stream.StreamId, out _);
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                CleanupStreamState(stream.StreamId);
+            }
         }
 
         private static async Task<int> LanzarProcesoFfmpeg(StreamDb stream, CancellationToken cancellationToken)
@@ -234,6 +246,8 @@ namespace ticolinea.stream.service.Services
             int exitCode = -1;
             int processId = -1;
             bool processStarted = false;
+            bool startupSemaphoreReleased = false;
+            bool wasCancelled = false;
             
             try
             {
@@ -299,7 +313,7 @@ namespace ticolinea.stream.service.Services
                     //.Add(isSrt ? "-fflags -avoid_negative_ts make_zero": "", false)
                     .Add($"{reconnect}", false)
                     .Add($"{frameRate}", false)
-                    .Add("-thread_queue_size 8192", false) // 🧠 importante antes de -i
+                    .Add("-thread_queue_size 4096", false) // 🧠 importante antes de -i (reduced from 8192 to balance memory/performance)
                     .Add($"-analyzeduration {analyzeDuration}", false) // ✅ Moved before -i
                     .Add($"-probesize {stream.ProbeSize}", false) // ✅ Moved before -i
                     .Add($"-i \"{stream.Fuente}\"", false)
@@ -328,27 +342,41 @@ namespace ticolinea.stream.service.Services
                         case StartedCommandEvent started:
                             processId = started.ProcessId;
                             processStarted = true;
+                            if (!startupSemaphoreReleased)
+                            {
+                                _startupSemaphore.Release();
+                                startupSemaphoreReleased = true;
+                                _logger.Debug($"Stream {stream.StreamId}: Released startup semaphore");
+                            }
+
                             _logger.Debug($"Proceso iniciado: PID {processId} para stream {stream.StreamId}");
-                            await Jobs.ActualizaInfoCanal(processId, stream.StreamId);
-                            
-                            _startupSemaphore.Release();
-                            _logger.Debug($"Stream {stream.StreamId}: Released startup semaphore");
+                            try
+                            {
+                                await Jobs.ActualizaInfoCanal(processId, stream.StreamId);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.Error($"Error actualizando info de canal para stream {stream.StreamId}: {ex.Message}", ex);
+                            }
                             break;
                         case StandardOutputCommandEvent stdOut:
                             _logger.Debug($"Out-{stream.StreamId}> {stdOut.Text}");
                             break;
                         case StandardErrorCommandEvent stdErr:
+                            if (IsLowBufferWarning(stdErr.Text) && ShouldSendBufferAlert(stream.StreamId))
+                            {
+                                _ = Jobs.AlertLowBufferAsync(stream.StreamId, stdErr.Text);
+                            }
+
                             var shouldLog = ShouldLogError(stream.StreamId, stdErr.Text);
                             if (shouldLog)
                             {
                                 _logger.Error($"Err-{stream.StreamId}> {stdErr.Text}");
-                                Data.Streams.InsertaStreamError($"({stream.StreamId}): {stdErr.Text}");
                             }
                             break;
                         case ExitedCommandEvent exited:
                             exitCode = exited.ExitCode;
-                            _logger.Debug($"FFmpeg terminó para stream {stream.StreamId}; Código: {exitCode}");
-                            Data.Streams.InsertaStreamError($"({stream.StreamId}): Finalizó con código {exitCode}");
+                            _logger.Debug($"FFmpeg terminó para stream {stream.StreamId}; Código: {exitCode}{(cancellationToken.IsCancellationRequested ? " (cancelado)" : "")}");
                             await Jobs.ActualizarCanalEstado(stream.StreamId, true, -1);
                             break;
                     }
@@ -356,25 +384,43 @@ namespace ticolinea.stream.service.Services
             }
             catch (OperationCanceledException)
             {
+                wasCancelled = true;
                 _logger.Debug($"Proceso cancelado manualmente para stream {stream.StreamId}");
             }
             catch (Exception ex)
             {
-                _logger.Error($"Error inesperado en FFmpeg para stream {stream.StreamId}: {ex.Message}", ex);
-                Data.Streams.InsertaStreamError($"({stream.StreamId}): Error FFmpeg: {ex.Message}");
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    _logger.Debug($"Error ignorado por cancelación para stream {stream.StreamId}: {ex.Message}");
+                }
+                else
+                {
+                    _logger.Error($"Error inesperado en FFmpeg para stream {stream.StreamId}: {ex.Message}", ex);
+                }
             }
 
             }
             finally
             {
-                if (!processStarted)
+                if (!startupSemaphoreReleased)
                 {
                     _startupSemaphore.Release();
+                    startupSemaphoreReleased = true;
                     _logger.Debug($"Stream {stream.StreamId}: Released startup semaphore");
                 }
             }
 
-            if (exitCode != 0)
+            if (cancellationToken.IsCancellationRequested)
+            {
+                wasCancelled = true;
+            }
+
+            if (wasCancelled)
+            {
+                exitCode = 0;
+            }
+
+            if (!wasCancelled && exitCode != 0)
             {
                 var failureTime = DateTime.UtcNow;
                 _failureTracker.AddOrUpdate(stream.StreamId, 
@@ -388,12 +434,20 @@ namespace ticolinea.stream.service.Services
                     _logger.Error($"Stream {stream.StreamId}: Circuit breaker triggered after {currentFailures} failures");
                 }
             }
-            else
+            else if (!wasCancelled)
             {
                 _failureTracker.TryRemove(stream.StreamId, out _);
             }
 
             return exitCode;
+        }
+
+        private static void CleanupStreamState(int streamId)
+        {
+            _lastProcessStart.TryRemove(streamId, out _);
+            _failureTracker.TryRemove(streamId, out _);
+            _lastLogTime.TryRemove(streamId, out _);
+            _lastBufferAlert.TryRemove(streamId, out _);
         }
 
         private static bool ShouldLogError(int streamId, string errorText)
@@ -422,6 +476,39 @@ namespace ticolinea.stream.service.Services
             
             // Only log if it's not a normal pattern
             return !normalPatterns.Any(pattern => errorText.Contains(pattern, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool IsLowBufferWarning(string errorText)
+        {
+            if (string.IsNullOrWhiteSpace(errorText))
+            {
+                return false;
+            }
+
+            var patterns = new[]
+            {
+                "Thread message queue blocking",
+                "Input buffer full",
+                "Queue overflow",
+                "thread_queue_size"
+            };
+
+            return patterns.Any(pattern => errorText.Contains(pattern, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool ShouldSendBufferAlert(int streamId)
+        {
+            var now = DateTime.UtcNow;
+            if (_lastBufferAlert.TryGetValue(streamId, out var lastAlert))
+            {
+                if (now - lastAlert < _bufferAlertThrottleInterval)
+                {
+                    return false;
+                }
+            }
+
+            _lastBufferAlert.AddOrUpdate(streamId, now, (_, _) => now);
+            return true;
         }
 
         // Enhanced audio codec detection with better error handling

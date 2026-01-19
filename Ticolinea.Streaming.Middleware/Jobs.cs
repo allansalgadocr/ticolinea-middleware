@@ -1,8 +1,10 @@
-﻿using CliWrap;
+using CliWrap;
 using CliWrap.Buffered;
 using Hangfire;
+using log4net;
 using MySqlConnector;
 using System.Diagnostics;
+using System.IO;
 using System.Net;
 using System.Text;
 using ticolinea.stream.service.Modelos;
@@ -13,6 +15,7 @@ namespace ticolinea.stream.service
 {
     public class Jobs
     {
+        private static readonly ILog _logger = LogManager.GetLogger(typeof(Jobs));
         // 🚀 SIMPLE CACHE FOR STREAM DATA - Reduces database queries
         public static List<StreamDb>? _cachedStreams = null;
         public static DateTime _lastCacheRefresh = DateTime.MinValue;
@@ -26,7 +29,7 @@ namespace ticolinea.stream.service
             StreamExecutionGuard.LogStreamExecutionAttempt("RevisarStreams");
             if (!StreamExecutionGuard.CanExecuteStreams())
             {
-                Console.WriteLine("⚠️  Stream execution disabled - skipping stream review");
+                _logger.Warn("⚠️  Stream execution disabled - skipping stream review");
                 return;
             }
 
@@ -43,15 +46,21 @@ namespace ticolinea.stream.service
                 {
                     if (stream.ProcesoId == -1 || !await EstaProcesoFfmpegVivo(stream.ProcesoId, stream.StreamId))
                     {
-                        Console.WriteLine($"🔄 Reiniciando stream {stream.StreamId}...");
+                        _logger.Debug($"🔄 Reiniciando stream {stream.StreamId}...");
                         bool started = await StreamingService.ForzarInicioInmediato(stream);
-                        Console.WriteLine($"🚀 Stream {stream.StreamId} reinicio automático: {(started ? "EXITOSO" : "FALLÓ")}");
+                        if (started)
+                        {
+                            _logger.Info($"🚀 Stream {stream.StreamId} reinicio automático: EXITOSO");
+                        }
+                        else
+                        {
+                            _logger.Warn($"🚀 Stream {stream.StreamId} reinicio automático: FALLÓ");
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"❌ Error al revisar stream {stream.StreamId}: {ex.Message}");
-                    Data.Streams.InsertaStreamError($"({stream.StreamId}) ERROR: {ex.Message}");
+                    _logger.Error($"❌ Error al revisar stream {stream.StreamId}: {ex.Message}", ex);
                 }
             });
         }
@@ -68,7 +77,7 @@ namespace ticolinea.stream.service
             {
                 if (_cachedStreams != null && DateTime.UtcNow - _lastCacheRefresh < _cacheExpiration)
                 {
-                    Console.WriteLine($"📦 Using cached streams data ({_cachedStreams.Count} streams)");
+                    _logger.Debug($"📦 Using cached streams data ({_cachedStreams.Count} streams)");
                     return _cachedStreams.ToList(); // Return a copy to prevent mutation
                 }
             }
@@ -115,7 +124,7 @@ namespace ticolinea.stream.service
             {
                 _cachedStreams = streams;
                 _lastCacheRefresh = DateTime.UtcNow;
-                Console.WriteLine($"📦 Updated cache with {streams.Count} streams");
+                _logger.Debug($"📦 Updated cache with {streams.Count} streams");
             }
 
             return streams;
@@ -128,7 +137,7 @@ namespace ticolinea.stream.service
             {
                 _cachedStreams = null;
                 _lastCacheRefresh = DateTime.MinValue;
-                Console.WriteLine("🗑️ Stream cache invalidated");
+                _logger.Debug("🗑️ Stream cache invalidated");
             }
         }
 
@@ -166,13 +175,12 @@ namespace ticolinea.stream.service
             {
                 try
                 {
-                    Console.WriteLine($"🔍 Verificando codec de stream {stream.StreamId}...");
+                    _logger.Debug($"🔍 Verificando codec de stream {stream.StreamId}...");
                     await ObtenerInfoCodec(stream.StreamId, stream.Fuente);
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"❌ Error al verificar codec del stream {stream.StreamId}: {ex.Message}");
-                    Data.Streams.InsertaStreamError($"({stream.StreamId}) ERROR codec: {ex.Message}");
+                    _logger.Error($"❌ Error al verificar codec del stream {stream.StreamId}: {ex.Message}", ex);
                 }
             });
         }
@@ -255,7 +263,7 @@ namespace ticolinea.stream.service
             }
             catch (Exception ex)
             {
-                Console.Write("ERROR AL OBTENER PROCESO.", ex.Message);
+                _logger.Error("ERROR AL OBTENER PROCESO.", ex);
             }
 
             return false;
@@ -287,7 +295,7 @@ namespace ticolinea.stream.service
             }
             catch (Exception ex)
             {
-                Console.Write("ERROR AL OBTENER PROCESO.", ex.Message);
+                _logger.Error("ERROR AL OBTENER PROCESO.", ex);
             }
 
             return null;
@@ -325,15 +333,15 @@ namespace ticolinea.stream.service
                             if (proc.HasExited) continue;
 
                             proc.Kill(true);
-                            Console.WriteLine($"✅ Proceso {pid} detenido.");
+                            _logger.Info($"✅ Proceso {pid} detenido.");
                         }
                         catch (ArgumentException)
                         {
-                            Console.WriteLine($"⚠️ Proceso con PID {pid} ya no existe.");
+                            _logger.Warn($"⚠️ Proceso con PID {pid} ya no existe.");
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"❌ Error al detener proceso {pid}: {ex.Message}");
+                            _logger.Error($"❌ Error al detener proceso {pid}: {ex.Message}", ex);
                         }
                     }
                 }
@@ -351,11 +359,11 @@ namespace ticolinea.stream.service
                 cmd.Parameters.AddWithValue("@id", streamId);
                 await cmd.ExecuteNonQueryAsync();
 
-                Console.WriteLine($"🗂 Stream {streamId} marcado como detenido en la base de datos.");
+                _logger.Info($"🗂 Stream {streamId} marcado como detenido en la base de datos.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ Error general al detener el stream {streamId}: {ex.Message}");
+                _logger.Error($"❌ Error general al detener el stream {streamId}: {ex.Message}", ex);
             }
         }
 
@@ -387,7 +395,7 @@ namespace ticolinea.stream.service
             StreamExecutionGuard.LogStreamExecutionAttempt($"IniciarStream({stream.StreamId})");
             if (!StreamExecutionGuard.CanExecuteStreams())
             {
-                Console.WriteLine($"⚠️  Stream execution disabled - cannot start stream {stream.StreamId}");
+                _logger.Warn($"⚠️  Stream execution disabled - cannot start stream {stream.StreamId}");
                 return;
             }
 
@@ -437,7 +445,7 @@ namespace ticolinea.stream.service
                 StringBuilder sb = new();
                 List<StreamDb> streams = new();
                 int streamsCaidos = 0;
-                sb.AppendLine("[CANT] streams se reportaron como caídos:");
+                sb.AppendLine($"{Constantes.Global.PROVIDER_NAME}: [CANT] streams se reportaron como caídos:");
                 using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
                 {
                     using (var cmd = cnn.CreateCommand())
@@ -499,7 +507,7 @@ namespace ticolinea.stream.service
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine("ERROR AL OBTENER INFO DE CANAL." + ex.Message);
+                        _logger.Error($"ERROR AL OBTENER INFO DE CANAL.{ex.Message}", ex);
                     }
                 });
 
@@ -514,21 +522,22 @@ namespace ticolinea.stream.service
 
                 if (streamsCaidos > 0)
                 {
-                    string token = "5334506189:AAG-OX79_IGuBFIzgSWF6WecoRt4AH3W4kM";
-                    string chatId = "-1001723468137";
-                    string message = sb.ToString();
-                    string retval = string.Empty;
-                    string url = $"https://api.telegram.org/bot{token}/sendMessage?chat_id={chatId}&text={message}";
+                    // Get health information
+                    var healthInfo = await ObtenerInfoSalud();
+                    
+                    // Build improved message with provider identifier and health info
+                    var message = $"🚨 ALERTA: {Constantes.Global.PROVIDER_NAME} 🚨\n\n" +
+                                 $"📺 STREAMS CAÍDOS: {streamsCaidos}\n\n" +
+                                 sb.ToString() + "\n" +
+                                 $"{healthInfo}\n\n" +
+                                 $"⏰ {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
 
-                    using (var webClient = new WebClient())
-                    {
-                        retval = webClient.DownloadString(url);
-                    }
+                    await EnviarAlertaTelegram(message);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.Message);
+                _logger.Error(ex.Message, ex);
             }
         }
 
@@ -562,13 +571,13 @@ namespace ticolinea.stream.service
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine("ERROR AL OBTENER INFO DE CANAL." + ex.Message);
+                        _logger.Error($"ERROR AL OBTENER INFO DE CANAL.{ex.Message}", ex);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.Message);
+                _logger.Error(ex.Message, ex);
             }
         }
 
@@ -623,7 +632,7 @@ namespace ticolinea.stream.service
             }
             catch (Exception ex)
             {
-                Console.WriteLine("ERROR AL OBTENER INFO CODEC" + ex.Message);
+                _logger.Error($"ERROR AL OBTENER INFO CODEC{ex.Message}", ex);
             }
         }
 
@@ -648,7 +657,7 @@ namespace ticolinea.stream.service
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"ERROR AL MATAR CONEXIONES.{ex.Message}");
+                _logger.Error($"ERROR AL MATAR CONEXIONES.{ex.Message}", ex);
             }
         }
 
@@ -670,7 +679,7 @@ namespace ticolinea.stream.service
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"ERROR AL MATAR CONEXIONES.{ex.Message}");
+                _logger.Error($"ERROR AL MATAR CONEXIONES.{ex.Message}", ex);
             }
         }
 
@@ -682,7 +691,7 @@ namespace ticolinea.stream.service
                 var streamsFolder = Constantes.Global.STREAMS_FOLDER;
                 if (!Directory.Exists(streamsFolder))
                 {
-                    Console.WriteLine($"⚠️ Streams folder does not exist: {streamsFolder}");
+                    _logger.Warn($"⚠️ Streams folder does not exist: {streamsFolder}");
                     return;
                 }
 
@@ -709,18 +718,18 @@ namespace ticolinea.stream.service
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"⚠️ Error deleting file {file.Name}: {ex.Message}");
+                        _logger.Warn($"⚠️ Error deleting file {file.Name}: {ex.Message}", ex);
                     }
                 }
 
                 if (deletedCount > 0)
                 {
-                    Console.WriteLine($"✅ Cleaned up {deletedCount} old files, freed {freedSpace / 1024 / 1024} MB from {streamsFolder}");
+                    _logger.Info($"✅ Cleaned up {deletedCount} old files, freed {freedSpace / 1024 / 1024} MB from {streamsFolder}");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ ERROR AL ELIMINAR ARCHIVOS VIEJOS: {ex.Message}");
+                _logger.Error($"❌ ERROR AL ELIMINAR ARCHIVOS VIEJOS: {ex.Message}", ex);
             }
         }
 
@@ -732,7 +741,7 @@ namespace ticolinea.stream.service
                 var streamsFolder = Constantes.Global.STREAMS_FOLDER;
                 if (!Directory.Exists(streamsFolder))
                 {
-                    Console.WriteLine($"⚠️ Streams folder does not exist: {streamsFolder}");
+                    _logger.Warn($"⚠️ Streams folder does not exist: {streamsFolder}");
                     return;
                 }
 
@@ -752,7 +761,7 @@ namespace ticolinea.stream.service
 
                 if (files.Count == 0)
                 {
-                    Console.WriteLine("✅ No large files to clean up");
+                    _logger.Debug("✅ No large files to clean up");
                     return;
                 }
 
@@ -776,11 +785,11 @@ namespace ticolinea.stream.service
                             // If we can't parse stream ID, delete if it's very old or very large
                             if (file.Length > 100000000 || file.LastWriteTime < now.AddHours(-1))
                             {
-                                long fileSize = file.Length;
+                                long unparsedFileSize = file.Length;
                                 file.Delete();
                                 deletedCount++;
-                                freedSpace += fileSize;
-                                Console.WriteLine($"🗑️ Deleted unparseable large file: {fileName} ({fileSize / 1024 / 1024} MB)");
+                                freedSpace += unparsedFileSize;
+                                _logger.Warn($"🗑️ Deleted unparseable large file: {fileName} ({unparsedFileSize / 1024 / 1024} MB)");
                             }
                             continue;
                         }
@@ -812,12 +821,12 @@ namespace ticolinea.stream.service
                         file.Delete();
                         deletedCount++;
                         freedSpace += fileSize;
-                        Console.WriteLine($"🗑️ Deleted large file: {fileName} ({fileSize / 1024 / 1024} MB) - Stream {streamId}");
+                        _logger.Info($"🗑️ Deleted large file: {fileName} ({fileSize / 1024 / 1024} MB) - Stream {streamId}");
 
                         // If stream was active, stop it (file was corrupted or stuck)
                         if (activeStream != null && activeStream.ProcesoId > 0)
                         {
-                            Console.WriteLine($"🛑 Stopping stream {streamId} due to large file deletion");
+                            _logger.Warn($"🛑 Stopping stream {streamId} due to large file deletion");
                             await DetenerProceso(activeStream.ProcesoId, activeStream.StreamId);
                             stoppedStreams++;
                         }
@@ -825,26 +834,26 @@ namespace ticolinea.stream.service
                     catch (IOException ex)
                     {
                         // File might be in use, skip it
-                        Console.WriteLine($"⚠️ Cannot delete {file.Name} (file in use): {ex.Message}");
+                        _logger.Warn($"⚠️ Cannot delete {file.Name} (file in use): {ex.Message}", ex);
                     }
                     catch (UnauthorizedAccessException ex)
                     {
-                        Console.WriteLine($"⚠️ Access denied deleting {file.Name}: {ex.Message}");
+                        _logger.Warn($"⚠️ Access denied deleting {file.Name}: {ex.Message}", ex);
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"⚠️ Error processing large file {file.Name}: {ex.Message}");
+                        _logger.Warn($"⚠️ Error processing large file {file.Name}: {ex.Message}", ex);
                     }
                 }
 
                 if (deletedCount > 0)
                 {
-                    Console.WriteLine($"✅ Large file cleanup: Deleted {deletedCount} files, freed {freedSpace / 1024 / 1024} MB, stopped {stoppedStreams} streams");
+                    _logger.Info($"✅ Large file cleanup: Deleted {deletedCount} files, freed {freedSpace / 1024 / 1024} MB, stopped {stoppedStreams} streams");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ ERROR AL ELIMINAR ARCHIVOS GRANDES: {ex.Message}");
+                _logger.Error($"❌ ERROR AL ELIMINAR ARCHIVOS GRANDES: {ex.Message}", ex);
             }
         }
 
@@ -914,25 +923,23 @@ namespace ticolinea.stream.service
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.Message);
+                _logger.Error(ex.Message, ex);
             }
         }
 
         private static void Watcher_Error(object sender, ErrorEventArgs e)
         {
-            Console.WriteLine(e.GetException());
+            _logger.Error("Error en FileSystemWatcher.", e.GetException());
         }
 
         private static void Watcher_Renamed(object sender, RenamedEventArgs e)
         {
-            Console.WriteLine($"Renamed:");
-            Console.WriteLine($"    Old: {e.OldFullPath}");
-            Console.WriteLine($"    New: {e.FullPath}");
+            _logger.Debug($"Renamed: Old: {e.OldFullPath} New: {e.FullPath}");
         }
 
         private static void Watcher_Deleted(object sender, FileSystemEventArgs e)
         {
-            Console.WriteLine($"Deleted: {e.FullPath}");
+            _logger.Debug($"Deleted: {e.FullPath}");
         }
 
         private static void Watcher_Created(object sender, FileSystemEventArgs e)
@@ -947,7 +954,7 @@ namespace ticolinea.stream.service
                 return;
             }
 
-            Console.WriteLine($"Changed: {e.FullPath}");
+            _logger.Debug($"Changed: {e.FullPath}");
         }
 
         [DisableConcurrentExecution(60)]
@@ -978,19 +985,30 @@ namespace ticolinea.stream.service
                     alerts.Add($"💾 DISCO: {diskUsage:F1}% (CRÍTICO)");
                 }
 
+                // Check Streams folder usage
+                var streamsFolderUsage = await ObtenerUsoDiscoCarpeta(Constantes.Global.STREAMS_FOLDER);
+                if (streamsFolderUsage > 80)
+                {
+                    alerts.Add($"📁 STREAMS ({Path.GetFileName(Constantes.Global.STREAMS_FOLDER.TrimEnd('/'))}): {streamsFolderUsage:F1}% (CRÍTICO)");
+                }
+
                 // Send alert if any resource is over 80%
                 if (alerts.Count > 0)
                 {
-                    var message = $"🚨 ALERTA DE RECURSOS DEL SERVIDOR 🚨\n\n" +
+                    // Get full health info for context
+                    var healthInfo = await ObtenerInfoSalud();
+                    
+                    var message = $"🚨 ALERTA DE RECURSOS: {Constantes.Global.PROVIDER_NAME} 🚨\n\n" +
                                  string.Join("\n", alerts) +
-                                 $"\n\n⏰ {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
+                                 $"\n\n{healthInfo}\n\n" +
+                                 $"⏰ {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
 
                     await EnviarAlertaTelegram(message);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error al monitorear recursos del sistema: {ex.Message}");
+                _logger.Error($"Error al monitorear recursos del sistema: {ex.Message}", ex);
             }
         }
 
@@ -999,11 +1017,13 @@ namespace ticolinea.stream.service
             try
             {
                 // Try vmstat first (more reliable)
+                // On Ubuntu, idle column can be $15 (no virtualization) or $16 (with st/stolen time)
                 try
                 {
+                    // Try $16 first (Ubuntu with virtualization/VPS - most common case)
                     var result = await Cli
                         .Wrap("sh")
-                        .WithArguments(new[] { "-c", "vmstat 1 2 | tail -1 | awk '{print 100 - $15}'" })
+                        .WithArguments(new[] { "-c", "vmstat 1 2 | tail -1 | awk '{idle=$16; if(idle==\"\" || idle==0) idle=$15; print 100 - idle}'" })
                         .ExecuteBufferedAsync();
 
                     var output = result.StandardOutput.Trim().Replace(',', '.');
@@ -1014,7 +1034,7 @@ namespace ticolinea.stream.service
                 }
                 catch
                 {
-                    // vmstat not available, fall back to /proc/stat
+                    // vmstat not available or failed, fall back to /proc/stat
                 }
 
                 // Fallback to /proc/stat parsing with proper two-sample measurement
@@ -1048,7 +1068,7 @@ namespace ticolinea.stream.service
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error al obtener uso de CPU: {ex.Message}");
+                _logger.Error($"Error al obtener uso de CPU: {ex.Message}", ex);
             }
 
             return 0;
@@ -1072,7 +1092,7 @@ namespace ticolinea.stream.service
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error al obtener uso de RAM: {ex.Message}");
+                _logger.Error($"Error al obtener uso de RAM: {ex.Message}", ex);
             }
 
             return 0;
@@ -1096,10 +1116,66 @@ namespace ticolinea.stream.service
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error al obtener uso de disco: {ex.Message}");
+                _logger.Error($"Error al obtener uso de disco: {ex.Message}", ex);
             }
 
             return 0;
+        }
+
+        private static async Task<double> ObtenerUsoDiscoCarpeta(string folderPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(folderPath) || !Directory.Exists(folderPath))
+                {
+                    return 0;
+                }
+
+                // Get disk usage for specific folder
+                var result = await Cli
+                    .Wrap("sh")
+                    .WithArguments(new[] { "-c", $"df -P \"{folderPath}\" | awk 'NR==2 {{gsub(/%/, \"\", $5); print $5+0}}'" })
+                    .ExecuteBufferedAsync();
+
+                var output = result.StandardOutput.Trim().Replace(',', '.');
+                if (double.TryParse(output, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double diskUsage))
+                {
+                    return Math.Max(0, Math.Min(100, diskUsage)); // Clamp between 0-100
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"Error al obtener uso de disco para carpeta {folderPath}: {ex.Message}", ex);
+            }
+
+            return 0;
+        }
+
+        private static async Task<string> ObtenerInfoSalud()
+        {
+            try
+            {
+                var cpuUsage = await ObtenerUsoCPU();
+                var ramUsage = await ObtenerUsoRAM();
+                var diskUsage = await ObtenerUsoDisco();
+                var streamsFolderUsage = await ObtenerUsoDiscoCarpeta(Constantes.Global.STREAMS_FOLDER);
+
+                var cpuEmoji = cpuUsage > 80 ? "🔥" : cpuUsage > 60 ? "⚠️" : "✅";
+                var ramEmoji = ramUsage > 80 ? "🔥" : ramUsage > 60 ? "⚠️" : "✅";
+                var diskEmoji = diskUsage > 80 ? "🔥" : diskUsage > 60 ? "⚠️" : "✅";
+                var streamsEmoji = streamsFolderUsage > 80 ? "🔥" : streamsFolderUsage > 60 ? "⚠️" : "✅";
+
+                return $"📊 SALUD DEL SERVIDOR:\n" +
+                       $"{cpuEmoji} CPU: {cpuUsage:F1}%\n" +
+                       $"{ramEmoji} RAM: {ramUsage:F1}%\n" +
+                       $"{diskEmoji} Disco: {diskUsage:F1}%\n" +
+                       $"{streamsEmoji} Streams ({Path.GetFileName(Constantes.Global.STREAMS_FOLDER.TrimEnd('/'))}): {streamsFolderUsage:F1}%";
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"Error al obtener información de salud: {ex.Message}", ex);
+                return "⚠️ No se pudo obtener información de salud";
+            }
         }
 
         private static async Task EnviarAlertaTelegram(string message)
@@ -1117,7 +1193,24 @@ namespace ticolinea.stream.service
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error al enviar alerta de Telegram: {ex.Message}");
+                _logger.Error($"Error al enviar alerta de Telegram: {ex.Message}", ex);
+            }
+        }
+
+        public static async Task AlertLowBufferAsync(int streamId, string details)
+        {
+            try
+            {
+                var envInfo = StreamExecutionGuard.GetEnvironmentInfo();
+                var trimmed = details.Length > 200 ? details.Substring(0, 200) : details;
+                var message = $"⚠️ BUFFER BAJO EN STREAM\nStream: {streamId}\nEnv: {envInfo}\nDetalle: {trimmed}";
+
+                await EnviarAlertaTelegram(message);
+                _logger.Info($"Buffer alert sent for stream {streamId}");
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"Error al enviar alerta de buffer para stream {streamId}: {ex.Message}", ex);
             }
         }
     }

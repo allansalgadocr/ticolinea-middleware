@@ -1,9 +1,12 @@
+using log4net;
 using ticolinea.stream.service.Constantes;
 
 namespace ticolinea.stream.service.Helpers
 {
     public static class StreamExecutionGuard
     {
+        private static readonly ILog _logger = LogManager.GetLogger(typeof(StreamExecutionGuard));
+
         public static bool CanExecuteStreams()
         {
             return Global.ENABLE_STREAM_EXECUTION;
@@ -27,13 +30,11 @@ namespace ticolinea.stream.service.Helpers
         {
             if (!CanExecuteStreams())
             {
-                Console.WriteLine($"⚠️  STREAM EXECUTION BLOCKED: {operation}");
-                Console.WriteLine($"   Environment: {GetEnvironmentInfo()}");
-                Console.WriteLine($"   To enable: Build in Release mode or set ENABLE_STREAM_EXECUTION=true");
+                _logger.Warn($"⚠️  STREAM EXECUTION BLOCKED: {operation}. {GetEnvironmentInfo()}. To enable: Build in Release mode or set ENABLE_STREAM_EXECUTION=true");
             }
             else
             {
-                Console.WriteLine($"✅ Stream execution allowed: {operation}");
+                _logger.Debug($"✅ Stream execution allowed: {operation}");
             }
         }
     }
