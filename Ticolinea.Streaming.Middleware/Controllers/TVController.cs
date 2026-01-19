@@ -26,7 +26,7 @@ public class TVController : Controller
         if (!agenteValido)
         {
             _ = Data.Dispositivos.LogActividadSospechosa(macaddress, userAgent, ip);
-            return Unauthorized();
+            //return Unauthorized();
         }
 
         var bouquet = await Adapters.Bouquet.ObtenerLista();
@@ -64,7 +64,7 @@ public class TVController : Controller
         if (!agenteValido)
         {
             _ = Data.Dispositivos.LogActividadSospechosa(macaddress, userAgent, ip);
-            return Unauthorized();
+            //return Unauthorized();
         }
 
         var bouquet = await Adapters.Bouquet.ObtenerLista();

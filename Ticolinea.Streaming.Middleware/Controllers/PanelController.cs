@@ -1740,6 +1740,75 @@ namespace ticolinea.stream.service.Controllers
 
             return Ok(usuarioEnLinea);
         }
+        
+        /// <summary>
+        /// Remove this method in the future - replaced by ObtenerUsuariosLinea
+        /// </summary>
+        /// <param name="usuario"></param>
+        /// <param name="password"></param>
+        /// <returns></returns>
+        [HttpGet("{usuario}/{password}")]
+        public async Task<IActionResult> ObtenerUsuariosLineaFibraEnCasa(string usuario, string password)
+        {
+            List<PanelUsuariosEnLinea> usuarioEnLinea = new();
+
+            if (usuario != "ticolineapanel" || password != "e&9QzbF2DB7tg5&s") return Unauthorized();
+
+            try
+            {
+                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                {
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "select usuario,notas,nombre_stream from actividad_usuario_actualmente a " +
+                                            "inner join usuarios b " +
+                                            "on a.usuario_id = b.id " +
+                                            "inner join streams c " +
+                                            "on a.stream_id = c.id Where b.id != 2; ";
+
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
+                            {
+                                usuarioEnLinea.Add(new PanelUsuariosEnLinea
+                                {
+                                    Usuario = reader.GetString(0),
+                                    Canal = reader.GetString(1),
+                                    Notas = reader.GetString(2),
+                                });
+                            }
+                    }
+
+                    using (var cmd = cnn.CreateCommand())
+                    {
+                        if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
+                        cmd.CommandText = "select mac_address,nombre_stream from actividad_dispositivo_actualmente a " +
+                                            "inner join streams c " +
+                                            "on a.stream_id = c.id; ";
+
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                            while (await reader.ReadAsync())
+                            {
+                                usuarioEnLinea.Add(new PanelUsuariosEnLinea
+                                {
+                                    Usuario = reader.GetString(0),
+                                    Canal = "",
+                                    Notas = reader.GetString(1),
+                                });
+                            }
+                    }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500);
+            }
+
+            return Ok(usuarioEnLinea);
+        }
 
         [HttpGet("{usuario}/{password}")]
         public async Task<IActionResult> ObtenerPeliculas(string usuario, string password)

@@ -70,7 +70,7 @@ public class EnVivoController : Controller
             if (!agenteValido)
             {
                 await Data.Dispositivos.LogActividadSospechosa(macaddress, userAgent, ip);
-                return Unauthorized();
+                //return Unauthorized();
             }
 
             Data.Dispositivos.LogActividadDispositivo(macaddress, chID, userAgent, ip);

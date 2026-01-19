@@ -179,6 +179,24 @@ namespace ticolinea.stream.service.Controllers
             return File(stream, "video/mp2t", segment);
         }
 
+        #region Fibraencasa
+
+        [ResponseCache(Duration = 10, Location = ResponseCacheLocation.Any, NoStore = false)]
+        [HttpGet("{macaddress}/{token}/{segment}")]
+        public async Task<IActionResult> Chunks(string macaddress, string token, string segment)
+        {
+            string tokenMatch = Helpers.MD5.Encriptar($"{macaddress}zxcvbnm7852{segment}");
+            if (!string.Equals(token, tokenMatch, StringComparison.OrdinalIgnoreCase))
+                return Unauthorized();
+
+            var segmentFile = $"{Constantes.Global.STREAMS_FOLDER}{segment}";
+            byte[] fileBytes = await System.IO.File.ReadAllBytesAsync(segmentFile);
+            MemoryStream stream = new(fileBytes);
+
+            return File(stream, "video/mp2t", segment);
+        }
+
+        #endregion
 
         private async Task<bool> ObtieneDatosCanal(int chnId)
         {

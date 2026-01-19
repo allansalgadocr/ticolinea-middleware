@@ -679,15 +679,48 @@ namespace ticolinea.stream.service
         {
             try
             {
-                Directory.GetFiles("/home/ticolineaplay/streams")
+                var streamsFolder = Constantes.Global.STREAMS_FOLDER;
+                if (!Directory.Exists(streamsFolder))
+                {
+                    Console.WriteLine($"⚠️ Streams folder does not exist: {streamsFolder}");
+                    return;
+                }
+
+                var files = Directory.GetFiles(streamsFolder)
                     .Select(f => new FileInfo(f))
-                    .Where(f => f.CreationTime < DateTime.Now.AddMinutes(-20))
-                    .ToList()
-                    .ForEach(f => f.Delete());
+                    .Where(f => 
+                        // Delete files older than 20 minutes using LastWriteTime (more reliable than CreationTime)
+                        f.LastWriteTime < DateTime.Now.AddMinutes(-20) ||
+                        // Also delete files that are too old (more than 1 hour) regardless
+                        f.LastWriteTime < DateTime.Now.AddHours(-1))
+                    .ToList();
+
+                int deletedCount = 0;
+                long freedSpace = 0;
+                
+                foreach (var file in files)
+                {
+                    try
+                    {
+                        long fileSize = file.Length;
+                        file.Delete();
+                        deletedCount++;
+                        freedSpace += fileSize;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Error deleting file {file.Name}: {ex.Message}");
+                    }
+                }
+
+                if (deletedCount > 0)
+                {
+                    Console.WriteLine($"✅ Cleaned up {deletedCount} old files, freed {freedSpace / 1024 / 1024} MB from {streamsFolder}");
+                }
             }
             catch (Exception ex)
             {
-                Console.WriteLine("ERROR AL ELIMINAR ARCHIVOS VIEJOS" + ex.Message);
+                Console.WriteLine($"❌ ERROR AL ELIMINAR ARCHIVOS VIEJOS: {ex.Message}");
             }
         }
 
@@ -696,53 +729,122 @@ namespace ticolinea.stream.service
         {
             try
             {
-                var files = Directory.GetFiles("/home/ticolineaplay/streams")
+                var streamsFolder = Constantes.Global.STREAMS_FOLDER;
+                if (!Directory.Exists(streamsFolder))
+                {
+                    Console.WriteLine($"⚠️ Streams folder does not exist: {streamsFolder}");
+                    return;
+                }
+
+                // Find files that are:
+                // 1. Larger than 15MB AND older than 10 minutes (normal cleanup)
+                // 2. OR larger than 100MB regardless of age (emergency cleanup for stuck streams)
+                var now = DateTime.Now;
+                var files = Directory.GetFiles(streamsFolder)
                     .Select(f => new FileInfo(f))
-                    .Where(f => f.Length > 15000000)
+                    .Where(f => 
+                        f.Length > 15000000 && // Larger than 15MB
+                        (
+                            (f.Length > 15000000 && f.LastWriteTime < now.AddMinutes(-10)) || // Old large files
+                            f.Length > 100000000 // Very large files (>100MB) regardless of age
+                        ))
                     .ToList();
 
-                using (var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN))
+                if (files.Count == 0)
                 {
-                    foreach (var file in files)
+                    Console.WriteLine("✅ No large files to clean up");
+                    return;
+                }
+
+                int deletedCount = 0;
+                long freedSpace = 0;
+                int stoppedStreams = 0;
+
+                await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+                await cnn.OpenAsync();
+
+                foreach (var file in files)
+                {
+                    try
                     {
-                        StreamDb stream = new StreamDb();
-                        var nombreArchivo = file.Name.Replace("/home/ticolineaplay/streams", "");
-                        var split = nombreArchivo.Split("_");
-                        var chnId = split[0];
-                        file.Delete();
-                        if (!string.IsNullOrEmpty(chnId))
+                        // Extract stream ID from filename (format: STREAMID_SEGMENT.ts)
+                        var fileName = Path.GetFileName(file.Name);
+                        var split = fileName.Split("_");
+                        
+                        if (split.Length < 1 || !int.TryParse(split[0], out int streamId))
                         {
-                            using (var cmd = cnn.CreateCommand())
+                            // If we can't parse stream ID, delete if it's very old or very large
+                            if (file.Length > 100000000 || file.LastWriteTime < now.AddHours(-1))
                             {
-                                if (cnn.State == System.Data.ConnectionState.Closed) await cnn.OpenAsync();
-                                cmd.CommandText = "SELECT a.id,b.proceso_id,c.actividad_id FROM streams_tl a " +
-                                                  "INNER JOIN streams_info b on a.id = b.stream_id " +
-                                                  "LEFT JOIN actividad_usuario_actualmente c " +
-                                                  "on a.id = c.stream_id " +
-                                                  $"WHERE stream_id = {chnId} AND proceso_id != -1 and tipo=1;";
-
-                                using (var reader = await cmd.ExecuteReaderAsync())
-                                    while (await reader.ReadAsync())
-                                    {
-                                        stream = new StreamDb
-                                        {
-                                            StreamId = reader.GetInt32(0),
-                                            ProcesoId = reader.GetInt32(1)
-                                        };
-                                    }
+                                long fileSize = file.Length;
+                                file.Delete();
+                                deletedCount++;
+                                freedSpace += fileSize;
+                                Console.WriteLine($"🗑️ Deleted unparseable large file: {fileName} ({fileSize / 1024 / 1024} MB)");
                             }
+                            continue;
+                        }
 
-                            if (stream.ProcesoId > 0)
+                        // Check if stream is active before deleting
+                        StreamDb? activeStream = null;
+                        await using (var cmd = cnn.CreateCommand())
+                        {
+                            cmd.CommandText = @"SELECT a.id, b.proceso_id, c.actividad_id 
+                                                FROM streams_tl a 
+                                                INNER JOIN streams_info b ON a.id = b.stream_id 
+                                                LEFT JOIN actividad_usuario_actualmente c ON a.id = c.stream_id 
+                                                WHERE a.id = @streamId AND b.proceso_id != -1 AND a.tipo = 1";
+                            cmd.Parameters.AddWithValue("@streamId", streamId);
+
+                            await using var reader = await cmd.ExecuteReaderAsync();
+                            if (await reader.ReadAsync())
                             {
-                                await DetenerProceso(stream.ProcesoId, stream.StreamId);
+                                activeStream = new StreamDb
+                                {
+                                    StreamId = reader.GetInt32(0),
+                                    ProcesoId = reader.GetInt32(1)
+                                };
                             }
                         }
+
+                        // Delete the file
+                        long fileSize = file.Length;
+                        file.Delete();
+                        deletedCount++;
+                        freedSpace += fileSize;
+                        Console.WriteLine($"🗑️ Deleted large file: {fileName} ({fileSize / 1024 / 1024} MB) - Stream {streamId}");
+
+                        // If stream was active, stop it (file was corrupted or stuck)
+                        if (activeStream != null && activeStream.ProcesoId > 0)
+                        {
+                            Console.WriteLine($"🛑 Stopping stream {streamId} due to large file deletion");
+                            await DetenerProceso(activeStream.ProcesoId, activeStream.StreamId);
+                            stoppedStreams++;
+                        }
                     }
+                    catch (IOException ex)
+                    {
+                        // File might be in use, skip it
+                        Console.WriteLine($"⚠️ Cannot delete {file.Name} (file in use): {ex.Message}");
+                    }
+                    catch (UnauthorizedAccessException ex)
+                    {
+                        Console.WriteLine($"⚠️ Access denied deleting {file.Name}: {ex.Message}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Error processing large file {file.Name}: {ex.Message}");
+                    }
+                }
+
+                if (deletedCount > 0)
+                {
+                    Console.WriteLine($"✅ Large file cleanup: Deleted {deletedCount} files, freed {freedSpace / 1024 / 1024} MB, stopped {stoppedStreams} streams");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine("ERROR AL ELIMINAR ARCHIVOS VIEJOS" + ex.Message);
+                Console.WriteLine($"❌ ERROR AL ELIMINAR ARCHIVOS GRANDES: {ex.Message}");
             }
         }
 
