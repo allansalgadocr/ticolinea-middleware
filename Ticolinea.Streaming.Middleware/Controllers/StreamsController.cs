@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using MySqlConnector;
 using System.Text;
 using ticolinea.stream.service.Db;
@@ -34,9 +34,10 @@ namespace ticolinea.stream.service.Controllers
             StringBuilder sb = new();
             sb.AppendLine("#EXTM3U\r\n");
 
-            // Get channels based on package from token claims
-            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(validation.PaqueteTvId);
-            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(validation.PaqueteTvId);
+            // Get channels based on package from token claims (only for main provider)
+            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main" ? validation.PaqueteTvId : string.Empty;
+            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
+            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
             // Merge lists: custom ordered channels take priority
             int maxCustomOrder = bouquetCustom.Any() ? bouquetCustom.Max(c => c.CanalId) : 0;
@@ -96,8 +97,10 @@ namespace ticolinea.stream.service.Controllers
             StringBuilder sb = new();
             sb.AppendLine("#EXTM3U\r\n");
 
-            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(validation.PaqueteTvId);
-            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(validation.PaqueteTvId);
+            // Only use packages for main provider
+            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main" ? validation.PaqueteTvId : string.Empty;
+            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
+            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
             int maxCustomOrder = bouquetCustom.Any() ? bouquetCustom.Max(c => c.CanalId) : 0;
             int autoOrder = maxCustomOrder + 1;
@@ -309,9 +312,10 @@ namespace ticolinea.stream.service.Controllers
             StringBuilder sb = new();
             sb.AppendLine("#EXTM3U\r\n");
 
-            // Get client's channels based on their packages
-            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(validation.PaqueteTvId);
-            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(validation.PaqueteTvId);
+            // Get client's channels based on their packages (only for main provider)
+            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main" ? validation.PaqueteTvId : string.Empty;
+            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
+            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
             // Merge lists: custom ordered channels take priority, then fill with unordered channels
             // Assign high CanalId to unordered channels so they appear after ordered ones
@@ -328,7 +332,7 @@ namespace ticolinea.stream.service.Controllers
             bouquet = bouquet.OrderBy(c => c.CanalId).ToList();
 
             // Include movies if client has access (check package for movies access)
-            if (string.IsNullOrEmpty(validation.PaqueteTvId))
+            if (string.IsNullOrEmpty(paqueteTvId))
             {
                 List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
                 bouquet.AddRange(bouquetPeliculas);
@@ -336,7 +340,7 @@ namespace ticolinea.stream.service.Controllers
             else
             {
                 // Check if package includes movies
-                var paquete = await Data.PaqueteTV.ObtenerPaquete(validation.PaqueteTvId);
+                var paquete = await Data.PaqueteTV.ObtenerPaquete(paqueteTvId);
                 if (paquete != null && paquete.Activo == 1 && paquete.Peliculas == 1)
                 {
                     List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
@@ -380,9 +384,10 @@ namespace ticolinea.stream.service.Controllers
             StringBuilder sb = new();
             sb.AppendLine("#EXTM3U\r\n");
 
-            // Get client's channels based on their packages
-            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(validation.PaqueteTvId);
-            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(validation.PaqueteTvId);
+            // Get client's channels based on their packages (only for main provider)
+            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main" ? validation.PaqueteTvId : string.Empty;
+            List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
+            List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
             // Merge lists: custom ordered channels take priority, then fill with unordered channels
             int maxCustomOrder = bouquetCustom.Any() ? bouquetCustom.Max(c => c.CanalId) : 0;
@@ -398,7 +403,7 @@ namespace ticolinea.stream.service.Controllers
             bouquet = bouquet.OrderBy(c => c.CanalId).ToList();
 
             // Include movies if client has access (check package for movies access)
-            if (string.IsNullOrEmpty(validation.PaqueteTvId))
+            if (string.IsNullOrEmpty(paqueteTvId))
             {
                 List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
                 bouquet.AddRange(bouquetPeliculas);
@@ -406,7 +411,7 @@ namespace ticolinea.stream.service.Controllers
             else
             {
                 // Check if package includes movies
-                var paquete = await Data.PaqueteTV.ObtenerPaquete(validation.PaqueteTvId);
+                var paquete = await Data.PaqueteTV.ObtenerPaquete(paqueteTvId);
                 if (paquete != null && paquete.Activo == 1 && paquete.Peliculas == 1)
                 {
                     List<Modelos.Bouquet> bouquetPeliculas = await Data.Peliculas.ObtenerPeliculas();
