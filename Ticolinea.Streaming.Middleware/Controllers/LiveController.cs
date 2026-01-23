@@ -318,10 +318,11 @@ namespace ticolinea.stream.service.Controllers
             var outputBuilder = new StringBuilder();
             var lines = playlistOutput.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
 
+            var subpath = Constantes.Global.PROVIDER_ID == "fibraencasa" ? "/media/" : "/streams/";
             foreach (var line in lines)
             {
                 if (line.EndsWith(".ts"))
-                    outputBuilder.AppendLine($"{Constantes.Global.STREAMS_BASE_URL}/streams/{line}");
+                    outputBuilder.AppendLine($"{Constantes.Global.STREAMS_BASE_URL}{subpath}{line}");
                 else
                     outputBuilder.AppendLine(line);
             }
