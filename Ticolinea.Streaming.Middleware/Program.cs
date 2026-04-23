@@ -97,6 +97,9 @@ builder.Services.AddLog4net();
 // Add memory cache for performance optimization
 builder.Services.AddMemoryCache();
 
+builder.Services.AddHttpClient("PanelApi");
+builder.Services.AddSingleton<ticolinea.stream.service.Services.ActivityTrackingService>();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.

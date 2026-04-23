@@ -1,0 +1,25 @@
+# Example crontab for fibraencasatv service
+# 
+# To install: sudo crontab -e
+# Then copy the lines below (remove the # comments if desired)
+
+# Restart service daily at 3am (low traffic time)
+# Added logging to track restarts
+0 3 * * * /usr/bin/systemctl restart fibraencasatv.service >> /var/log/fibraencasatv-cron.log 2>&1
+
+# Clean logs every 12 hours (midnight and noon)
+# Improved: Added safety check and logging
+# Only delete files older than 7 days to prevent accidental deletion
+0 */12 * * * /usr/bin/find /home/fibraencasatv/logs -type f -mtime +7 -delete >> /var/log/fibraencasatv-cron.log 2>&1
+
+# Alternative: More aggressive log cleanup (delete all logs every 12 hours)
+# 0 */12 * * * /usr/bin/rm -rf /home/fibraencasatv/logs/* >> /var/log/fibraencasatv-cron.log 2>&1
+
+# Optional: Rotate logs before deletion (recommended)
+# 0 */12 * * * /usr/bin/find /home/fibraencasatv/logs -type f -name "*.log" -exec gzip {} \; && /usr/bin/find /home/fibraencasatv/logs -type f -mtime +7 -delete >> /var/log/fibraencasatv-cron.log 2>&1
+
+# Optional: Monitor disk space for streams folder
+# 0 */6 * * * /usr/bin/df -h /home/fibraencasatv/streams | tail -1 | awk '{if ($5+0 > 90) print "WARNING: Disk usage at " $5}' >> /var/log/fibraencasatv-cron.log 2>&1
+
+# Optional: Clean old stream segments (if not handled by Hangfire)
+# 0 4 * * * /usr/bin/find /home/fibraencasatv/streams -type f -name "*.ts" -mtime +1 -delete >> /var/log/fibraencasatv-cron.log 2>&1

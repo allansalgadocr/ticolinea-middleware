@@ -265,6 +265,124 @@ server {
 }
 ```
 
+## Quick Deploy: Ticolinea (TL) & Fibra en Casa
+
+### 1. Build (local machine)
+
+```bash
+# Publish for linux-x64 (MUST be linux-x64)
+dotnet publish -c Release -r linux-x64 --self-contained false
+```
+
+Output will be in `bin/Release/net8.0/linux-x64/publish/`.
+
+### 2. Connect to server
+
+```bash
+# Connect via SSH using certificate
+ssh -i ~/.ssh/your-key.pem user@tv.play-latino.com      # TL
+ssh -i ~/.ssh/your-key.pem user@iptv.fibraencasa.cr      # Fibra en Casa
+```
+
+### 3. Deploy to Ticolinea (TL)
+
+```bash
+# Create new version folder
+sudo mkdir -p /home/ticolineaplay/streaming-middleware/versions/v1.0.X
+
+# Give permissions
+sudo chmod 777 /home/ticolineaplay/streaming-middleware/versions/v1.0.X
+
+# Copy previous version as base
+cp -a /home/ticolineaplay/streaming-middleware/versions/v1.0.PREV/* \
+      /home/ticolineaplay/streaming-middleware/versions/v1.0.X/
+
+# Upload/copy new published files (overwrite changed files)
+# From local: scp -i ~/.ssh/your-key.pem ./publish/* user@tv.play-latino.com:/home/ticolineaplay/streaming-middleware/versions/v1.0.X/
+
+# Update the current symlink
+rm -f /home/ticolineaplay/streaming-middleware/current
+ln -s /home/ticolineaplay/streaming-middleware/versions/v1.0.X \
+      /home/ticolineaplay/streaming-middleware/current
+
+# Verify symlink points to new version
+ls -l /home/ticolineaplay/streaming-middleware/current
+
+# Restart the service
+sudo systemctl restart ticolinea.service
+
+# Verify it's running
+sudo systemctl status ticolinea.service
+sudo journalctl -u ticolinea.service -n 50 --no-pager
+```
+
+### 4. Deploy to Fibra en Casa
+
+Same steps but on the `iptv.fibraencasa.cr` server. The paths and service name may differ:
+
+```bash
+# Create new version folder
+sudo mkdir -p /home/fibraencasatv/streaming-middleware/versions/v1.0.X
+sudo chmod 777 /home/fibraencasatv/streaming-middleware/versions/v1.0.X
+
+# Copy previous version as base
+cp -a /home/fibraencasatv/streaming-middleware/versions/v1.0.PREV/* \
+      /home/fibraencasatv/streaming-middleware/versions/v1.0.X/
+
+# Upload/copy new published files
+
+# Update symlink
+rm -f /home/fibraencasatv/streaming-middleware/current
+ln -s /home/fibraencasatv/streaming-middleware/versions/v1.0.X \
+      /home/fibraencasatv/streaming-middleware/current
+
+# Verify symlink points to new version
+ls -l /home/fibraencasatv/streaming-middleware/current
+
+# Restart the service
+sudo systemctl restart fibraencasa.service
+
+# Verify
+sudo systemctl status fibraencasa.service
+```
+
+### 5. Verify deployment
+
+```bash
+# Check logs for startup message
+sudo journalctl -u ticolinea.service -n 20 --no-pager
+# Should see:
+#   STREAMING NODE STARTING
+#   Provider: main (Ticolinea Main)
+#   [ActivityTracking] Initialized. Reporting to http://tv.play-latino.com:27702/api/v2/clients/activity/track
+
+# Health check
+curl http://localhost:27701/health
+```
+
+### Rollback
+
+If something goes wrong, point the symlink back to the previous version and restart:
+
+```bash
+rm -f /home/ticolineaplay/streaming-middleware/current
+ln -s /home/ticolineaplay/streaming-middleware/versions/v1.0.PREV \
+      /home/ticolineaplay/streaming-middleware/current
+sudo systemctl restart ticolinea.service
+```
+
+### Server Reference
+
+| | Ticolinea (TL) | Fibra en Casa |
+|---|---|---|
+| Server | `tv.play-latino.com` | `iptv.fibraencasa.cr` |
+| Middleware port | 27701 | 27701 |
+| Service name | `ticolinea.service` | `fibraencasa.service` |
+| Middleware path | `/home/ticolineaplay/streaming-middleware/` | `/home/fibraencasatv/streaming-middleware/` |
+| Config file | `appsettings.main.json` | `appsettings.fibraencasa.json` |
+| Provider ID | `main` | `fibraencasa` |
+| Panel API | `tv.play-latino.com:27702` | `tv.play-latino.com:27702` (same) |
+
 ## Troubleshooting
 
 ### Check logs

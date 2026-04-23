@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using ticolinea.stream.service.Db;
 using ticolinea.stream.service.Helpers;
 using ticolinea.stream.service.Modelos;
+using ticolinea.stream.service.Services;
 
 namespace ticolinea.stream.service.Controllers
 {
@@ -13,6 +14,13 @@ namespace ticolinea.stream.service.Controllers
     [ApiController]
     public class LiveController : ControllerBase
     {
+        private readonly ActivityTrackingService _activityTracker;
+
+        public LiveController(ActivityTrackingService activityTracker)
+        {
+            _activityTracker = activityTracker;
+        }
+
         /// <summary>
         /// Stream by JWT token - validates token and serves HLS playlist
         /// </summary>
@@ -44,6 +52,8 @@ namespace ticolinea.stream.service.Controllers
             playlistOutput = AddDiscontinuityTags(playlistOutput);
             playlistOutput = ReplaceSegmentUrls(playlistOutput);
 
+            _activityTracker.TrackIfNeeded(validation, chID, Request, isMobile: false);
+
             return Content(playlistOutput, "application/x-mpegurl", Encoding.UTF8);
         }
 
@@ -56,7 +66,7 @@ namespace ticolinea.stream.service.Controllers
         {
             var extractedToken = token ?? TokenValidation.ExtractToken(Request);
             var validation = TokenValidation.ValidateToken(extractedToken);
-            
+
             if (validation == null || !validation.IsValid)
                 return Unauthorized("Invalid or expired token");
 
@@ -67,6 +77,8 @@ namespace ticolinea.stream.service.Controllers
             var playlistOutput = await ReadPlaylistFile(chID);
             playlistOutput = AddDiscontinuityTags(playlistOutput);
             playlistOutput = ReplaceSegmentUrls(playlistOutput);
+
+            _activityTracker.TrackIfNeeded(validation, chID, Request, isMobile: true);
 
             return Content(playlistOutput, "application/x-mpegurl", Encoding.UTF8);
         }
@@ -128,6 +140,8 @@ namespace ticolinea.stream.service.Controllers
             var playlistOutput = await ReadPlaylistFile(chID);
             playlistOutput = AddDiscontinuityTags(playlistOutput);
             playlistOutput = ReplaceSegmentUrls(playlistOutput);
+
+            _activityTracker.TrackIfNeeded(validation, chID, macAddress, Request, isMobile: false);
 
             return Content(playlistOutput, "application/x-mpegurl", Encoding.UTF8);
         }
@@ -221,20 +235,20 @@ namespace ticolinea.stream.service.Controllers
                             {
                                 streams.Add(new StreamDb
                                 {
-                                    Fuente = reader.GetString(0),
-                                    StreamId = reader.GetInt32(1),
-                                    ProbeSize = reader.GetInt32(2),
-                                    EsBajoDemanda = reader.GetInt32(3),
-                                    ProcesoId = reader.GetInt32(4),
-                                    TranscodeAudio = reader.GetString(5),
-                                    Intervalo = reader.GetInt16(6),
-                                    Segmentos = reader.GetInt16(7),
-                                    Framerate = reader.GetInt32(8),
-                                    Transcode = reader.GetInt32(9),
-                                    Resolucion = reader.GetString(10),
-                                    Bitrate = reader.GetString(11),
-                                    CGOP = reader.GetInt32(12),
-                                    GOP = reader.GetInt32(13),
+                                    Fuente = reader.IsDBNull(0) ? "" : reader.GetString(0),
+                                    StreamId = reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
+                                    ProbeSize = reader.IsDBNull(2) ? 0 : reader.GetInt32(2),
+                                    EsBajoDemanda = reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
+                                    ProcesoId = reader.IsDBNull(4) ? -1 : reader.GetInt32(4),
+                                    TranscodeAudio = reader.IsDBNull(5) ? "" : reader.GetString(5),
+                                    Intervalo = reader.IsDBNull(6) ? (short)4 : reader.GetInt16(6),
+                                    Segmentos = reader.IsDBNull(7) ? (short)3 : reader.GetInt16(7),
+                                    Framerate = reader.IsDBNull(8) ? 0 : reader.GetInt32(8),
+                                    Transcode = reader.IsDBNull(9) ? 0 : reader.GetInt32(9),
+                                    Resolucion = reader.IsDBNull(10) ? "" : reader.GetString(10),
+                                    Bitrate = reader.IsDBNull(11) ? "" : reader.GetString(11),
+                                    CGOP = reader.IsDBNull(12) ? 0 : reader.GetInt32(12),
+                                    GOP = reader.IsDBNull(13) ? 0 : reader.GetInt32(13),
                                 });
                             }
                     }
