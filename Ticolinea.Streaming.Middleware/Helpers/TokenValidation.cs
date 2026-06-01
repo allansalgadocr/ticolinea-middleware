@@ -131,6 +131,8 @@ namespace ticolinea.stream.service.Helpers
                     Mac = GetClaimValue(principal, "mac"),
                     Jti = GetClaimValue(principal, "jti") ?? "",
                     MoviesAllowed = GetClaimValue(principal, "moviesAllowed")?.ToLower() == "true",
+                    IsExternal = GetClaimValue(principal, "isExternal")?.ToLower() == "true",
+                    ProviderPackageId = GetClaimValue(principal, "providerPackageId") ?? "",
                     Token = token
                 };
 
@@ -476,7 +478,17 @@ namespace ticolinea.stream.service.Helpers
         /// Whether user can access movies/VOD
         /// </summary>
         public bool MoviesAllowed { get; set; }
-        
+
+        /// <summary>
+        /// True if the provider is external — always serve all streams, never filter by package.
+        /// </summary>
+        public bool IsExternal { get; set; } = false;
+
+        /// <summary>
+        /// Provider's default package, used when the client has no package of their own.
+        /// </summary>
+        public string ProviderPackageId { get; set; } = string.Empty;
+
         /// <summary>
         /// MAC address binding (if any)
         /// </summary>

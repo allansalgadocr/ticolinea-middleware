@@ -35,7 +35,15 @@ namespace ticolinea.stream.service.Controllers
             sb.AppendLine("#EXTM3U\r\n");
 
             // Get channels based on package from token claims (only for main provider)
-            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main" ? validation.PaqueteTvId : string.Empty;
+            // Package priority (local providers): client package -> provider default -> all.
+            // External providers always get all streams. The PROVIDER_ID == "main" gate is
+            // kept as a safety net: non-main nodes point at DBs without the Panel-managed
+            // client_package/paquete_tv_streams data, so filtering there would yield empty
+            // playlists. Once all node DBs share Panel data, drop the wrapper for a plain
+            // PackageResolver.ResolvePaqueteTvId(...) call.
+            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main"
+                ? PackageResolver.ResolvePaqueteTvId(validation.IsExternal, validation.PaqueteTvId, validation.ProviderPackageId)
+                : string.Empty;
             List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
             List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
@@ -98,7 +106,15 @@ namespace ticolinea.stream.service.Controllers
             sb.AppendLine("#EXTM3U\r\n");
 
             // Only use packages for main provider
-            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main" ? validation.PaqueteTvId : string.Empty;
+            // Package priority (local providers): client package -> provider default -> all.
+            // External providers always get all streams. The PROVIDER_ID == "main" gate is
+            // kept as a safety net: non-main nodes point at DBs without the Panel-managed
+            // client_package/paquete_tv_streams data, so filtering there would yield empty
+            // playlists. Once all node DBs share Panel data, drop the wrapper for a plain
+            // PackageResolver.ResolvePaqueteTvId(...) call.
+            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main"
+                ? PackageResolver.ResolvePaqueteTvId(validation.IsExternal, validation.PaqueteTvId, validation.ProviderPackageId)
+                : string.Empty;
             List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
             List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
@@ -313,7 +329,15 @@ namespace ticolinea.stream.service.Controllers
             sb.AppendLine("#EXTM3U\r\n");
 
             // Get client's channels based on their packages (only for main provider)
-            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main" ? validation.PaqueteTvId : string.Empty;
+            // Package priority (local providers): client package -> provider default -> all.
+            // External providers always get all streams. The PROVIDER_ID == "main" gate is
+            // kept as a safety net: non-main nodes point at DBs without the Panel-managed
+            // client_package/paquete_tv_streams data, so filtering there would yield empty
+            // playlists. Once all node DBs share Panel data, drop the wrapper for a plain
+            // PackageResolver.ResolvePaqueteTvId(...) call.
+            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main"
+                ? PackageResolver.ResolvePaqueteTvId(validation.IsExternal, validation.PaqueteTvId, validation.ProviderPackageId)
+                : string.Empty;
             List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
             List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
@@ -385,7 +409,15 @@ namespace ticolinea.stream.service.Controllers
             sb.AppendLine("#EXTM3U\r\n");
 
             // Get client's channels based on their packages (only for main provider)
-            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main" ? validation.PaqueteTvId : string.Empty;
+            // Package priority (local providers): client package -> provider default -> all.
+            // External providers always get all streams. The PROVIDER_ID == "main" gate is
+            // kept as a safety net: non-main nodes point at DBs without the Panel-managed
+            // client_package/paquete_tv_streams data, so filtering there would yield empty
+            // playlists. Once all node DBs share Panel data, drop the wrapper for a plain
+            // PackageResolver.ResolvePaqueteTvId(...) call.
+            var paqueteTvId = Constantes.Global.PROVIDER_ID == "main"
+                ? PackageResolver.ResolvePaqueteTvId(validation.IsExternal, validation.PaqueteTvId, validation.ProviderPackageId)
+                : string.Empty;
             List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
             List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
