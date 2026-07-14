@@ -41,21 +41,54 @@ The host therefore needs only **nginx** and **MariaDB**.
 
 ## 4. On the client's server
 
-### 4.1 nginx owns 27701; the node hides behind it
+### 4.1 nginx — reproduce production, plus the lockdown it is missing
 
-The node binds `127.0.0.1:8080`. nginx is the only public listener.
+Production already fronts the node with nginx: **27701 proxies to the node on `localhost:1234`**, and **27703 serves `.ts` segments statically**. Dynamic playlists come from the app; segments come off disk. Provider nodes reproduce this exactly — there is no reason for them to differ from `main`.
+
+Note this means **`DEPLOYMENT.md` is stale**: it sets `ASPNETCORE_URLS=http://0.0.0.0:27701`, which would collide with nginx's own listener. The node listens on **1234**.
+
+**The gap:** the production 27701 block is `location / { proxy_pass ... }` — it proxies *everything*, so `/hangfire` (unauthenticated) and `/swagger` are **currently reachable from the public internet**. The provisioned config closes that:
 
 ```nginx
-listen 27701;
-location /Streams/  { proxy_pass http://127.0.0.1:8080; }   # M3U/HLS API — public
-location /streams/  { alias /srv/ticolinea/streams/; }      # segments, served as static files
-location /hangfire  { allow <wireguard-subnet>; deny all; proxy_pass http://127.0.0.1:8080; }
-location /swagger   { deny all; }
+# 27701 — middleware
+server {
+    listen 27701;
+
+    location /hangfire { allow <wireguard-subnet>; deny all; proxy_pass http://127.0.0.1:1234; }
+    location /swagger  { deny all; }
+
+    location / {
+        proxy_pass http://127.0.0.1:1234;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "";
+        proxy_set_header Host       $http_host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP  $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        client_max_body_size 50M;
+    }
+}
+
+# 27703 — static segments
+server {
+    listen 27703;
+    root /srv/ticolinea;          # main uses /var/www/html; see note below
+
+    location ~ ^/streams/.*\.ts$ {
+        types { video/mp2t ts; }
+        add_header Access-Control-Allow-Origin * always;
+        add_header Cache-Control "public, max-age=60, s-maxage=60, immutable" always;
+    }
+    location / { return 404; }
+}
 ```
 
-Three problems, one place: the dashboard becomes tunnel-only, Swagger is closed, and because nginx serves segments straight off disk, **port 27703 is no longer needed at all**.
+The only deliberate deviation from `main`'s config: `root` points at `/srv/ticolinea` rather than `/var/www/html`, keeping high-churn stream data out of the web root and inside the one directory tree this tool owns. **The URL path is unchanged** (`/streams/*.ts`), so nothing downstream cares.
 
-`Streaming.SegmentBaseUrl` becomes `http://<provider-host>:27701/streams`.
+`Streaming.SegmentBaseUrl` = `http://<provider-host>:27703`, matching `main`.
+
+**The node must bind `127.0.0.1:1234`, not `0.0.0.0:1234`.** Binding all interfaces would leave the app directly reachable on 1234 — bypassing nginx, and with it the Hangfire and Swagger denials — if the client's firewall is ever permissive. `ASPNETCORE_URLS=http://127.0.0.1:1234`.
 
 ### 4.2 Layout
 
@@ -106,7 +139,7 @@ KillSignal=SIGINT
 TimeoutStopSec=30
 
 Environment=ASPNETCORE_ENVIRONMENT=Production
-Environment=ASPNETCORE_URLS=http://127.0.0.1:8080
+Environment=ASPNETCORE_URLS=http://127.0.0.1:1234
 Environment=PROVIDER=<slug>
 
 # Capacity. The defaults silently cap FFmpeg spawning under load.
@@ -189,8 +222,10 @@ Written as part of this work: how to update a client, what to check first, what 
 
 | Direction | Port / Host | Why |
 |---|---|---|
-| Inbound, **public** | `27701/tcp` | End-user Android TVs pull HLS. They are on the open internet, **not** on the VPN. |
+| Inbound, **public** | `27701/tcp` | nginx → node. Playlists and the M3U/HLS API. End-user Android TVs are on the open internet, **not** on the VPN. |
+| Inbound, **public** | `27703/tcp` | nginx → static `.ts` segments. **This is where the video bytes actually come from** — 27701 alone serves nothing watchable. |
 | Inbound, **tunnel only** | `22/tcp` | SSH over WireGuard. Not public. |
+| **Never** | `1234/tcp` | The node itself. Bound to `127.0.0.1` — nginx is the only thing that talks to it. |
 | Inbound (client side) | `51820/udp` | WireGuard, so the operator can peer in. |
 | **Outbound** | `tv.play-latino.com:27702` | Token introspect/refresh + activity tracking. Blocking this breaks auth silently. |
 | **Outbound** | `tv.play-latino.com:27701` | **The restream source pull — the actual content path.** |
@@ -216,7 +251,6 @@ Scripts by `tico-devops`; tests by `tico-qa`; FFmpeg version policy validated by
 - **Revoke the GitHub PAT** embedded in plaintext in the `StreamTV` and `ticolinea.panel` git remote URLs. The repo migration in §5 should not be done with a leaked credential.
 
 **Risks:**
-- **`Mikrotik.Net` is a dependency.** If the node must reach LAN devices on the client's network, `ProtectSystem=strict` and the network topology need review. `probe` should surface this.
 - **Rotating the committed secrets** (RDS password, JWT private key, pepper, panel API key) is out of scope but grows more urgent with each client onboarded. Own ticket.
 - **Ubuntu 22.04 is assumed.** A client on another distro means either a different FFmpeg version (tolerable, and `probe` will say so) or a glibc too old for the self-contained runtime (not tolerable). `probe` must check both.
 
