@@ -116,7 +116,11 @@ Config is **generated from a template**, never copied from `main`. This is the c
 
 Local MariaDB, following the `fibraencasa` pattern: **bound to `127.0.0.1` only.** Never a network listener, never a firewall rule. `bootstrap` installs it, creates `<slug>-streaming`, creates a least-privilege `streamingservice` user with a **generated random password** written to `secrets/db-password`, and applies the schema.
 
-**The schema is a gap.** There is no checked-in DDL and no migration tooling — the existing nodes were built by hand. Extracting a canonical `schema.sql` (dumped from `main`, reviewed, stripped of data) is **in scope**, because `bootstrap` has nothing to apply without it.
+**Schema comes from `ticolinea.panel`'s EF Core migrations.** They already define the node's tables — `streams_tl`, `epg_tl`, `paquete_tv`, `paquete_tv_streams`, `canal` (`Infrastructure/Migrations/`). The panel's model *is* the node's schema; there is nothing to hand-maintain.
+
+CI runs `dotnet ef migrations script --idempotent -o schema.sql` and ships the result inside the release artifact. `bootstrap` applies it with `mysql < schema.sql`; `deploy` re-applies it, so schema changes travel with the code that needs them. **The client's box needs no .NET and no EF tooling** — it receives a SQL file. Because the script is idempotent, re-running it is a no-op, which is what lets `bootstrap` and `deploy` both apply it safely.
+
+The migration set also creates panel-only tables (`clients`, `admin_users`, `providers`, …). On a node these stay **empty and unused** — the node authenticates against the panel and never writes them. Applying the full set is deliberate: filtering to a subset would mean maintaining a second, divergent schema, which is a far worse problem than a few unused tables.
 
 Until **spec B** lands, the database has no channel rows and must be seeded manually. A provisioned node will start cleanly and serve nothing. Expected — and the reason spec B should follow immediately.
 
@@ -165,7 +169,15 @@ Three deliberate corrections to the unit currently in `DEPLOYMENT.md`:
 
 ## 5. Build and ship
 
-**CI (GitHub Actions, on push to `master`):** `dotnet publish -c Release -r linux-x64 --self-contained`, then attach the output as a **release artifact** tagged `<version>` (semver from a `VERSION` file at the repo root). No cloud credentials in CI — it builds and uploads, nothing more.
+**CI (GitHub Actions, on push to `master`):**
+
+1. `dotnet publish -c Release -r linux-x64 --self-contained`
+2. `dotnet ef migrations script --idempotent -o schema.sql` (from `ticolinea.panel`)
+3. Attach both as a **release artifact** tagged `<version>` (semver from a `VERSION` file at the repo root).
+
+No cloud credentials in CI — it builds and uploads, nothing more.
+
+Note this couples the two repos: the node's schema is generated from `ticolinea.panel`'s migrations, so CI needs both checked out. Simplest handling is a second checkout step pinned to the panel's `master`.
 
 This requires migrating `ticolineapanel` from Bitbucket to GitHub, alongside the other two repos. Bitbucket Pipelines' 50 free minutes/month will not comfortably carry a .NET publish; GitHub gives 2,000.
 
@@ -237,7 +249,7 @@ The node needs **no registry egress at all** — only the operator fetches artif
 
 - `shellcheck` over all scripts.
 - **Idempotency:** run `bootstrap` twice against a throwaway Ubuntu 22.04 VM (multipass); assert a clean second run and a green `/health`.
-- **Schema:** `bootstrap` on a clean VM yields a node that starts — the only real proof `schema.sql` is complete.
+- **Schema:** `bootstrap` on a clean VM yields a node that starts — the only real proof the generated `schema.sql` is complete. Applying it twice must be a no-op.
 - **Rollback is tested, not merely written.** Deploy a deliberately broken release; assert the tool detects it, rolls back, and the node returns to baseline.
 - **No secret leakage:** assert the generated `appsettings.<slug>.json` shares no value with `main`'s connection string or the panel's private key.
 - **Exposure:** from off-tunnel, assert `/hangfire` and `/swagger` are refused on 27701 while `/Streams/` succeeds.
