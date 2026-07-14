@@ -8,13 +8,15 @@
 
 ## 1. Problem
 
-Onboarding a provider today is a hand-run sequence out of `DEPLOYMENT.md`. It is slow, unrepeatable, and unsafe in three specific ways:
+Onboarding a provider today is a hand-run sequence out of `DEPLOYMENT.md`: slow, unrepeatable, and error-prone. There is also no defined way to **update** a running client without dropping their channels.
 
-1. **`scp -r ./publish` ships Ticolinea's secrets to a third party.** The repo commits the live RDS password, the JWT *private* key, the password pepper, and the panel API key.
-2. **The Hangfire dashboard is unauthenticated.** `DashboardNoAuthorizationFilter.Authorize()` returns `true` unconditionally. The moment 27701 is public, so is the dashboard — and so is Swagger.
-3. **`net6.0` is end-of-life**, and `dotnet-runtime-6.0` is increasingly hard to obtain from the Microsoft feed.
+**Goal:** make onboarding a new consumer repeatable and its updates safe. **Reproduce what production already runs** — do not change how the app behaves. Anything that would require QA of new application behavior is out of scope here.
 
-There is also no defined way to **update** a running client without dropping their channels.
+Explicitly deferred, by decision, to keep that scope tight:
+
+- **Hangfire dashboard auth.** It is currently unauthenticated (`DashboardNoAuthorizationFilter.Authorize()` returns `true`) and reachable through nginx. Left as-is for now; a provider node is no more exposed than `main`. Its own ticket later.
+- **`net6.0` end-of-life.** Real, but a future concern. This work runs net6.0 exactly as production does.
+- **Rotating the committed secrets** (RDS password, JWT private key, pepper, panel API key). Separate ticket. Note that per-client config (§4.2) means a new provider never receives `main`'s RDS connection string regardless — it gets its own.
 
 ## 2. Context: the restream model
 
@@ -29,34 +31,26 @@ Two consequences that constrain everything below:
 
 ## 3. Approach
 
-Bare metal. No Docker, no container registry, no cloud credential on the client's box.
+Bare metal, reproducing the production stack. No Docker, no container registry, no cloud credential on the client's box.
 
-Two decisions carry most of the weight:
+**Publish framework-dependent, exactly as production runs.** `dotnet publish -c Release` produces the same `ticolinea.stream.service.dll` that `main` and `fibraencasa` run today, executed by an installed `aspnetcore-runtime-6.0` — the runtime install `DEPLOYMENT.md` already documents and existing nodes already use. This is the lowest-risk choice precisely because it introduces nothing new to trust: identical runtime, identical behavior. (A self-contained publish would remove the runtime-install step, but it is a different artifact shape that would need its own QA; deferred with the net6.0 question.)
 
-**Publish self-contained.** `dotnet publish -c Release -r linux-x64 --self-contained` produces a native executable carrying its own .NET runtime. **Nothing installs .NET on the client's host** — which deletes the `net6.0`-EOL problem rather than working around it.
+**Pin FFmpeg by distro.** Require **Ubuntu 22.04** and `apt install ffmpeg`, then `apt-mark hold ffmpeg` so it cannot drift under us. `probe` records each client's `ffmpeg -version` and **warns if it differs from what `main` runs** — so divergence surfaces during onboarding, not as a broken channel later. (`FfmpegPath` is already configurable in `Constantes/Global.cs:31`, so a pinned binary is an option later if needed.)
 
-**Pin FFmpeg by distro, not by binary.** Require **Ubuntu 22.04** and `apt install ffmpeg`, then `apt-mark hold ffmpeg` so it cannot drift under us. `probe` records each client's `ffmpeg -version` and **warns if it differs from what `main` runs**. We don't get byte-identical FFmpeg across clients; we get *told* when a client diverges, instead of learning it from a broken channel. (Shipping a pinned static binary is possible later — `FfmpegPath` is already configurable in `Constantes/Global.cs:31`, and fibraencasa already points at a custom build — but it is not worth the management cost today.)
-
-The host therefore needs only **nginx** and **MariaDB**.
+The host therefore needs **nginx**, **MariaDB**, and the **`aspnetcore-runtime-6.0`** — the same three things production depends on.
 
 ## 4. On the client's server
 
-### 4.1 nginx — reproduce production, plus the lockdown it is missing
+### 4.1 nginx — reproduce production
 
-Production already fronts the node with nginx: **27701 proxies to the node on `localhost:1234`**, and **27703 serves `.ts` segments statically**. Dynamic playlists come from the app; segments come off disk. Provider nodes reproduce this exactly — there is no reason for them to differ from `main`.
+Production fronts the node with nginx: **27701 proxies to the node on `localhost:1234`**, and **27703 serves `.ts` segments statically**. Dynamic playlists come from the app; segments come off disk. Provider nodes reproduce this **exactly** — the config below is production's, verbatim except for the one path noted.
 
 Note this means **`DEPLOYMENT.md` is stale**: it sets `ASPNETCORE_URLS=http://0.0.0.0:27701`, which would collide with nginx's own listener. The node listens on **1234**.
-
-**The gap:** the production 27701 block is `location / { proxy_pass ... }` — it proxies *everything*, so `/hangfire` (unauthenticated) and `/swagger` are **currently reachable from the public internet**. The provisioned config closes that:
 
 ```nginx
 # 27701 — middleware
 server {
     listen 27701;
-
-    location /hangfire { allow <wireguard-subnet>; deny all; proxy_pass http://127.0.0.1:1234; }
-    location /swagger  { deny all; }
-
     location / {
         proxy_pass http://127.0.0.1:1234;
         proxy_http_version 1.1;
@@ -84,22 +78,24 @@ server {
 }
 ```
 
-The only deliberate deviation from `main`'s config: `root` points at `/srv/ticolinea` rather than `/var/www/html`, keeping high-churn stream data out of the web root and inside the one directory tree this tool owns. **The URL path is unchanged** (`/streams/*.ts`), so nothing downstream cares.
+The only deliberate deviation from `main`: `root` points at `/srv/ticolinea` rather than `/var/www/html`, keeping high-churn stream data inside the one directory tree this tool owns. **The URL path is unchanged** (`/streams/*.ts`), so nothing downstream cares — including where segments are written.
 
 `Streaming.SegmentBaseUrl` = `http://<provider-host>:27703`, matching `main`.
 
-**The node must bind `127.0.0.1:1234`, not `0.0.0.0:1234`.** Binding all interfaces would leave the app directly reachable on 1234 — bypassing nginx, and with it the Hangfire and Swagger denials — if the client's firewall is ever permissive. `ASPNETCORE_URLS=http://127.0.0.1:1234`.
+`location /` proxies everything, so `/hangfire` and `/swagger` are reachable through 27701 — same as production. Left as-is per the deferral in §1.
+
+The node binds `127.0.0.1:1234` (`ASPNETCORE_URLS=http://127.0.0.1:1234`), matching production's `proxy_pass http://localhost:1234`. nginx is the public listener; the app is not exposed directly.
 
 ### 4.2 Layout
 
 ```
 /opt/ticolinea/
-  releases/1.4.1/        # self-contained publish
+  releases/1.4.1/        # publish output (ticolinea.stream.service.dll + deps)
   releases/1.4.2/
   current -> releases/1.4.2
   config/
     appsettings.Production.json
-    appsettings.<slug>.json     # GENERATED from template — never copied from main
+    appsettings.<slug>.json     # per-client: its own local DB connection string
     jwt-public.pem              # panel's RSA PUBLIC key only
   nginx/node.conf
   secrets/                      # 0600 root: db password
@@ -110,7 +106,7 @@ The only deliberate deviation from `main`'s config: `root` points at `/srv/ticol
 
 Service user `ticolinea`. The last 5 releases are kept; older ones pruned.
 
-Config is **generated from a template**, never copied from `main`. This is the control that stops us shipping Ticolinea's secrets to a third party, and it is not optional.
+Each client gets its **own** `appsettings.<slug>.json`, generated from a template with that client's local DB connection string, provider slug, and `SegmentBaseUrl`. It is not copied from `main` — a new provider connects to its *own* local MariaDB (§4.3), so it never receives, and has no use for, `main`'s RDS connection string.
 
 ### 4.3 Database
 
@@ -118,7 +114,7 @@ Local MariaDB, following the `fibraencasa` pattern: **bound to `127.0.0.1` only.
 
 **Schema comes from `ticolinea.panel`'s EF Core migrations.** They already define the node's tables — `streams_tl`, `epg_tl`, `paquete_tv`, `paquete_tv_streams`, `canal` (`Infrastructure/Migrations/`). The panel's model *is* the node's schema; there is nothing to hand-maintain.
 
-CI runs `dotnet ef migrations script --idempotent -o schema.sql` and ships the result inside the release artifact. `bootstrap` applies it with `mysql < schema.sql`; `deploy` re-applies it, so schema changes travel with the code that needs them. **The client's box needs no .NET and no EF tooling** — it receives a SQL file. Because the script is idempotent, re-running it is a no-op, which is what lets `bootstrap` and `deploy` both apply it safely.
+CI runs `dotnet ef migrations script --idempotent -o schema.sql` and ships the result inside the release artifact. `bootstrap` applies it with `mysql < schema.sql`; `deploy` re-applies it, so schema changes travel with the code that needs them. **The client's box needs no EF tooling and no source checkout** — it receives a plain SQL file. Because the script is idempotent, re-running it is a no-op, which is what lets `bootstrap` and `deploy` both apply it safely.
 
 The migration set also creates panel-only tables (`clients`, `admin_users`, `providers`, …). On a node these stay **empty and unused** — the node authenticates against the panel and never writes them. Applying the full set is deliberate: filtering to a subset would mean maintaining a second, divergent schema, which is a far worse problem than a few unused tables.
 
@@ -136,7 +132,7 @@ Wants=network-online.target
 Type=simple
 User=ticolinea
 WorkingDirectory=/opt/ticolinea/current
-ExecStart=/opt/ticolinea/current/ticolinea.stream.service
+ExecStart=/usr/bin/dotnet /opt/ticolinea/current/ticolinea.stream.service.dll
 Restart=always
 RestartSec=10
 KillSignal=SIGINT
@@ -150,28 +146,22 @@ Environment=PROVIDER=<slug>
 LimitNOFILE=65535
 TasksMax=4096
 
-# Hardening
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/srv/ticolinea /opt/ticolinea
-
 [Install]
 WantedBy=multi-user.target
 ```
 
-Three deliberate corrections to the unit currently in `DEPLOYMENT.md`:
+Two deliberate corrections to the unit currently in `DEPLOYMENT.md`:
 
-- **`Type=simple`, not `Type=notify`.** `Microsoft.Extensions.Hosting.Systemd` is not referenced and `UseSystemd()` is never called, so the app never sends a readiness notification. With `Type=notify`, systemd waits for one that never arrives, times out, and marks the unit failed. **This is a live bug in the documented unit.**
-- **`LimitNOFILE` / `TasksMax`.** `StreamingService` comments reference "155+ runtime processes"; each FFmpeg process holds many file descriptors and churns segment files. systemd's defaults will cap this well below what the service expects, and the failure mode is FFmpeg silently failing to spawn under load.
-- **`ExecStart` is the executable**, not `dotnet <dll>` — a consequence of the self-contained publish.
+- **`Type=simple`, not `Type=notify`.** `Microsoft.Extensions.Hosting.Systemd` is not referenced and `UseSystemd()` is never called, so the app never sends a readiness notification. With `Type=notify`, systemd waits for one that never arrives, times out, and marks the unit failed. **This is a live bug in the documented unit** — worth checking whether the running nodes already worked around it.
+- **`LimitNOFILE` / `TasksMax`.** `StreamingService` comments reference "155+ runtime processes"; each FFmpeg process holds many file descriptors and churns segment files. systemd's defaults will cap this well below what the service expects. These only *raise* ceilings — they cannot change app behavior, so they carry no QA risk while directly serving "runs smoothly under load".
+
+No sandboxing directives (`ProtectSystem`, `PrivateTmp`, etc.) — production does not use them, and adding them would change the process's view of the filesystem, which is exactly the kind of untested behavior change this work avoids.
 
 ## 5. Build and ship
 
 **CI (GitHub Actions, on push to `master`):**
 
-1. `dotnet publish -c Release -r linux-x64 --self-contained`
+1. `dotnet publish -c Release` (framework-dependent — the same DLL production runs)
 2. `dotnet ef migrations script --idempotent -o schema.sql` (from `ticolinea.panel`)
 3. Attach both as a **release artifact** tagged `<version>` (semver from a `VERSION` file at the repo root).
 
@@ -183,7 +173,7 @@ This requires migrating `ticolineapanel` from Bitbucket to GitHub, alongside the
 
 **CI does not deploy.** It cannot — the client's box is reachable only over WireGuard from a peer. That is a property of the topology, and it is also what we want: a human decides when a given client takes a build.
 
-**Deploy** fetches the artifact and `rsync`s it to the node over the tunnel. The client's server never talks to GitHub, AWS, or any registry — **no Ticolinea credential is ever stored on it.**
+**Deploy** fetches the artifact and `rsync`s it to the node over the tunnel. The client's server never talks to GitHub or any registry — no Ticolinea build credential is stored on it.
 
 ## 6. The tool
 
@@ -191,8 +181,8 @@ This requires migrating `ticolineapanel` from Bitbucket to GitHub, alongside the
 
 ```
 ./tico probe     <slug>   # SSH in; report distro, cpu, disk, ffmpeg version, egress. Changes NOTHING.
-./tico bootstrap <slug>   # idempotent: nginx, mariadb(127.0.0.1), ffmpeg(+hold), user, dirs,
-                          #   schema, generated config, systemd unit
+./tico bootstrap <slug>   # idempotent: aspnetcore-runtime-6.0, nginx, mariadb(127.0.0.1),
+                          #   ffmpeg(+hold), user, dirs, schema, generated config, systemd unit
 ./tico deploy    <slug> --tag <v>   # preflight → swap → verify → auto-rollback on failure
 ./tico rollback  <slug>   # previous symlink + restart
 ./tico status    <slug>   # health, stream count, uptime, current release
@@ -251,11 +241,10 @@ The node needs **no registry egress at all** — only the operator fetches artif
 - **Idempotency:** run `bootstrap` twice against a throwaway Ubuntu 22.04 VM (multipass); assert a clean second run and a green `/health`.
 - **Schema:** `bootstrap` on a clean VM yields a node that starts — the only real proof the generated `schema.sql` is complete. Applying it twice must be a no-op.
 - **Rollback is tested, not merely written.** Deploy a deliberately broken release; assert the tool detects it, rolls back, and the node returns to baseline.
-- **No secret leakage:** assert the generated `appsettings.<slug>.json` shares no value with `main`'s connection string or the panel's private key.
-- **Exposure:** from off-tunnel, assert `/hangfire` and `/swagger` are refused on 27701 while `/Streams/` succeeds.
+- **Config points at the local DB:** assert the generated `appsettings.<slug>.json` connection string targets `127.0.0.1`, not `main`'s RDS. (Correctness, not hardening — a node pointed at the wrong DB is a broken node.)
 - **Database is not reachable off-box:** assert the MariaDB port refuses connections on the public interface.
 
-Scripts by `tico-devops`; tests by `tico-qa`; FFmpeg version policy validated by `tico-stream`.
+Testing stays scoped to the *provisioning and deploy scripts* — it does not re-QA the application, which runs unchanged. Scripts by `tico-devops`; tests by `tico-qa`; FFmpeg version policy validated by `tico-stream`.
 
 ## 10. Prerequisites and risks
 
@@ -263,8 +252,10 @@ Scripts by `tico-devops`; tests by `tico-qa`; FFmpeg version policy validated by
 - **Revoke the GitHub PAT** embedded in plaintext in the `StreamTV` and `ticolinea.panel` git remote URLs. The repo migration in §5 should not be done with a leaked credential.
 
 **Risks:**
-- **Rotating the committed secrets** (RDS password, JWT private key, pepper, panel API key) is out of scope but grows more urgent with each client onboarded. Own ticket.
-- **Ubuntu 22.04 is assumed.** A client on another distro means either a different FFmpeg version (tolerable, and `probe` will say so) or a glibc too old for the self-contained runtime (not tolerable). `probe` must check both.
+- **Ubuntu 22.04 is assumed.** A client on another distro means a different `apt` FFmpeg version (tolerable — `probe` will say so) and possibly no `aspnetcore-runtime-6.0` package for that distro (not tolerable without extra work). `probe` must check both.
+- **`aspnetcore-runtime-6.0` availability.** It is EOL. The Microsoft `packages.microsoft.com` feed still carries it for 22.04, and existing nodes run it — but if a future onboarding cannot obtain it, the fallback is the deferred self-contained publish. `probe`/`bootstrap` should fail loudly if the runtime cannot be installed, rather than proceeding.
+
+Deferred (own tickets, noted in §1): Hangfire dashboard auth, net6.0 upgrade, rotating the committed secrets.
 
 ## 11. Open questions
 
