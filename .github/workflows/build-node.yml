@@ -1,0 +1,50 @@
+name: build-node
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout middleware
+        uses: actions/checkout@v4
+
+      - name: Checkout panel (for EF migrations)
+        uses: actions/checkout@v4
+        with:
+          repository: allansalgadocr/ticolinea.panel
+          ref: master
+          path: _panel
+          token: ${{ secrets.PANEL_REPO_TOKEN }}
+
+      - name: Setup .NET 6
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Read version
+        id: ver
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish (framework-dependent)
+        run: |
+          dotnet publish Ticolinea.Streaming.Middleware/ticolinea.stream.service.csproj \
+            -c Release -o publish
+
+      - name: Generate idempotent schema
+        run: |
+          dotnet tool install --global dotnet-ef --version 6.*
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet ef migrations script --idempotent \
+            --project _panel/ticolinea.panel.Infrastructure \
+            --startup-project _panel/ticolinea.panel.API \
+            -o publish/schema.sql
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-${{ steps.ver.outputs.version }}
+          path: publish/
+          retention-days: 30
