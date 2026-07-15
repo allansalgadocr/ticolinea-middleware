@@ -120,14 +120,25 @@ cmd_deploy() {
   fi
 
   # Stage the artifact into releases/<tag> while the old one still serves.
-  # The artifact ships no secrets (never $PROVIDER's live config); the
-  # per-provider appsettings — rendered once at bootstrap time from the
+  # The per-provider appsettings — rendered once at bootstrap time from the
   # template, never copied from another provider's config — is layered in
   # here from /opt/ticolinea/config, matching the app's documented config
   # load order (appsettings.json -> appsettings.{ENV}.json ->
   # appsettings.{PROVIDER}.json).
   push "$artifact/" "/tmp/release-$tag/"
   remote_sudo bash -c "mkdir -p $TICO_RELEASES_DIR/$tag && cp -a /tmp/release-$tag/. $TICO_RELEASES_DIR/$tag/ && rm -rf /tmp/release-$tag && cp /opt/ticolinea/config/appsettings.$PROVIDER.json $TICO_RELEASES_DIR/$tag/appsettings.$PROVIDER.json && chown -R ticolinea:ticolinea $TICO_RELEASES_DIR/$tag"
+
+  # SECURITY: `dotnet publish` force-copies the main node's own configs into
+  # the build output (the .csproj copies appsettings.main.json etc.), so the
+  # artifact carries Ticolinea's LIVE prod RDS password + panel API key in
+  # plaintext. The node runs with PROVIDER=<slug> and never loads them, but
+  # they must never sit on a client's disk. Strip every non-provider config
+  # from the staged release before it can be swapped in. Keep only the
+  # provider-scoped files (appsettings.$PROVIDER.json / appsettings.Production.json).
+  remote_sudo rm -f \
+    "$TICO_RELEASES_DIR/$tag/appsettings.main.json" \
+    "$TICO_RELEASES_DIR/$tag/appsettings.fibraencasa.json" \
+    "$TICO_RELEASES_DIR/$tag/appsettings.Development.json"
 
   # Apply schema (idempotent) before swapping traffic.
   remote_sudo bash -c "mysql -uroot ${DB_NAME} < $TICO_RELEASES_DIR/$tag/schema.sql"

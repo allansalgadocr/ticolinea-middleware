@@ -229,6 +229,16 @@ For this checklist, assume:
     - `current: 1.0.0` — correct version deployed
     - `unit active: active (running)` — systemd unit is active
 
+- [ ] Confirm no main secret on the box: the deploy must have stripped the
+      non-provider configs that `dotnet publish` bundles (which carry the live
+      prod RDS password + panel API key)
+  ```bash
+  ssh <node> 'ls /opt/ticolinea/current/ | grep -c appsettings.main.json'
+  ```
+  **Expected:** `0` — `appsettings.main.json` is absent from the running release
+      (also confirm `appsettings.fibraencasa.json` and `appsettings.Development.json` are gone;
+      only `appsettings.<slug>.json` / `appsettings.Production.json` remain)
+
 - [ ] Record the fresh streams baseline
   ```bash
   BASELINE=$(./deploy/tico status tico-test | grep 'fresh streams:' | awk '{print $NF}')

@@ -33,6 +33,9 @@ jobs:
           dotnet publish Ticolinea.Streaming.Middleware/ticolinea.stream.service.csproj \
             -c Release -o publish
 
+      - name: Strip non-provider configs from the artifact
+        run: rm -f publish/appsettings.main.json publish/appsettings.fibraencasa.json publish/appsettings.Development.json
+
       - name: Generate idempotent schema
         run: |
           dotnet tool install --global dotnet-ef --version 6.*
