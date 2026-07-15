@@ -1,0 +1,24 @@
+[Unit]
+Description=Ticolinea Streaming Node (${PROVIDER})
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ticolinea
+WorkingDirectory=/opt/ticolinea/current
+ExecStart=/usr/bin/dotnet /opt/ticolinea/current/ticolinea.stream.service.dll
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://127.0.0.1:1234
+Environment=PROVIDER=${PROVIDER}
+
+LimitNOFILE=65535
+TasksMax=4096
+
+[Install]
+WantedBy=multi-user.target
