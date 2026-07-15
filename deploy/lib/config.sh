@@ -23,6 +23,9 @@ config_load_file() { # file  -> exports all keys + derived
   done
   export DB_NAME="${PROVIDER}-streaming"
   export DB_USER="streamingservice"
+  case "$PROVIDER" in
+    ""|*[!a-z0-9-]*) die "config: PROVIDER must be a lowercase slug matching [a-z0-9-]: '$PROVIDER'";;
+  esac
 }
 
 _provider_conf() { printf '%s/providers/%s.conf' "$TICO_ROOT" "$1"; }

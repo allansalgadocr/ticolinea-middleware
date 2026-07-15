@@ -50,3 +50,10 @@ teardown() { rm -rf "$TMP"; }
   [ "$status" -ne 0 ]
   [[ "$output" == *"PROVIDER"* ]]
 }
+
+@test "config_load rejects a PROVIDER with unsafe characters" {
+  sed 's/^PROVIDER=.*/PROVIDER=acme;rm/' "$TMP/good.conf" > "$TMP/unsafe.conf"
+  run config_load_file "$TMP/unsafe.conf"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"PROVIDER"* ]]
+}
