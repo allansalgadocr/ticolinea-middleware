@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TICO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export TICO_ROOT
+# shellcheck source=lib/common.sh
+source "$TICO_ROOT/lib/common.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: tico <command> <slug> [options]
+
+Commands:
+  probe     <slug>              Report the target server; changes nothing
+  bootstrap <slug>              Idempotently provision the server
+  deploy    <slug> --tag <v>    Deploy a release; auto-rolls-back on failure
+  rollback  <slug>              Revert to the previous release
+  status    <slug>              Health, stream count, uptime, current release
+  ports     <slug>              Print the firewall request for this client
+EOF
+  exit 2
+}
+
+main() {
+  [ $# -ge 1 ] || usage
+  local cmd="$1"; shift
+  case "$cmd" in
+    probe|bootstrap|deploy|rollback|status|ports)
+      # shellcheck source=/dev/null
+      source "$TICO_ROOT/lib/commands/$cmd.sh"
+      "cmd_$cmd" "$@"
+      ;;
+    -h|--help|help) usage ;;
+    *) warn "unknown command: $cmd"; usage ;;
+  esac
+}
+
+main "$@"
