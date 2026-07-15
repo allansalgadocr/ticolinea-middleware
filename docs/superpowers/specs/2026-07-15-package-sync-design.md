@@ -40,9 +40,9 @@ Panel  (ticolinea.panel.API)                     Provider node  (Ticolinea.Strea
 GET /api/v2/providers/{slug}/catalog             PackageSyncJob (Hangfire recurring, 6h + on boot)
   header X-Auth-API-Key: <PanelApiKey>   ◄──────    1. GET catalog (named "PanelApi" HttpClient + key)
   → resolve provider's package                      2. guard: reachable? sane size?
-  → join paquete_tv_streams ⋈ streams_tl            3. upsert streams_tl (by panel id, sincronizado=1)
-  → return full live rows (tipo=1)                  4. upsert streams_info (iniciado=1)   ← §7
-                                                    5. reconcile: disable managed rows not in catalog
+  → join paquete_tv_streams ⋈ streams_tl            3. upsert streams_tl (by panel id, sincronizado=1, habilitado=1)
+  → return full live rows (tipo=1)                  4. ensure streams_info row exists (iniciado defaults 1)  ← §7
+                                                    5. reconcile: habilitado=0 on managed rows not in catalog
                                                     (all steps in one transaction)
 ```
 
@@ -74,8 +74,10 @@ A new service (e.g. `Services/PackageSyncService.cs`) plus a Hangfire recurring 
 
 Per cycle, in a **single transaction**:
 1. **Upsert `streams_tl`** keyed on the panel `id` (`INSERT … ON DUPLICATE KEY UPDATE`), setting `sincronizado = 1` and `habilitado = 1`. Keeping the panel id means EPG (`canal_epg`) and ordering (`canal_id`) stay identical to origin.
-2. **Upsert `streams_info`** `(stream_id, iniciado = 1)` for each channel (`INSERT … ON DUPLICATE KEY UPDATE`). **Without this the supervision loop never starts the stream** — the active-streams query is `streams_tl INNER JOIN streams_info ON iniciado = 1` (`Jobs.cs`, `BatchDatabaseHelper.cs`).
-3. **Reconcile removals:** for every row with `sincronizado = 1` whose `id` is not in the current catalog, set `habilitado = 0` and its `streams_info.iniciado = 0`. The row is kept (product decision); if the channel returns, step 1 re-enables it. Rows with `sincronizado = 0` (added locally, out of band) are **never touched**.
+2. **Ensure a `streams_info` row exists** for each channel — `INSERT IGNORE INTO streams_info (stream_id, iniciado) VALUES (?, 1)` (or equivalent insert-if-absent). **The sync never writes `iniciado` after creation.** `iniciado` is a node-local operational flag (defaults to `1` so a freshly-synced channel runs); it is deliberately **not** sync-managed, so an operator who pauses a channel (`iniciado = 0`) is not silently un-paused by the next 6h cycle. The row must merely *exist*, because the active-streams query is `streams_tl INNER JOIN streams_info ON habilitado = 1 AND iniciado = 1` (`Jobs.cs`, `BatchDatabaseHelper.cs`) — no row means the stream never runs.
+3. **Reconcile removals:** for every row with `sincronizado = 1` whose `id` is not in the current catalog, set `habilitado = 0` **only**. Leave `streams_info.iniciado` untouched — `habilitado = 0` alone stops the stream (the query needs both flags). The row is kept (product decision); if the channel returns, step 1 sets `habilitado = 1` and it runs again. Rows with `sincronizado = 0` (added locally, out of band) are **never touched**.
+
+**Package membership is expressed solely through `habilitado`** (sync-owned). `iniciado` stays node-owned. This clean split is what lets the sync be safely idempotent without ever fighting an operator's runtime decisions.
 
 **The `sincronizado` marker** distinguishes panel-managed rows from anything created locally on the node, so reconcile can safely mass-disable without clobbering local additions. Added as a `BOOLEAN NOT NULL DEFAULT 0` column on `streams_tl` via an EF migration (§7), so it ships through the same `schema.sql` pipeline provisioning already uses.
 
@@ -98,8 +100,8 @@ Two migrations, because the node's schema is generated from the panel's EF migra
 
 1. Panel: provider `acme` (`is_external = false`, `default_paquete_tv_id = P1`); P1 has channels 10, 11, 12.
 2. Node boots → sync runs → `GET /providers/acme/catalog` → `[{id:10,…},{id:11,…},{id:12,…}]`.
-3. Node upserts `streams_tl` 10/11/12 (`sincronizado=1, habilitado=1`) + `streams_info` (`iniciado=1`). Supervision starts FFmpeg per channel; `/api/health` still 200; channels now watchable.
-4. 6h later P1 dropped channel 12, added 13 → catalog `[10,11,13]`. Node upserts 10/11/13, and reconcile disables 12 (`habilitado=0`, kept). 
+3. Node upserts `streams_tl` 10/11/12 (`sincronizado=1, habilitado=1`) and inserts `streams_info` rows (`iniciado=1` by default). Supervision starts FFmpeg per channel; `/api/health` still 200; channels now watchable.
+4. 6h later P1 dropped channel 12, added 13 → catalog `[10,11,13]`. Node upserts 10/11/13, and reconcile sets channel 12 `habilitado=0` (row kept, its `streams_info.iniciado` left as-is).
 5. Panel down at the next tick → node logs, changes nothing, keeps serving 10/11/13.
 
 ## 10. Testing
@@ -110,10 +112,11 @@ Two migrations, because the node's schema is generated from the panel's EF migra
 
 **Node (`Ticolinea.Streaming.Middleware.Tests`, xUnit):**
 - Upsert idempotency: same catalog twice → no row churn, `sincronizado=1`.
-- `streams_info` written with `iniciado=1` for every synced channel.
-- Reconcile disables exactly the dropped channels and leaves `sincronizado=0` (local) rows untouched.
+- A `streams_info` row is created (`iniciado=1`) for a newly-synced channel that had none.
+- **`iniciado` is never overwritten:** operator sets a synced channel's `iniciado=0`; a subsequent sync leaves it `0` (does not un-pause).
+- Reconcile sets `habilitado=0` on exactly the dropped channels, leaves their `streams_info.iniciado` untouched, and leaves `sincronizado=0` (local) rows entirely alone.
 - **Panel-down keeps stale data:** fetch throws / non-2xx → zero DB mutations.
-- **Undersized-catalog guard:** catalog with < 50% of managed count → upserts apply, no disables.
+- **Undersized-catalog guard:** catalog with < 50% of managed count → upserts apply, no `habilitado=0` disables.
 - Transaction rollback on mid-sync failure.
 
 ## 11. Prerequisites & risks
