@@ -15,7 +15,7 @@ server {
 
 server {
     listen 27703;
-    root /srv/ticolinea;
+    root /srv/${PROVIDER};
 
     location ~ ^/streams/.*\.ts$ {
         types { video/mp2t ts; }

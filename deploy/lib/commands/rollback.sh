@@ -9,6 +9,7 @@ source "$TICO_ROOT/lib/commands/deploy.sh"
 cmd_rollback() {
   [ $# -ge 1 ] || die "usage: tico rollback <slug>"
   config_load "$1"
+  _tico_resolve_paths
   local current previous
 
   # Mirrors deploy_prune_releases' current-detection exactly (readlink -f,

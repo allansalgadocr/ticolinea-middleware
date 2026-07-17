@@ -22,6 +22,19 @@ _assert_ubuntu2204() {
   [ "$v" = "ubuntu 22.04" ] || die "target is '$v'; this tool requires Ubuntu 22.04"
 }
 
+_disable_swap() {
+  log "Disabling swap (idempotent)"
+  # A streaming node should never swap — it kills HLS timing. Turn swap off
+  # now and comment out any swap line in fstab so it stays off across a
+  # reboot. The [^#] guard on the sed means re-running this is a no-op on a
+  # box that's already had its fstab swap line commented out.
+  remote_sudo 'bash -s' <<'REMOTE'
+set -euo pipefail
+swapoff -a || true
+sed -ri '/\sswap\s/s/^([^#])/#\1/' /etc/fstab
+REMOTE
+}
+
 _install_packages() {
   log "Installing base packages (idempotent)"
   remote_sudo 'bash -s' <<'REMOTE'
@@ -42,13 +55,17 @@ REMOTE
 
 _create_user_and_dirs() {
   log "Creating service user and directory tree (idempotent)"
-  remote_sudo 'bash -s' <<'REMOTE'
+  # Unquoted heredoc (was <<'REMOTE'): ${PROVIDER} must expand here on the
+  # controller before the script is sent over ssh — a single-quoted heredoc
+  # would ship the literal string "${PROVIDER}" to the remote shell instead.
+  # No other $ references live in this block, so unquoting is safe.
+  remote_sudo 'bash -s' <<REMOTE
 set -euo pipefail
 id ticolinea >/dev/null 2>&1 || useradd -r -m -d /home/ticolinea -s /usr/sbin/nologin ticolinea
-mkdir -p /opt/ticolinea/releases /opt/ticolinea/config /opt/ticolinea/nginx /opt/ticolinea/secrets
-mkdir -p /srv/ticolinea/streams /srv/ticolinea/epg /srv/ticolinea/movies /srv/ticolinea/series /srv/ticolinea/raw-movies /srv/ticolinea/logs
-chown -R ticolinea:ticolinea /opt/ticolinea /srv/ticolinea
-chmod 700 /opt/ticolinea/secrets
+mkdir -p /opt/${PROVIDER}/releases /opt/${PROVIDER}/config /opt/${PROVIDER}/nginx /opt/${PROVIDER}/secrets
+mkdir -p /srv/${PROVIDER}/streams /srv/${PROVIDER}/epg /srv/${PROVIDER}/movies /srv/${PROVIDER}/series /srv/${PROVIDER}/raw-movies /srv/${PROVIDER}/logs
+chown -R ticolinea:ticolinea /opt/${PROVIDER} /srv/${PROVIDER}
+chmod 700 /opt/${PROVIDER}/secrets
 REMOTE
 }
 
@@ -69,7 +86,7 @@ REMOTE
   # Generate DB password once; store on box 0600.
   remote_sudo 'bash -s' <<REMOTE
 set -euo pipefail
-SECRET=/opt/ticolinea/secrets/db-password
+SECRET=/opt/${PROVIDER}/secrets/db-password
 if [ ! -s "\$SECRET" ]; then
   head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32 > "\$SECRET"
   chmod 600 "\$SECRET"; chown ticolinea:ticolinea "\$SECRET"
@@ -88,7 +105,7 @@ REMOTE
 _render_and_upload_config() {
   log "Rendering and uploading appsettings + nginx + systemd unit"
   _load_shared_secrets
-  export DB_PASSWORD; DB_PASSWORD="$(remote_sudo cat /opt/ticolinea/secrets/db-password)"
+  export DB_PASSWORD; DB_PASSWORD="$(remote_sudo cat /opt/"${PROVIDER}"/secrets/db-password)"
   local tmp; tmp="$(mktemp -d)"
   render_template "$TICO_ROOT/templates/appsettings.provider.json.tmpl" > "$tmp/appsettings.$PROVIDER.json"
   render_template "$TICO_ROOT/templates/nginx-node.conf.tmpl" > "$tmp/node.conf"
@@ -101,7 +118,7 @@ _render_and_upload_config() {
 
   remote_sudo 'bash -s' <<REMOTE
 set -euo pipefail
-install -o ticolinea -g ticolinea -m 640 /tmp/appsettings.$PROVIDER.json /opt/ticolinea/config/appsettings.$PROVIDER.json
+install -o ticolinea -g ticolinea -m 640 /tmp/appsettings.$PROVIDER.json /opt/${PROVIDER}/config/appsettings.$PROVIDER.json
 install -m 644 /tmp/node.conf /etc/nginx/sites-available/ticolinea-node.conf
 ln -sfn /etc/nginx/sites-available/ticolinea-node.conf /etc/nginx/sites-enabled/ticolinea-node.conf
 rm -f /etc/nginx/sites-enabled/default
@@ -134,6 +151,7 @@ cmd_bootstrap() {
   esac; done
 
   _assert_ubuntu2204
+  _disable_swap
   _install_packages
   _create_user_and_dirs
   _setup_mariadb

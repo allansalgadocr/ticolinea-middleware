@@ -5,18 +5,18 @@
   "Streaming": {
     "ProviderId": "${PROVIDER}",
     "ProviderName": "${PROVIDER_NAME}",
-    "StreamsFolder": "/srv/ticolinea/streams/",
-    "EpgFolder": "/srv/ticolinea/epg/",
-    "MoviesFolder": "/srv/ticolinea/movies/",
-    "SeriesFolder": "/srv/ticolinea/series/",
-    "MoviesRawFolder": "/srv/ticolinea/raw-movies/",
+    "StreamsFolder": "/srv/${PROVIDER}/streams/",
+    "EpgFolder": "/srv/${PROVIDER}/epg/",
+    "MoviesFolder": "/srv/${PROVIDER}/movies/",
+    "SeriesFolder": "/srv/${PROVIDER}/series/",
+    "MoviesRawFolder": "/srv/${PROVIDER}/raw-movies/",
     "FfmpegPath": "ffmpeg",
     "FfprobePath": "ffprobe",
     "EnableStreamExecution": true,
     "EnableFfmpegProcesses": true,
     "EnableStreamManagement": true,
-    "SegmentBaseUrl": "${SEGMENT_BASE_URL}",
-    "StreamsBaseUrl": "http://${PUBLIC_HOST}:27701"
+    "SegmentBaseUrl": "http://${PUBLIC_HOST}:27701",
+    "StreamsBaseUrl": "http://${PUBLIC_HOST}:27703"
   },
   "Jwt": {
     "Issuer": "ticolinea.panel",

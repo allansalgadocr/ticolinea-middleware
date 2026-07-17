@@ -4,8 +4,8 @@
 
 1. Get WireGuard peering from the client; confirm you can `ssh <user>@<tunnel-ip>`.
 2. `cp deploy/providers/example.conf deploy/providers/<slug>.conf` and fill it.
-   Confirm `SEGMENT_BASE_URL` with the client — the example defaults to :27703 (static segment server),
-   but the value depends on how the client's network is configured. Verify before first deploy.
+   The node's API (27701) and segment (27703) URLs are derived from `PUBLIC_HOST` at render time
+   using the tool's fixed ports — nothing to configure per client.
 3. `cp deploy/secrets/shared.env.example deploy/secrets/shared.env` and fill
    JWT_PUBLIC_KEY / PANEL_API_KEY from the panel.
 4. `./deploy/tico probe <slug>` — read the report. Stop if it is not Ubuntu 22.04,
@@ -49,9 +49,9 @@
 
 ```bash
 ssh <user>@<tunnel-ip>
-ls -1dt /opt/ticolinea/releases/*/          # find the previous good release
-sudo ln -sfn /opt/ticolinea/releases/<prev> /opt/ticolinea/current.tmp
-sudo mv -T /opt/ticolinea/current.tmp /opt/ticolinea/current
+ls -1dt /opt/<slug>/releases/*/          # find the previous good release
+sudo ln -sfn /opt/<slug>/releases/<prev> /opt/<slug>/current.tmp
+sudo mv -T /opt/<slug>/current.tmp /opt/<slug>/current
 sudo systemctl restart ticolinea-streaming
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:1234/api/health   # expect 200
 ```

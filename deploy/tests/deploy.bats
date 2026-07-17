@@ -14,6 +14,12 @@ setup() {
   mock_runner_reset
   TICO_RUNNER=mock_runner
   SSH_HOST=host SSH_USER=u PROVIDER=acme
+  # This fixture bypasses config_load (it sets PROVIDER directly), so
+  # TICO_RELEASES_DIR/TICO_CURRENT_LINK — normally resolved by
+  # _tico_resolve_paths right after config_load — must be resolved here too,
+  # for the tests below that call deploy_run_swap_and_verify/deploy_rollback_to
+  # directly instead of going through cmd_deploy.
+  _tico_resolve_paths
   # Keep the verify retry loop instant in tests; production defaults (12x5s)
   # only apply when these are unset.
   TICO_VERIFY_TRIES=1

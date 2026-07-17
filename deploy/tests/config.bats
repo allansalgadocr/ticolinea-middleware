@@ -11,7 +11,6 @@ SSH_USER=ubuntu
 PROVIDER=acme
 PROVIDER_NAME=Acme TV
 PUBLIC_HOST=iptv.acme.cr
-SEGMENT_BASE_URL=http://iptv.acme.cr:27703/
 PANEL_API_URL=http://tv.play-latino.com:27702/api/v2
 MAIN_FFMPEG_VERSION=4.4.2
 EOF

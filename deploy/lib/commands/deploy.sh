@@ -4,8 +4,15 @@ source "$TICO_ROOT/lib/config.sh"
 # shellcheck source=/dev/null
 source "$TICO_ROOT/lib/remote.sh"
 
-TICO_RELEASES_DIR="/opt/ticolinea/releases"
-TICO_CURRENT_LINK="/opt/ticolinea/current"
+# TICO_RELEASES_DIR/TICO_CURRENT_LINK are namespaced by provider slug, so they
+# cannot be assigned at source time (PROVIDER isn't set until config_load
+# runs). Call this immediately after config_load in every command that needs
+# them — cmd_deploy here, plus cmd_rollback/cmd_status which source this file
+# for TICO_RELEASES_DIR/TICO_CURRENT_LINK but run their own config_load.
+_tico_resolve_paths() {
+  TICO_RELEASES_DIR="/opt/${PROVIDER}/releases"
+  TICO_CURRENT_LINK="/opt/${PROVIDER}/current"
+}
 
 # Seams so tests can stub the two observations independently of the runner.
 deploy_health() { remote_health; }
@@ -93,6 +100,7 @@ cmd_deploy() {
   esac; done
   [ -n "$tag" ] || die "--tag is required"
   config_load "$slug"
+  _tico_resolve_paths
 
   # 1. Preflight — non-destructive, no downtime for the currently-serving release.
   log "Preflight: health, disk, staging release $tag"
@@ -122,11 +130,11 @@ cmd_deploy() {
   # Stage the artifact into releases/<tag> while the old one still serves.
   # The per-provider appsettings — rendered once at bootstrap time from the
   # template, never copied from another provider's config — is layered in
-  # here from /opt/ticolinea/config, matching the app's documented config
+  # here from /opt/${PROVIDER}/config, matching the app's documented config
   # load order (appsettings.json -> appsettings.{ENV}.json ->
   # appsettings.{PROVIDER}.json).
   push "$artifact/" "/tmp/release-$tag/"
-  remote_sudo bash -c "mkdir -p $TICO_RELEASES_DIR/$tag && cp -a /tmp/release-$tag/. $TICO_RELEASES_DIR/$tag/ && rm -rf /tmp/release-$tag && cp /opt/ticolinea/config/appsettings.$PROVIDER.json $TICO_RELEASES_DIR/$tag/appsettings.$PROVIDER.json && chown -R ticolinea:ticolinea $TICO_RELEASES_DIR/$tag"
+  remote_sudo bash -c "mkdir -p $TICO_RELEASES_DIR/$tag && cp -a /tmp/release-$tag/. $TICO_RELEASES_DIR/$tag/ && rm -rf /tmp/release-$tag && cp /opt/${PROVIDER}/config/appsettings.$PROVIDER.json $TICO_RELEASES_DIR/$tag/appsettings.$PROVIDER.json && chown -R ticolinea:ticolinea $TICO_RELEASES_DIR/$tag"
 
   # SECURITY: `dotnet publish` force-copies the main node's own configs into
   # the build output (the .csproj copies appsettings.main.json etc.), so the

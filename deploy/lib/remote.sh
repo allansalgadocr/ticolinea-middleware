@@ -20,5 +20,8 @@ remote_health() {
 }
 
 remote_fresh_stream_count() {
-  remote 'find /srv/ticolinea/streams -name "*.ts" -mmin -1 2>/dev/null | wc -l | tr -d " "'
+  # /srv/${PROVIDER}/streams — namespaced like every other on-box
+  # path. All callers (cmd_deploy, cmd_status, deploy_verify) run after
+  # config_load has exported PROVIDER, so it's in scope here.
+  remote "find /srv/${PROVIDER}/streams -name '*.ts' -mmin -1 2>/dev/null | wc -l | tr -d ' '"
 }

@@ -6,8 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=ticolinea
-WorkingDirectory=/opt/ticolinea/current
-ExecStart=/usr/bin/dotnet /opt/ticolinea/current/ticolinea.stream.service.dll
+WorkingDirectory=/opt/${PROVIDER}/current
+ExecStart=/usr/bin/dotnet /opt/${PROVIDER}/current/ticolinea.stream.service.dll
 Restart=always
 RestartSec=10
 KillSignal=SIGINT
@@ -17,7 +17,7 @@ Environment=ASPNETCORE_ENVIRONMENT=Production
 Environment=ASPNETCORE_URLS=http://127.0.0.1:1234
 Environment=PROVIDER=${PROVIDER}
 
-LimitNOFILE=65535
+LimitNOFILE=200000
 TasksMax=4096
 
 [Install]

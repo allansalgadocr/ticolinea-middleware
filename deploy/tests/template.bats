@@ -27,7 +27,7 @@ teardown() { rm -rf "$TMP"; }
 
 @test "appsettings template renders valid JSON with local DB" {
   export SSH_HOST=x SSH_USER=x PROVIDER=acme PROVIDER_NAME="Acme TV" \
-         PUBLIC_HOST=iptv.acme.cr SEGMENT_BASE_URL="http://iptv.acme.cr:27703/" \
+         PUBLIC_HOST=iptv.acme.cr \
          PANEL_API_URL="http://tv.play-latino.com:27702/api/v2" \
          DB_NAME=acme-streaming DB_USER=streamingservice DB_PASSWORD=s3cret \
          JWT_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----\nAAA\n-----END PUBLIC KEY-----\n' \
@@ -38,6 +38,10 @@ teardown() { rm -rf "$TMP"; }
   grep -q 'server=127.0.0.1' "$TMP/out.json"
   grep -q '"ProviderId": "acme"' "$TMP/out.json"
   run ! grep -q 'rds.amazonaws.com' "$TMP/out.json"
+  # SegmentBaseUrl serves the m3u8/API on 27701; StreamsBaseUrl serves .ts segments on 27703.
+  # These must not invert (see LiveController vs StreamsController usage).
+  grep -Eq '"SegmentBaseUrl": "http://iptv\.acme\.cr:27701"' "$TMP/out.json"
+  grep -Eq '"StreamsBaseUrl": "http://iptv\.acme\.cr:27703"' "$TMP/out.json"
 }
 
 @test "render_template preserves special characters in values" {

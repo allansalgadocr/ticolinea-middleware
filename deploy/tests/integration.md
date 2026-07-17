@@ -64,7 +64,6 @@ SSH_USER=ubuntu
 PROVIDER=ticotest
 PROVIDER_NAME=Tico Test
 PUBLIC_HOST=$IP
-SEGMENT_BASE_URL=http://$IP:27703/
 PANEL_API_URL=http://tv.play-latino.com:27702/api/v2
 MAIN_FFMPEG_VERSION=4.4.2
 EOF
@@ -233,7 +232,7 @@ For this checklist, assume:
       non-provider configs that `dotnet publish` bundles (which carry the live
       prod RDS password + panel API key)
   ```bash
-  ssh <node> 'ls /opt/ticolinea/current/ | grep -c appsettings.main.json'
+  ssh <node> 'ls /opt/<slug>/current/ | grep -c appsettings.main.json'
   ```
   **Expected:** `0` — `appsettings.main.json` is absent from the running release
       (also confirm `appsettings.fibraencasa.json` and `appsettings.Development.json` are gone;
@@ -334,6 +333,20 @@ For this checklist, assume:
 ```
 [paste output here]
 ```
+
+---
+
+## Package sync (spec B)
+
+**Objective:** Prove the `PackageSyncService` DB writes (upsert / ensure `streams_info` / disable) work against a live MySQL — this path has no unit-test harness; the pure decision logic is covered separately by `PackageSyncPlanTests`.
+
+### Checklist
+
+- [ ] After bootstrap+deploy, trigger a sync (restart the node so the boot job runs).
+- [ ] `mysql <db> -e "SELECT COUNT(*) FROM streams_tl WHERE sincronizado=1;"` → matches the package's channel count.
+- [ ] `mysql <db> -e "SELECT COUNT(*) FROM streams_info si JOIN streams_tl s ON s.id=si.stream_id WHERE s.sincronizado=1;"` → same count (a streams_info row per synced channel).
+- [ ] Set a channel's `iniciado=0` by hand; restart; confirm it stays 0 (sync does not overwrite iniciado).
+- [ ] Remove a channel from the package in the panel; wait for / trigger a sync; confirm that channel is `habilitado=0` and its row remains.
 
 ---
 

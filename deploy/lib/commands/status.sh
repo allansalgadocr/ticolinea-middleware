@@ -9,6 +9,7 @@ source "$TICO_ROOT/lib/commands/deploy.sh"
 cmd_status() {
   [ $# -ge 1 ] || die "usage: tico status <slug>"
   config_load "$1"
+  _tico_resolve_paths
   echo "provider:      $PROVIDER ($SSH_HOST)"
   echo "health:        $(remote_health) (200=healthy)"
   echo "current:       $(remote "readlink $TICO_CURRENT_LINK 2>/dev/null | xargs -r basename || echo none")"
