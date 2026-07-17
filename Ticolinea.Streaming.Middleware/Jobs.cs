@@ -22,6 +22,21 @@ namespace ticolinea.stream.service
         private static readonly object _cacheLock = new object();
         private static readonly TimeSpan _cacheExpiration = TimeSpan.FromSeconds(15); // Reduced for faster updates with 155+ streams
 
+        // Package sync (Spec B): pulls this node's channel catalog from the panel
+        // and upserts streams_tl/streams_info. Runs on a Hangfire recurring
+        // schedule (see Program.cs) plus once on boot.
+        public static async Task SyncPackageCatalog()
+        {
+            var http = Constantes.Global.HttpClientFactory.CreateClient("PanelApi");
+            http.Timeout = TimeSpan.FromSeconds(30);
+            var client = new Helpers.CatalogClient(
+                http,
+                Constantes.Global.PANEL_API_URL,
+                Constantes.Global.PANEL_API_KEY,
+                Constantes.Global.PROVIDER_ID);
+            await new Services.PackageSyncService(client).SyncAsync();
+        }
+
         [DisableConcurrentExecution(60)]
         public static async Task RevisarStreams()
         {
@@ -1012,7 +1027,7 @@ namespace ticolinea.stream.service
             }
         }
 
-        private static async Task<double> ObtenerUsoCPU()
+        public static async Task<double> ObtenerUsoCPU()
         {
             try
             {
@@ -1074,7 +1089,7 @@ namespace ticolinea.stream.service
             return 0;
         }
 
-        private static async Task<double> ObtenerUsoRAM()
+        public static async Task<double> ObtenerUsoRAM()
         {
             try
             {
@@ -1098,7 +1113,7 @@ namespace ticolinea.stream.service
             return 0;
         }
 
-        private static async Task<double> ObtenerUsoDisco()
+        public static async Task<double> ObtenerUsoDisco()
         {
             try
             {
@@ -1120,6 +1135,14 @@ namespace ticolinea.stream.service
             }
 
             return 0;
+        }
+
+        public static async Task<(double cpu, double ram, double disk)> ObtenerMetricasSaludAsync()
+        {
+            var cpu = await ObtenerUsoCPU();
+            var ram = await ObtenerUsoRAM();
+            var disk = await ObtenerUsoDisco();
+            return (cpu, ram, disk);
         }
 
         private static async Task<double> ObtenerUsoDiscoCarpeta(string folderPath)

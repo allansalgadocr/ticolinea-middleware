@@ -102,6 +102,11 @@ builder.Services.AddSingleton<ticolinea.stream.service.Services.ActivityTracking
 
 var app = builder.Build();
 
+// Static Hangfire jobs (Jobs class) have no DI container of their own; expose the
+// named "PanelApi" HttpClient through Global the same way other runtime settings
+// (Global.Initialize / TokenValidation.Initialize) are made available to them.
+Global.HttpClientFactory = app.Services.GetRequiredService<IHttpClientFactory>();
+
 // Configure the HTTP request pipeline.
 /*if (app.Environment.IsDevelopment())
 {
@@ -134,6 +139,13 @@ RecurringJob.AddOrUpdate("remove_stream_errors", () => Jobs.LimpiaErrores(), Cro
 RecurringJob.AddOrUpdate("monitor_system_resources", () => Jobs.MonitorearRecursosSistema(), "*/10 * * * *"); // Every 10 minutes
 
 RecurringJob.AddOrUpdate("cleanup", () => Jobs.CleanUpOldJobs(), Cron.Hourly);
+
+// Package sync (Spec B): pull the assigned channel package from the panel on a
+// recurring schedule, and once on boot so a freshly (re)started node doesn't
+// wait a full interval before it has channels.
+var syncHours = builder.Configuration.GetValue<int?>("PackageSync:IntervalHours") ?? 6;
+RecurringJob.AddOrUpdate("sync_package_catalog", () => Jobs.SyncPackageCatalog(), $"0 */{syncHours} * * *");
+BackgroundJob.Enqueue(() => Jobs.SyncPackageCatalog()); // run once on boot
 
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {

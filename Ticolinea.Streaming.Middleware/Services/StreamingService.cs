@@ -557,6 +557,14 @@ namespace ticolinea.stream.service.Services
             }
         }
 
+        // Seconds since this stream's ffmpeg was last (re)started, or 0 if not tracked.
+        public static double GetStreamUptimeSeconds(int streamId)
+        {
+            if (_lastProcessStart.TryGetValue(streamId, out var start))
+                return Math.Max(0, (DateTime.UtcNow - start).TotalSeconds);
+            return 0;
+        }
+
         public static object GetPerformanceStats()
         {
             return new

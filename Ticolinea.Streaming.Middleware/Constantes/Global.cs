@@ -1,4 +1,6 @@
-﻿using ticolinea.stream.service.Config;
+﻿using Microsoft.Extensions.Http;
+using ticolinea.stream.service.Config;
+using ticolinea.stream.service.Helpers;
 
 namespace ticolinea.stream.service.Constantes
 {
@@ -6,6 +8,11 @@ namespace ticolinea.stream.service.Constantes
     {
         private static StreamingSettings? _streamingSettings;
         private static DatabaseSettings? _databaseSettings;
+
+        // Set from Program.cs once the app's service provider is available.
+        // Used by static Hangfire jobs (e.g. Jobs.SyncPackageCatalog) that have
+        // no DI container of their own to pull the named "PanelApi" HttpClient from.
+        public static IHttpClientFactory HttpClientFactory { get; set; } = null!;
 
         /// <summary>
         /// Initialize settings from configuration (call from Program.cs)
@@ -43,5 +50,17 @@ namespace ticolinea.stream.service.Constantes
 
         // Database
         public static string MARIADB_CONN => _databaseSettings?.ConnectionString ?? "server=127.0.0.1;Port=4447;uid=streamingservice;pwd=PASSWORD;database=fibraencasa-streaming;Allow User Variables=True;SSLMode=None;Pooling=true;Min Pool Size=50;Max Pool Size=500;Connection Lifetime=0;AllowPublicKeyRetrieval=true";
+
+        // Panel API (JWT section). JwtSettings is already held by TokenValidation's
+        // backing field via TokenValidation.Initialize(jwtSettings) in Program.cs —
+        // these accessors read off that same instance rather than duplicating storage.
+        public static string PANEL_API_URL => TokenValidation.GetSettings()?.PanelApiUrl?.TrimEnd('/') ?? "";
+
+        // test seam: lets unit tests set the key without full Initialize()/TokenValidation setup.
+        // Production path (TokenValidation.GetSettings()?.PanelApiKey) is unchanged when this is null.
+        internal static string? _testPanelApiKey;
+        public static void TestSetPanelApiKey(string v) => _testPanelApiKey = v;
+
+        public static string PANEL_API_KEY => _testPanelApiKey ?? (TokenValidation.GetSettings()?.PanelApiKey ?? "");
     }
 }
