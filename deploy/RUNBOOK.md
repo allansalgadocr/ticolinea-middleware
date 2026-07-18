@@ -25,13 +25,16 @@
    update inside this window) verifies **health only**; the fresh-stream check only
    gates updates of a node that was already serving ("recovered to baseline").
 
-## Pilot flags
+## Runtime flags
 
-- `Streaming:FfmpegManagedDiscontinuities` (default **false** everywhere): FFmpeg-managed HLS
-  discontinuities — adds `-hls_start_number_source epoch` and skips the app-side
-  `#EXT-X-DISCONTINUITY` injection. Pilot on ONE node only: edit
-  `/opt/<slug>/config/appsettings.<slug>.json` (set it `true` in the `Streaming` section),
-  then `sudo systemctl restart ticolinea-streaming`. Do not flip it in the template.
+- `Streaming:FfmpegManagedDiscontinuities` (**true** everywhere as of 2026-07-18): FFmpeg-managed
+  HLS discontinuities — adds `-hls_start_number_source epoch` and skips the app-side
+  `#EXT-X-DISCONTINUITY` injection. If devices on a node misbehave (freezes after channel
+  restarts), revert on that node only: edit `/opt/<slug>/config/appsettings.<slug>.json`
+  (set it `false` in the `Streaming` section), then `sudo systemctl restart ticolinea-streaming`.
+- `Watchdog:Enabled` (**true** everywhere): output-progress watchdog — kills a wedged ffmpeg so
+  supervision relaunches it; 3-restarts-per-10min budget, then Degraded (observe-only). Same
+  per-node revert procedure if needed.
 
 ## Update a running client
 

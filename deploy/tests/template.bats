@@ -44,13 +44,12 @@ teardown() { rm -rf "$TMP"; }
   # These must not invert (see LiveController vs StreamsController usage).
   grep -Eq '"SegmentBaseUrl": "http://iptv\.acme\.cr:27701"' "$TMP/out.json"
   grep -Eq '"StreamsBaseUrl": "http://iptv\.acme\.cr:27703"' "$TMP/out.json"
-  # Output-progress watchdog: default OFF in the base appsettings.json; provider
-  # nodes deliberately turn it ON via this overlay (OutputWatchdogService).
+  # Output-progress watchdog: enabled on provider nodes (OutputWatchdogService).
   run node -e "process.exit(JSON.parse(require('fs').readFileSync('$TMP/out.json','utf8')).Watchdog.Enabled===true?0:1)"
   [ "$status" -eq 0 ]
-  # FfmpegManagedDiscontinuities pilot: template must render FALSE — the pilot is
-  # flipped by hand on ONE node (see RUNBOOK), never fleet-wide via the template.
-  grep -q '"FfmpegManagedDiscontinuities": false' "$TMP/out.json"
+  # FfmpegManagedDiscontinuities: enabled fleet-wide (operator decision 2026-07-18);
+  # revert per node via its on-box appsettings if devices misbehave (see RUNBOOK).
+  grep -q '"FfmpegManagedDiscontinuities": true' "$TMP/out.json"
 }
 
 @test "render_template preserves special characters in values" {
