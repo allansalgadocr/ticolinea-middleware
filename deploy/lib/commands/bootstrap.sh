@@ -15,11 +15,23 @@ _load_shared_secrets() {
   [ -n "${PANEL_API_KEY:-}" ] || die "shared.env: PANEL_API_KEY unset"
 }
 
-_assert_ubuntu2204() {
-  local v
+# Pure OS-support predicate over an "<id> <version_id>" string (e.g. "ubuntu 24.04").
+# Factored out of _assert_supported_os so the guard is unit-testable with no live host.
+_tico_os_supported() {
+  case "$1" in
+    "ubuntu 22.04"|"ubuntu 24.04") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Read the target's OS and gate on it. TICO_OS_RELEASE is left in scope (global)
+# so _install_packages can branch the .NET 6 install by OS: apt on 22.04, and
+# dotnet-install.sh on 24.04 (whose Microsoft feed carries no net6, EOL).
+_assert_supported_os() {
   # shellcheck disable=SC2016  # single-quoted intentionally: $ID/$VERSION_ID must expand on the remote box, not here
-  v="$(remote 'source /etc/os-release; echo "$ID $VERSION_ID"')"
-  [ "$v" = "ubuntu 22.04" ] || die "target is '$v'; this tool requires Ubuntu 22.04"
+  TICO_OS_RELEASE="$(remote 'source /etc/os-release; echo "$ID $VERSION_ID"' | tr -d '\r')"
+  _tico_os_supported "$TICO_OS_RELEASE" \
+    || die "target is '$TICO_OS_RELEASE'; this tool requires Ubuntu 22.04 or 24.04"
 }
 
 _disable_swap() {
@@ -35,8 +47,32 @@ sed -ri '/\sswap\s/s/^([^#])/#\1/' /etc/fstab
 REMOTE
 }
 
+# 24.04: Microsoft's 24.04 apt feed carries no .NET 6 (EOL), so install the
+# ASP.NET Core 6.0 runtime with the official dotnet-install.sh into the same
+# /usr/share/dotnet layout the 22.04 apt feed produces, then symlink it onto
+# PATH — so the systemd unit and deploy paths need no per-OS change. Idempotent:
+# skip when the runtime is already present. Base packages then install via apt
+# exactly as on 22.04 (ffmpeg is 6.x on 24.04, which is expected).
+_install_packages_2404() {
+  remote_sudo 'bash -s' <<'REMOTE'
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+if ! dotnet --list-runtimes 2>/dev/null | grep -qi 'Microsoft.AspNetCore.App 6\.'; then
+  curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+  bash /tmp/dotnet-install.sh --runtime aspnetcore --channel 6.0 --install-dir /usr/share/dotnet
+  ln -sf /usr/share/dotnet/dotnet /usr/bin/dotnet
+  rm -f /tmp/dotnet-install.sh
+fi
+apt-get install -y -qq nginx mariadb-server ffmpeg rsync curl
+apt-mark hold ffmpeg
+REMOTE
+}
+
 _install_packages() {
   log "Installing base packages (idempotent)"
+  if [ "${TICO_OS_RELEASE:-}" = "ubuntu 24.04" ]; then
+    _install_packages_2404
+  else
   remote_sudo 'bash -s' <<'REMOTE'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -49,6 +85,7 @@ fi
 apt-get install -y -qq nginx mariadb-server ffmpeg rsync curl
 apt-mark hold ffmpeg
 REMOTE
+  fi
   remote 'dotnet --list-runtimes | grep -qi "AspNetCore.*6\." ' \
     || die "aspnetcore-runtime-6.0 not available after install — see RUNBOOK (self-contained fallback)"
 }
@@ -80,22 +117,34 @@ systemctl restart mariadb
 REMOTE
   # Prove the live daemon bound loopback-only (the package postinst may have
   # auto-started it before the sed edit; only the restart above makes it take effect).
+  #
+  # Use `remote` (NOT remote_sudo): `ss -ltnH` prints the Local Address:Port to
+  # any user — root is only needed for the process column we don't ask for. This
+  # matters because Ubuntu 24.04's default sudoers has `Defaults use_pty`, which
+  # pollutes the *captured* stdout of a password `sudo -S` with policy text and
+  # would produce a false-positive non-loopback match here. `tr -d '\r'` strips
+  # any CRs an ssh channel may append so the grep/compare stays exact.
   local nonloop
-  nonloop="$(remote_sudo "ss -ltnH 'sport = :3306' | awk '{print \$4}' | grep -vE '^(127\\.0\\.0\\.1|\\[::1\\]):' || true")"
+  nonloop="$(remote "ss -ltnH 'sport = :3306' | awk '{print \$4}' | grep -vE '^(127\\.0\\.0\\.1|\\[::1\\]):' || true" | tr -d '\r')"
   [ -z "$nonloop" ] || die "MariaDB is listening on a non-loopback address: $nonloop"
-  # Generate DB password once; store on box 0600.
+  # Generate the DB password ON THE CONTROLLER, once per run, then push it to the
+  # box. It is NEVER read back over a captured sudo (that read had the same
+  # use_pty pollution bug and could silently corrupt the password). Charset is
+  # kept alphanumeric so the value is safe unescaped in both shell and SQL.
+  # Re-running bootstrap therefore ROTATES the DB password: the ALTER USER below,
+  # the rewritten secret file, and the appsettings re-rendered in
+  # _render_and_upload_config all take the same fresh value in one consistent run.
+  : "${DB_PASSWORD:=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)}"
+  export DB_PASSWORD
   remote_sudo 'bash -s' <<REMOTE
 set -euo pipefail
 SECRET=/opt/${PROVIDER}/secrets/db-password
-if [ ! -s "\$SECRET" ]; then
-  head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32 > "\$SECRET"
-  chmod 600 "\$SECRET"; chown ticolinea:ticolinea "\$SECRET"
-fi
-DBPASS="\$(cat \$SECRET)"
+printf '%s' '${DB_PASSWORD}' > "\$SECRET"
+chmod 600 "\$SECRET"; chown ticolinea:ticolinea "\$SECRET"
 mysql -uroot <<SQL
 CREATE DATABASE IF NOT EXISTS \\\`${DB_NAME}\\\`;
-CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '\${DBPASS}';
-ALTER USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '\${DBPASS}';
+CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
+ALTER USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
 GRANT ALL PRIVILEGES ON \\\`${DB_NAME}\\\`.* TO '${DB_USER}'@'127.0.0.1';
 FLUSH PRIVILEGES;
 SQL
@@ -105,7 +154,11 @@ REMOTE
 _render_and_upload_config() {
   log "Rendering and uploading appsettings + nginx + systemd unit"
   _load_shared_secrets
-  export DB_PASSWORD; DB_PASSWORD="$(remote_sudo cat /opt/"${PROVIDER}"/secrets/db-password)"
+  # DB_PASSWORD is generated and exported by _setup_mariadb, which cmd_bootstrap
+  # always runs before this. It is deliberately NOT read back from the box: that
+  # read went through a captured `remote_sudo`, which use_pty on Ubuntu 24.04
+  # pollutes, silently corrupting the rendered connection string.
+  [ -n "${DB_PASSWORD:-}" ] || die "DB_PASSWORD not set — _setup_mariadb must run before _render_and_upload_config"
   local tmp; tmp="$(mktemp -d)"
   render_template "$TICO_ROOT/templates/appsettings.provider.json.tmpl" > "$tmp/appsettings.$PROVIDER.json"
   render_template "$TICO_ROOT/templates/nginx-node.conf.tmpl" > "$tmp/node.conf"
@@ -150,7 +203,7 @@ cmd_bootstrap() {
     *) die "unknown option: $1";;
   esac; done
 
-  _assert_ubuntu2204
+  _assert_supported_os
   _disable_swap
   _install_packages
   _create_user_and_dirs
