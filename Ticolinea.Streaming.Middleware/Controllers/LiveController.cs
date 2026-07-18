@@ -346,6 +346,11 @@ namespace ticolinea.stream.service.Controllers
 
         private static string AddDiscontinuityTags(string playlistOutput)
         {
+            // Piloto: con FFmpeg manejando discontinuidades (discont_start+append_list, ver
+            // StreamingService), la inyección app-side es redundante y puede forzar resets
+            // de decoder en dispositivos estrictos. Flag apagado (default) = comportamiento actual.
+            if (Constantes.Global.FFMPEG_MANAGED_DISCONTINUITIES) return playlistOutput;
+
             if (playlistOutput.Contains("#EXT-X-DISCONTINUITY")) return playlistOutput;
             
             const string mediaSequenceTag = "EXT-X-MEDIA-SEQUENCE:";

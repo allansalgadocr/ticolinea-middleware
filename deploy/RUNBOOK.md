@@ -25,6 +25,14 @@
    update inside this window) verifies **health only**; the fresh-stream check only
    gates updates of a node that was already serving ("recovered to baseline").
 
+## Pilot flags
+
+- `Streaming:FfmpegManagedDiscontinuities` (default **false** everywhere): FFmpeg-managed HLS
+  discontinuities — adds `-hls_start_number_source epoch` and skips the app-side
+  `#EXT-X-DISCONTINUITY` injection. Pilot on ONE node only: edit
+  `/opt/<slug>/config/appsettings.<slug>.json` (set it `true` in the `Streaming` section),
+  then `sudo systemctl restart ticolinea-streaming`. Do not flip it in the template.
+
 ## Update a running client
 
 - `./deploy/tico status <slug>` first. Do not update during prime-time viewing hours.

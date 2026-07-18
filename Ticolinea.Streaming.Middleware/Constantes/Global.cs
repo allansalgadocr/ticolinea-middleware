@@ -43,6 +43,9 @@ namespace ticolinea.stream.service.Constantes
         public static bool ENABLE_STREAM_EXECUTION => _streamingSettings?.EnableStreamExecution ?? true;
         public static bool ENABLE_FFMPEG_PROCESSES => _streamingSettings?.EnableFfmpegProcesses ?? true;
         public static bool ENABLE_STREAM_MANAGEMENT => _streamingSettings?.EnableStreamManagement ?? true;
+        // Pilot: FFmpeg-managed HLS discontinuities (see StreamingSettings.FfmpegManagedDiscontinuities).
+        // Default false = today's behavior (app-side discontinuity injection, no epoch sequence numbers).
+        public static bool FFMPEG_MANAGED_DISCONTINUITIES => _streamingSettings?.FfmpegManagedDiscontinuities ?? false;
 
         // URLs
         public static string SEGMENT_BASE_URL => _streamingSettings?.SegmentBaseUrl ?? "http://190.106.68.6:27701/";

@@ -48,4 +48,19 @@ public class FfmpegInputPolicyTests
         FfmpegInputPolicy.ShouldApplyRwTimeout(fuente, new[] { "reconnect" })
             .Should().BeFalse();
     }
+
+    [Fact]
+    public void Managed_discontinuities_flag_on_adds_epoch_start_number_source()
+    {
+        FfmpegInputPolicy.ExtraHlsArgs(ffmpegManagedDiscontinuities: true)
+            .Should().Be("-hls_start_number_source epoch");
+    }
+
+    [Fact]
+    public void Managed_discontinuities_flag_off_adds_nothing()
+    {
+        // default-off = byte-for-byte today's args: the builder receives an empty string
+        FfmpegInputPolicy.ExtraHlsArgs(ffmpegManagedDiscontinuities: false)
+            .Should().BeEmpty();
+    }
 }

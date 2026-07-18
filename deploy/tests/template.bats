@@ -48,6 +48,9 @@ teardown() { rm -rf "$TMP"; }
   # nodes deliberately turn it ON via this overlay (OutputWatchdogService).
   run node -e "process.exit(JSON.parse(require('fs').readFileSync('$TMP/out.json','utf8')).Watchdog.Enabled===true?0:1)"
   [ "$status" -eq 0 ]
+  # FfmpegManagedDiscontinuities pilot: template must render FALSE — the pilot is
+  # flipped by hand on ONE node (see RUNBOOK), never fleet-wide via the template.
+  grep -q '"FfmpegManagedDiscontinuities": false' "$TMP/out.json"
 }
 
 @test "render_template preserves special characters in values" {

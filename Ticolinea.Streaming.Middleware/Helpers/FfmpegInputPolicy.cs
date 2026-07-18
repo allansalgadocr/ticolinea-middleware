@@ -27,5 +27,18 @@ namespace ticolinea.stream.service.Helpers
 
             return isHttp && !parameters.Contains("no_rw_timeout");
         }
+
+        /// <summary>
+        /// Argumentos HLS adicionales según el piloto de discontinuidades manejadas por FFmpeg
+        /// (Streaming:FfmpegManagedDiscontinuities). Con el flag activo se agrega
+        /// "-hls_start_number_source epoch": los media sequence numbers derivan del epoch y
+        /// crecen estrictamente entre reinicios del proceso — los players nunca ven la
+        /// secuencia retroceder y los health checks de avance de secuencia siguen monótonos.
+        /// Con el flag apagado (default) devuelve cadena vacía: cero cambio de argumentos.
+        /// </summary>
+        public static string ExtraHlsArgs(bool ffmpegManagedDiscontinuities)
+        {
+            return ffmpegManagedDiscontinuities ? "-hls_start_number_source epoch" : "";
+        }
     }
 }

@@ -338,6 +338,8 @@ namespace ticolinea.stream.service.Services
                     .Add(!isSrt ? "-mpegts_flags +resend_headers+initial_discontinuity+pat_pmt_at_frames" : "", false)
                     .Add("-hls_flags independent_segments+discont_start+append_list+omit_endlist+delete_segments+temp_file",
                         false)
+                    // Piloto Streaming:FfmpegManagedDiscontinuities — apagado (default) devuelve "" (cero cambio).
+                    .Add(FfmpegInputPolicy.ExtraHlsArgs(Constantes.Global.FFMPEG_MANAGED_DISCONTINUITIES), false)
                     .Add($"-hls_time {stream.Intervalo}", false)
                     .Add($"-hls_list_size {stream.Segmentos}", false)
                     .Add("-hls_delete_threshold 10", false)

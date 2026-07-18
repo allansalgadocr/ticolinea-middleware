@@ -65,6 +65,15 @@ namespace ticolinea.stream.service.Config
         public bool EnableStreamManagement { get; set; } = true;
 
         /// <summary>
+        /// Pilot flag: let FFmpeg manage HLS discontinuities itself.
+        /// When true: ffmpeg gets -hls_start_number_source epoch (media sequence numbers
+        /// stay monotonic across process restarts) and the app-side
+        /// #EXT-X-DISCONTINUITY injection in LiveController is skipped.
+        /// When false (default): behavior is byte-for-byte the pre-flag behavior.
+        /// </summary>
+        public bool FfmpegManagedDiscontinuities { get; set; } = false;
+
+        /// <summary>
         /// Base URL for streaming node (e.g., http://tv.play-latino.com:27701)
         /// </summary>
         public string SegmentBaseUrl { get; set; } = "http://tv.play-latino.com:27701";

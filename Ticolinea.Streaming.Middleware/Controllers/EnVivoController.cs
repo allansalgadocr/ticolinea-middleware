@@ -35,7 +35,10 @@ public class EnVivoController : Controller
             Regex rg = new(pattern);
             var matches = rg.Matches(playlistOutput);
 
-            if (!playlistOutput.Contains("EXT-X-DISCONTINUITY"))
+            // Same pilot gate as LiveController.AddDiscontinuityTags: when ffmpeg
+            // manages discontinuities (discont_start+append_list), skip app-side injection.
+            if (!Constantes.Global.FFMPEG_MANAGED_DISCONTINUITIES
+                && !playlistOutput.Contains("EXT-X-DISCONTINUITY"))
             {
                 string patternTest = @"(EXT-X-MEDIA-SEQUENCE:[0-9]*\n)";
                 Regex rgtest = new(patternTest);
