@@ -49,6 +49,23 @@ setup() {
   [ "$status" -ne 0 ]
 }
 
+@test "swap sends the atomic symlink+restart sequence over stdin, targeting the new tag" {
+  # The swap now goes over stdin (heredoc), so its script lands in the recorded
+  # call via mock_runner's stdin capture — not in argv. The safety-critical
+  # ordering (stage a .tmp link, atomically mv -T it into place, then restart the
+  # unit) must still be exactly this, and it must target the NEW tag.
+  MOCK_OUT=""
+  deploy_health() { echo 200; }
+  deploy_fresh() { echo 5; }
+  status=0
+  deploy_run_swap_and_verify "1.2.0" "1.1.0" || status=$?
+  [ "$status" -eq 0 ]
+  local calls; calls="$(mock_calls_joined)"
+  echo "$calls" | grep -q 'ln -sfn /opt/acme/releases/1.2.0 /opt/acme/current.tmp'
+  echo "$calls" | grep -q 'mv -T /opt/acme/current.tmp /opt/acme/current'
+  echo "$calls" | grep -q 'systemctl restart ticolinea-streaming'
+}
+
 @test "auto-rollback repoints current to the previous tag on verify failure" {
   MOCK_OUT=""
   deploy_health() { echo 503; }   # force verify failure
@@ -61,8 +78,13 @@ setup() {
   status=0
   deploy_run_swap_and_verify "1.1.0" "1.0.0" || status=$?
   [ "$status" -ne 0 ]
-  # the previous tag must appear in a symlink command after failure
-  mock_calls_joined | grep -q "releases/1.0.0"
+  # The rollback script now arrives over stdin (heredoc), captured by mock_runner.
+  # It must repoint current at the PREVIOUS tag using the same atomic
+  # ln -sfn .tmp -> mv -T -> restart sequence the forward swap uses.
+  local calls; calls="$(mock_calls_joined)"
+  echo "$calls" | grep -q 'ln -sfn /opt/acme/releases/1.0.0 /opt/acme/current.tmp'
+  echo "$calls" | grep -q 'mv -T /opt/acme/current.tmp /opt/acme/current'
+  echo "$calls" | grep -q 'systemctl restart ticolinea-streaming'
 }
 
 @test "dry-run previews the plan even when the node reports unhealthy" {
@@ -77,6 +99,39 @@ setup() {
   rm -rf "$art"
   [ "$status" -eq 0 ]
   [[ "$output" == *"[dry-run] would"* ]]
+}
+
+@test "staging + schema apply arrive over stdin (tag dir, appsettings layering, chown, mysql pipe)" {
+  # Drive a full (non-dry) cmd_deploy with the network I/O stubbed out: push()
+  # is a no-op (no real rsync), health/fresh are stubbed so verify passes and no
+  # rollback fires. The staging block and the schema-apply now go over stdin, so
+  # assert their content via mock_runner's stdin capture.
+  push() { :; }
+  deploy_health() { echo 200; }
+  deploy_fresh() { echo 5; }
+  MOCK_OUT=""
+  local art; art="$(mktemp -d)"
+  : > "$art/schema.sql"
+  : > "$art/ticolinea.stream.service.dll"
+  status=0
+  cmd_deploy example --tag 2.0.0 --artifact "$art" || status=$?
+  rm -rf "$art"
+  [ "$status" -eq 0 ]
+  local calls; calls="$(mock_calls_joined)"
+  # Staging steps (each on its own line under the heredoc):
+  echo "$calls" | grep -q 'mkdir -p /opt/acme/releases/2.0.0'
+  echo "$calls" | grep -q 'cp -a /tmp/release-2.0.0/. /opt/acme/releases/2.0.0/'
+  echo "$calls" | grep -q 'cp /opt/acme/config/appsettings.acme.json /opt/acme/releases/2.0.0/appsettings.acme.json'
+  echo "$calls" | grep -q 'chown -R ticolinea:ticolinea /opt/acme/releases/2.0.0'
+  # Schema apply pipes schema.sql into mysql for the provider DB:
+  echo "$calls" | grep -q 'mysql -uroot acme-streaming < /opt/acme/releases/2.0.0/schema.sql'
+}
+
+@test "regression guard: no arg-form 'remote_sudo bash -c' remains in deploy.sh" {
+  # The bug was `remote_sudo bash -c "A && B"` — three argv words that real ssh
+  # flattens, breaking the `-c` payload. Every multi-command remote call must be
+  # the stdin heredoc form. This grep must find nothing.
+  ! grep -n 'remote_sudo bash -c' "$TICO_ROOT/lib/commands/deploy.sh"
 }
 
 @test "deploy_select_prunable keeps newest 5 and never prunes current" {

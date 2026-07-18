@@ -42,7 +42,17 @@ deploy_rollback_to() { # previous_tag
   local prev="$1"
   [ -n "$prev" ] || die "no previous release to roll back to"
   warn "Rolling back to $prev"
-  remote_sudo bash -c "ln -sfn $TICO_RELEASES_DIR/$prev $TICO_CURRENT_LINK.tmp && mv -T $TICO_CURRENT_LINK.tmp $TICO_CURRENT_LINK && systemctl restart ticolinea-streaming"
+  # Sent over stdin (heredoc), never as `bash -c "A && B"` argv: real ssh flattens
+  # argv into one space-joined string, so a multi-word `-c` payload loses its
+  # quoting and only the first word reaches `bash -c`. Unquoted heredoc so the
+  # LOCAL vars ($TICO_RELEASES_DIR/$prev/$TICO_CURRENT_LINK) expand here; no
+  # remote-shell var is referenced, so nothing needs escaping.
+  remote_sudo 'bash -s' <<REMOTE
+set -euo pipefail
+ln -sfn $TICO_RELEASES_DIR/$prev $TICO_CURRENT_LINK.tmp
+mv -T $TICO_CURRENT_LINK.tmp $TICO_CURRENT_LINK
+systemctl restart ticolinea-streaming
+REMOTE
 }
 
 # Pure, locally-testable selection: given newest-first release basenames on
@@ -78,7 +88,14 @@ deploy_prune_releases() { # keep the 5 most-recent releases, plus whichever one 
 
 deploy_run_swap_and_verify() { # new_tag, previous_tag
   local new="$1" prev="$2" baseline="${BASELINE_FRESH:-0}"
-  remote_sudo bash -c "ln -sfn $TICO_RELEASES_DIR/$new $TICO_CURRENT_LINK.tmp && mv -T $TICO_CURRENT_LINK.tmp $TICO_CURRENT_LINK && systemctl restart ticolinea-streaming"
+  # Over stdin (heredoc), not `bash -c "A && B"` argv — ssh flattens argv and
+  # breaks a multi-word `-c` payload. Unquoted heredoc: local vars expand here.
+  remote_sudo 'bash -s' <<REMOTE
+set -euo pipefail
+ln -sfn $TICO_RELEASES_DIR/$new $TICO_CURRENT_LINK.tmp
+mv -T $TICO_CURRENT_LINK.tmp $TICO_CURRENT_LINK
+systemctl restart ticolinea-streaming
+REMOTE
   if deploy_verify "$baseline"; then
     log "Deploy $new verified."
     return 0
@@ -134,7 +151,17 @@ cmd_deploy() {
   # load order (appsettings.json -> appsettings.{ENV}.json ->
   # appsettings.{PROVIDER}.json).
   push "$artifact/" "/tmp/release-$tag/"
-  remote_sudo bash -c "mkdir -p $TICO_RELEASES_DIR/$tag && cp -a /tmp/release-$tag/. $TICO_RELEASES_DIR/$tag/ && rm -rf /tmp/release-$tag && cp /opt/${PROVIDER}/config/appsettings.$PROVIDER.json $TICO_RELEASES_DIR/$tag/appsettings.$PROVIDER.json && chown -R ticolinea:ticolinea $TICO_RELEASES_DIR/$tag"
+  # Over stdin (heredoc), not `bash -c "A && B && ..."` argv — ssh flattens argv
+  # and only the first word survives as the `-c` payload. Unquoted heredoc so
+  # $TICO_RELEASES_DIR/$tag/$PROVIDER all expand here on the controller.
+  remote_sudo 'bash -s' <<REMOTE
+set -euo pipefail
+mkdir -p $TICO_RELEASES_DIR/$tag
+cp -a /tmp/release-$tag/. $TICO_RELEASES_DIR/$tag/
+rm -rf /tmp/release-$tag
+cp /opt/${PROVIDER}/config/appsettings.$PROVIDER.json $TICO_RELEASES_DIR/$tag/appsettings.$PROVIDER.json
+chown -R ticolinea:ticolinea $TICO_RELEASES_DIR/$tag
+REMOTE
 
   # SECURITY: `dotnet publish` force-copies the main node's own configs into
   # the build output (the .csproj copies appsettings.main.json etc.), so the
@@ -148,8 +175,13 @@ cmd_deploy() {
     "$TICO_RELEASES_DIR/$tag/appsettings.fibraencasa.json" \
     "$TICO_RELEASES_DIR/$tag/appsettings.Development.json"
 
-  # Apply schema (idempotent) before swapping traffic.
-  remote_sudo bash -c "mysql -uroot ${DB_NAME} < $TICO_RELEASES_DIR/$tag/schema.sql"
+  # Apply schema (idempotent) before swapping traffic. Over stdin (heredoc), not
+  # `bash -c "mysql ... < ..."` argv: ssh flattens argv, so the `<` redirect and
+  # path would be re-parsed by the wrong shell. Unquoted heredoc: local vars expand.
+  remote_sudo 'bash -s' <<REMOTE
+set -euo pipefail
+mysql -uroot ${DB_NAME} < $TICO_RELEASES_DIR/$tag/schema.sql
+REMOTE
 
   # 2. Baseline.
   local previous baseline
