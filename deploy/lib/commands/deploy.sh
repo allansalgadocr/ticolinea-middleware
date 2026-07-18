@@ -95,10 +95,12 @@ deploy_prune_releases() { # keep the 5 most-recent releases, plus whichever one 
 
 deploy_run_swap_and_verify() { # new_tag, previous_tag
   local new="$1" prev="$2" baseline="${BASELINE_FRESH:-0}" min=1
-  # First deploy (no previous release): verify health only. Requiring a fresh
-  # segment here contradicted RUNBOOK spec B — a fresh node serves nothing —
-  # and made every first deploy fail verification by construction.
-  [ -z "$prev" ] && min=0
+  # Zero baseline (first deploy, or any deploy inside the spec B window where
+  # the node has no channel rows yet): verify health only. Requiring a fresh
+  # segment the node never served contradicted RUNBOOK spec B and made such
+  # deploys fail verification by construction. The verify contract is thus
+  # "streams recovered to baseline", never "streams appeared".
+  if [ -z "$prev" ] || [ "${baseline:-0}" -eq 0 ] 2>/dev/null; then min=0; fi
   # Over stdin (heredoc), not `bash -c "A && B"` argv — ssh flattens argv and
   # breaks a multi-word `-c` payload. Unquoted heredoc: local vars expand here.
   remote_sudo 'bash -s' <<REMOTE

@@ -21,8 +21,9 @@
 8. `./deploy/tico deploy <slug> --tag <version> --artifact <unpacked-artifact-dir>`.
 9. A freshly-provisioned node has no channel rows yet (that is spec B). It will be
    healthy but serve nothing until the panel package sync exists or rows are seeded.
-   Accordingly, a first deploy (no previous release) verifies **health only**; the
-   fresh-stream check only gates updates of a node that was already serving.
+   Accordingly, any deploy to a node that was serving nothing (first deploy, or an
+   update inside this window) verifies **health only**; the fresh-stream check only
+   gates updates of a node that was already serving ("recovered to baseline").
 
 ## Update a running client
 

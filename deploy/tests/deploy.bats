@@ -132,6 +132,19 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "redeploy of a zero-baseline node verifies health-only (spec B window persists)" {
+  # A node past its first deploy can still have no channel rows (spec B lasts
+  # until the panel sync exists). Updating it must not demand a stream that
+  # has never existed — baseline 0, not just "no previous", relaxes the floor.
+  MOCK_OUT=""
+  deploy_health() { echo 200; }
+  deploy_fresh() { echo 0; }
+  BASELINE_FRESH=0
+  status=0
+  deploy_run_swap_and_verify "1.0.1" "1.0.0" || status=$?
+  [ "$status" -eq 0 ]
+}
+
 @test "first-deploy verify failure skips rollback and leaves the release in place" {
   MOCK_OUT=""
   deploy_health() { echo 503; }
