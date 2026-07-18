@@ -8,12 +8,15 @@
    using the tool's fixed ports — nothing to configure per client.
 3. `cp deploy/secrets/shared.env.example deploy/secrets/shared.env` and fill
    JWT_PUBLIC_KEY / PANEL_API_KEY from the panel.
-4. `./deploy/tico probe <slug>` — read the report. Stop if it is not Ubuntu 22.04,
+4. `./deploy/tico probe <slug>` — read the report. Stop if it is not Ubuntu 22.04 or 24.04,
    if ffmpeg drift is flagged and unacceptable, or if outbound to
    tv.play-latino.com:27701 (restream source) and tv.play-latino.com:27702 (panel API) is unreachable.
 5. `./deploy/tico ports <slug>` — send the firewall request to the client.
 6. `./deploy/tico bootstrap <slug> [--schema path/to/schema.sql]` — provision. Safe to re-run.
    `--schema` is optional; without it, `deploy` applies the schema shipped in the release artifact.
+   Note: re-running `bootstrap` rotates the DB password (it resets the MariaDB user, the on-box
+   secret, and the rendered appsettings in one consistent run). After a re-run, redeploy/restart
+   the node (`./deploy/tico deploy <slug> ...`) so its live appsettings match the new password.
 7. Register the provider in the panel (connection_url = http://<PUBLIC_HOST>:27701).
 8. `./deploy/tico deploy <slug> --tag <version> --artifact <unpacked-artifact-dir>`.
 9. A freshly-provisioned node has no channel rows yet (that is spec B). It will be
