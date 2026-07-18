@@ -100,6 +100,12 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient("PanelApi");
 builder.Services.AddSingleton<ticolinea.stream.service.Services.ActivityTrackingService>();
 
+// Output-progress watchdog (detects ffmpeg ALIVE but producing no new HLS output).
+// Registered unconditionally; the gate is INTERNAL (Watchdog:Enabled read every
+// cycle) so a config toggle via reloadOnChange applies without a service restart.
+// Default OFF — only the provider deploy template turns it on.
+builder.Services.AddHostedService<ticolinea.stream.service.Services.OutputWatchdogService>();
+
 var app = builder.Build();
 
 // Static Hangfire jobs (Jobs class) have no DI container of their own; expose the

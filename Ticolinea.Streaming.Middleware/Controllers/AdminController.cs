@@ -46,7 +46,7 @@ public class AdminController : ControllerBase
             {
                 var it = items[i];
                 var status = statuses[i];
-                var (playlistAgeSeconds, playlist) = await ReadPlaylistMetricsAsync(it.id);
+                var (playlistAgeSeconds, playlist) = await PlaylistMetrics.ReadAsync(it.id);
                 rows.Add(new
                 {
                     id = it.id,
@@ -61,7 +61,11 @@ public class AdminController : ControllerBase
                     targetDuration = playlist?.TargetDuration,
                     lastSegment = playlist?.LastSegment,
                     // FFmpeg launches since the service process booted (not persisted).
-                    restartCount = StreamingService.GetRestartCount(it.id)
+                    restartCount = StreamingService.GetRestartCount(it.id),
+                    // Output-progress watchdog state (OutputWatchdogService). 0/false
+                    // when Watchdog:Enabled is off (the state registry stays empty).
+                    watchdogRestarts = OutputWatchdogService.GetRestartCount(it.id),
+                    degraded = OutputWatchdogService.IsDegraded(it.id)
                 });
             }
             return Ok(rows);
@@ -90,6 +94,13 @@ public class AdminController : ControllerBase
     [HttpPost("streams/{id:int}/{action}")]
     public async Task<IActionResult> Control(int id, string action)
     {
+        // Per-stream lock shared with OutputWatchdogService: serializes operator
+        // actions against watchdog restarts on the same stream. The operator side
+        // WAITS (the watchdog holds it for ~3s max: 2s double-read + kill); the
+        // watchdog side is non-blocking and skips its cycle if we hold it.
+        // Behavior of the action bodies is unchanged — just serialized.
+        var gate = StreamLocks.For(id);
+        await gate.WaitAsync();
         try
         {
             var stream = await LoadStream(id);
@@ -131,32 +142,15 @@ public class AdminController : ControllerBase
         {
             return StatusCode(500, new { success = false, message = ex.Message });
         }
-    }
-
-    // Reads output-health metrics for one stream's HLS playlist. The path is the
-    // same convention LiveController.Streaming uses (STREAMS_FOLDER + "{id}_.m3u8",
-    // which is also what StreamingService passes to ffmpeg) — do not invent a
-    // parallel one. FFmpeg rewrites the file continuously; the temp_file hls_flag
-    // makes the rename atomic, but the file can still vanish or race between the
-    // Exists check and the read, so everything is wrapped: any failure returns
-    // (null, null) instead of failing the whole /streams response.
-    private static async Task<(double? ageSeconds, HlsPlaylistInfo? playlist)> ReadPlaylistMetricsAsync(int streamId)
-    {
-        try
+        finally
         {
-            var playlistFile = Path.Combine(Constantes.Global.STREAMS_FOLDER, $"{streamId}_.m3u8");
-            var fileInfo = new FileInfo(playlistFile);
-            if (!fileInfo.Exists) return (null, null);
-
-            double age = Math.Max(0, (DateTime.UtcNow - fileInfo.LastWriteTimeUtc).TotalSeconds);
-            var playlist = HlsPlaylistInfo.Parse(await System.IO.File.ReadAllTextAsync(playlistFile));
-            return (age, playlist);
-        }
-        catch
-        {
-            return (null, null);
+            gate.Release();
         }
     }
+
+    // Playlist output-health metrics moved to Helpers/PlaylistMetrics.ReadAsync so
+    // this controller and OutputWatchdogService read the exact same file by the
+    // exact same convention.
 
     // Loads a single StreamDb by streams_tl.id. Column list and reader mapping
     // are copied verbatim from Jobs.ObtenerStreamsActivos (Jobs.cs) so the

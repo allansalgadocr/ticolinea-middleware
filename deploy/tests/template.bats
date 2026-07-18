@@ -44,6 +44,10 @@ teardown() { rm -rf "$TMP"; }
   # These must not invert (see LiveController vs StreamsController usage).
   grep -Eq '"SegmentBaseUrl": "http://iptv\.acme\.cr:27701"' "$TMP/out.json"
   grep -Eq '"StreamsBaseUrl": "http://iptv\.acme\.cr:27703"' "$TMP/out.json"
+  # Output-progress watchdog: default OFF in the base appsettings.json; provider
+  # nodes deliberately turn it ON via this overlay (OutputWatchdogService).
+  run node -e "process.exit(JSON.parse(require('fs').readFileSync('$TMP/out.json','utf8')).Watchdog.Enabled===true?0:1)"
+  [ "$status" -eq 0 ]
 }
 
 @test "render_template preserves special characters in values" {

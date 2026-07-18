@@ -85,7 +85,11 @@ namespace ticolinea.stream.service
             return await ObtenerProcesoFFMPEG(procesoId, streamId);
         }
 
-        private static async Task<List<StreamDb>> ObtenerStreamsActivos()
+        // Público: además de RevisarStreams, el OutputWatchdogService usa este mismo
+        // conjunto ("streams que DEBERÍAN estar produciendo": habilitado=1, iniciado=1,
+        // es_bajodemanda=0, tipo=1) como candidatos. La caché de 15s amortigua el
+        // ciclo de 5s del watchdog — no agrega consultas nuevas a la BD.
+        public static async Task<List<StreamDb>> ObtenerStreamsActivos()
         {
             // 🚀 CACHE CHECK: Use cached data if available and recent
             lock (_cacheLock)
@@ -382,6 +386,62 @@ namespace ticolinea.stream.service
             }
         }
 
+
+        // Reinicio del watchdog (OutputWatchdogService): mata SOLO el proceso ffmpeg,
+        // SIN tocar la supervisión. A diferencia de DetenerProceso, aquí NO se llama
+        // StreamingService.DetenerSupervision — esa ruta termina en CleanupStreamState,
+        // que borra _failureTracker (circuit breaker) y _lastProcessStart (intervalo
+        // mínimo de 12s). Al matar únicamente el PID, el loop SupervisarStream que ya
+        // está vivo recibe el ExitedCommandEvent (exit != 0) y relanza por el camino
+        // supervisado normal (LanzarProcesoFfmpeg): el circuit breaker conserva su
+        // historial, el kill cuenta como fallo (un canal que se cuelga repetido DEBE
+        // acercarse al breaker) y aplican backoff + intervalo mínimo. Tampoco se toca
+        // la BD: el ExitedCommandEvent ya dispara ActualizarCanalEstado y el relanzo
+        // ActualizaInfoCanal, igual que en cualquier caída de ffmpeg.
+        public static async Task<bool> MatarProcesoParaWatchdog(int streamId)
+        {
+            bool killedAny = false;
+            try
+            {
+                var result = await Cli
+                    .Wrap("/bin/pgrep")
+                    .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
+                    .ExecuteBufferedAsync();
+
+                string[] procesos = result.StandardOutput
+                    .Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+
+                foreach (var proceso in procesos)
+                {
+                    if (int.TryParse(proceso, out var pid))
+                    {
+                        try
+                        {
+                            var proc = Process.GetProcessById(pid);
+                            if (proc.HasExited) continue;
+
+                            proc.Kill(true);
+                            killedAny = true;
+                            _logger.Info($"✅ Watchdog: proceso {pid} del stream {streamId} eliminado (la supervisión lo relanzará).");
+                        }
+                        catch (ArgumentException)
+                        {
+                            _logger.Warn($"⚠️ Watchdog: proceso con PID {pid} ya no existe.");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.Error($"❌ Watchdog: error al eliminar proceso {pid}: {ex.Message}", ex);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"❌ Watchdog: error al buscar procesos del stream {streamId}: {ex.Message}", ex);
+            }
+
+            return killedAny;
+        }
 
         public static async Task<string> RunCommandAsync(int streamId)
         {
