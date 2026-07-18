@@ -49,6 +49,41 @@ setup() {
   [ "$status" -ne 0 ]
 }
 
+@test "verify passes health-only when min_fresh is 0 (first deploy, spec B)" {
+  # RUNBOOK spec B: a freshly-provisioned node has no channel rows, so it is
+  # healthy but serves nothing. With min_fresh 0 that must verify.
+  deploy_health() { echo 200; }
+  deploy_fresh() { echo 0; }
+  run deploy_verify 0 0
+  [ "$status" -eq 0 ]
+}
+
+@test "verify keeps the fresh floor of 1 when min_fresh is omitted" {
+  # Redeploys must not be weakened by the first-deploy path: a baseline of 0
+  # with no explicit min_fresh still demands at least one fresh segment.
+  deploy_health() { echo 200; }
+  deploy_fresh() { echo 0; }
+  run deploy_verify 0
+  [ "$status" -ne 0 ]
+}
+
+@test "verify logs health per failed attempt" {
+  deploy_health() { echo 503; }
+  deploy_fresh() { echo 0; }
+  run deploy_verify 0
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"health=503"* ]]
+}
+
+@test "verify logs the fresh shortfall when health is 200 but streams lag" {
+  deploy_health() { echo 200; }
+  deploy_fresh() { echo 0; }
+  run deploy_verify 3
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"health=200"* ]]
+  [[ "$output" == *"fresh=0/3"* ]]
+}
+
 @test "swap sends the atomic symlink+restart sequence over stdin, targeting the new tag" {
   # The swap now goes over stdin (heredoc), so its script lands in the recorded
   # call via mock_runner's stdin capture — not in argv. The safety-critical
@@ -85,6 +120,51 @@ setup() {
   echo "$calls" | grep -q 'ln -sfn /opt/acme/releases/1.0.0 /opt/acme/current.tmp'
   echo "$calls" | grep -q 'mv -T /opt/acme/current.tmp /opt/acme/current'
   echo "$calls" | grep -q 'systemctl restart ticolinea-streaming'
+}
+
+@test "first deploy (no previous): healthy node with zero streams verifies" {
+  MOCK_OUT=""
+  deploy_health() { echo 200; }
+  deploy_fresh() { echo 0; }
+  BASELINE_FRESH=0
+  status=0
+  deploy_run_swap_and_verify "1.0.0" "" || status=$?
+  [ "$status" -eq 0 ]
+}
+
+@test "first-deploy verify failure skips rollback and leaves the release in place" {
+  MOCK_OUT=""
+  deploy_health() { echo 503; }
+  deploy_fresh() { echo 0; }
+  BASELINE_FRESH=0
+  status=0
+  deploy_run_swap_and_verify "1.0.0" "" 2>"$BATS_TEST_TMPDIR/stderr" || status=$?
+  [ "$status" -ne 0 ]
+  grep -q 'no previous release' "$BATS_TEST_TMPDIR/stderr"
+  # Exactly one restart (the forward swap). A rollback attempt would add a
+  # second one — and the old bug was dying inside deploy_rollback_to instead
+  # of returning, which kills this test before the assertions run.
+  local calls; calls="$(mock_calls_joined)"
+  [ "$(printf '%s\n' "$calls" | grep -c 'systemctl restart ticolinea-streaming')" -eq 1 ]
+}
+
+@test "cmd_deploy first-deploy failure says the new tag was left in place (no bogus rollback claim)" {
+  push() { :; }
+  deploy_health() { echo 503; }
+  deploy_fresh() { echo 0; }
+  MOCK_OUT=""
+  # Preflight: health != 200 must land in the "no running node yet" branch,
+  # so the systemctl is-active probe has to fail.
+  MOCK_FAIL_ON="is-active"
+  local art; art="$(mktemp -d)"
+  : > "$art/schema.sql"
+  : > "$art/ticolinea.stream.service.dll"
+  run cmd_deploy example --tag 1.0.0 --artifact "$art"
+  rm -rf "$art"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"rolled back to none"* ]]
+  [[ "$output" == *"left in place"* ]]
+  [[ "$output" == *"tico status"* ]]
 }
 
 @test "dry-run previews the plan even when the node reports unhealthy" {

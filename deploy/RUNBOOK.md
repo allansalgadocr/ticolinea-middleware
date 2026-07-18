@@ -21,6 +21,8 @@
 8. `./deploy/tico deploy <slug> --tag <version> --artifact <unpacked-artifact-dir>`.
 9. A freshly-provisioned node has no channel rows yet (that is spec B). It will be
    healthy but serve nothing until the panel package sync exists or rows are seeded.
+   Accordingly, a first deploy (no previous release) verifies **health only**; the
+   fresh-stream check only gates updates of a node that was already serving.
 
 ## Update a running client
 
@@ -37,9 +39,10 @@
 ./deploy/tico deploy <slug> --tag <version> --artifact <dir>
 ```
 
-- The tool stages, swaps, restarts, and verifies streams recovered within ~60s.
-  On failure it auto-rolls-back. Viewers absorb ~30s (the HLS buffer) if it recovers
-  in time.
+- The tool stages, swaps, restarts, and verifies streams recovered within ~60s,
+  logging `verify: health=... fresh=...` per attempt. On failure it auto-rolls-back
+  (a first deploy has nothing to roll back to — the new release stays in place,
+  reported as unverified). Viewers absorb ~30s (the HLS buffer) if it recovers in time.
 
 ## Roll back a bad release (normal path)
 

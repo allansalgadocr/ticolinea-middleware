@@ -18,21 +18,28 @@ _tico_resolve_paths() {
 deploy_health() { remote_health; }
 deploy_fresh()  { remote_fresh_stream_count; }
 
-deploy_verify() { # baseline_fresh_count
-  local baseline="${1:-0}"
+deploy_verify() { # baseline_fresh_count [min_fresh]
+  # min_fresh defaults to 1 so redeploys keep their gate; a first deploy passes
+  # 0 — RUNBOOK spec B: a freshly-provisioned node has no channel rows yet, so
+  # it is healthy but serves nothing, and health alone is the verifiable signal.
+  local baseline="${1:-0}" min="${2:-1}"
   # Injectable so tests run instantly; production keeps the ~60s HLS window
   # (12 tries * 5s) unless the caller overrides these.
   local tries="${TICO_VERIFY_TRIES:-12}" interval="${TICO_VERIFY_SLEEP:-5}"
   local attempt=0 code fresh need
+  need="$min"
+  [ "${baseline:-0}" -gt "$need" ] 2>/dev/null && need="$baseline"
   while [ "$attempt" -lt "$tries" ]; do
     code="$(deploy_health)"
+    fresh=""
     if [ "$code" = "200" ]; then
       fresh="$(deploy_fresh)"
-      need=1
-      [ "${baseline:-0}" -gt 1 ] 2>/dev/null && need="$baseline"
       if [ "${fresh:-0}" -ge "$need" ]; then return 0; fi
     fi
     attempt=$((attempt + 1))
+    # Without this the verify window is a 60s silence ending in a bare failure —
+    # indistinguishable from a hang, and no clue whether health or freshness lost.
+    log "verify: health=${code:-?} fresh=${fresh:-?}/${need} (attempt ${attempt}/${tries})"
     [ "$attempt" -lt "$tries" ] && sleep "$interval"
   done
   return 1
@@ -87,7 +94,11 @@ deploy_prune_releases() { # keep the 5 most-recent releases, plus whichever one 
 }
 
 deploy_run_swap_and_verify() { # new_tag, previous_tag
-  local new="$1" prev="$2" baseline="${BASELINE_FRESH:-0}"
+  local new="$1" prev="$2" baseline="${BASELINE_FRESH:-0}" min=1
+  # First deploy (no previous release): verify health only. Requiring a fresh
+  # segment here contradicted RUNBOOK spec B — a fresh node serves nothing —
+  # and made every first deploy fail verification by construction.
+  [ -z "$prev" ] && min=0
   # Over stdin (heredoc), not `bash -c "A && B"` argv — ssh flattens argv and
   # breaks a multi-word `-c` payload. Unquoted heredoc: local vars expand here.
   remote_sudo 'bash -s' <<REMOTE
@@ -96,12 +107,18 @@ ln -sfn $TICO_RELEASES_DIR/$new $TICO_CURRENT_LINK.tmp
 mv -T $TICO_CURRENT_LINK.tmp $TICO_CURRENT_LINK
 systemctl restart ticolinea-streaming
 REMOTE
-  if deploy_verify "$baseline"; then
+  if deploy_verify "$baseline" "$min"; then
     log "Deploy $new verified."
     return 0
   fi
   warn "Verification failed for $new."
-  deploy_rollback_to "$prev"
+  if [ -n "$prev" ]; then
+    deploy_rollback_to "$prev"
+  else
+    # Dying here (the old behavior) aborted mid-cleanup with a rollback error
+    # while the real state — new release live but unverified — went unreported.
+    warn "first deploy: no previous release to roll back to — leaving $new in place"
+  fi
   return 1
 }
 
@@ -193,7 +210,9 @@ REMOTE
   if deploy_run_swap_and_verify "$tag" "$previous"; then
     deploy_prune_releases
     log "Deploy complete: $PROVIDER now on $tag"
+  elif [ -n "$previous" ]; then
+    die "Deploy failed and was rolled back to $previous. Investigate before retrying."
   else
-    die "Deploy failed and was rolled back to ${previous:-none}. Investigate before retrying."
+    die "First deploy failed verification; $tag was left in place (current -> releases/$tag, service restarted). Inspect with: tico status $slug"
   fi
 }
