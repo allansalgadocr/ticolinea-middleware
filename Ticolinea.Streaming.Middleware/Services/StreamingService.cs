@@ -288,7 +288,12 @@ namespace ticolinea.stream.service.Services
                     reconnectList.Add("-reconnect_on_network_error 1");
                 if (parameters.Contains("reconnect_on_http_error")) reconnectList.Add("-reconnect_on_http_error 1");
                 if (parameters.Contains("reconnect_delay_max")) reconnectList.Add("-reconnect_delay_max 5");
-                if (parameters.Contains("rw_timeout")) reconnectList.Add("-rw_timeout 15000000");
+                // -rw_timeout es DEFAULT para fuentes http(s) (opt-out: token "no_rw_timeout");
+                // el resto de protocolos conserva el opt-in explícito "rw_timeout". Ver
+                // FfmpegInputPolicy: fuente colgada → FFmpeg sale → la supervisión existente
+                // lo reinicia (auto-recuperación sin watchdog).
+                if (FfmpegInputPolicy.ShouldApplyRwTimeout(stream.Fuente, parameters))
+                    reconnectList.Add("-rw_timeout 15000000");
 
                 reconnect = string.Join(' ', reconnectList);
             }

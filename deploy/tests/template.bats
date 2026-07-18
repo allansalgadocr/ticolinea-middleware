@@ -37,6 +37,8 @@ teardown() { rm -rf "$TMP"; }
   [ "$status" -eq 0 ]
   grep -q 'server=127.0.0.1' "$TMP/out.json"
   grep -q '"ProviderId": "acme"' "$TMP/out.json"
+  # log4net LogDir override — bootstrap creates /srv/<slug>/logs for the service user
+  grep -q '"Directory": "/srv/acme/logs"' "$TMP/out.json"
   run ! grep -q 'rds.amazonaws.com' "$TMP/out.json"
   # SegmentBaseUrl serves the m3u8/API on 27701; StreamsBaseUrl serves .ts segments on 27703.
   # These must not invert (see LiveController vs StreamsController usage).
