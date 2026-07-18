@@ -76,15 +76,18 @@ EOF
   [[ "$output" == *"-o ControlPersist=10m"* ]]
 }
 
-@test "remote_sudo password mode uses sudo -S (no -p '') with the password before the script" {
+@test "remote_sudo password mode uses sudo -S --prompt= with the password before the script" {
   # One line per arg so the exact argv is observable. There must be NO `-p ''`:
   # ssh flattens argv into a string and an empty '' collapses, which would make
-  # `-p` swallow the next token on the remote (usage error). See remote.sh.
+  # `-p` swallow the next token on the remote (usage error). `--prompt=` is a
+  # single word, so it survives the flattening AND silences sudo's prompt —
+  # the visible `[sudo] password for ...:` baited operators into typing the
+  # password into the local echoing tty. See remote.sh.
   fake_runner() { shift; for a in "$@"; do printf 'ARG:%s\n' "$a"; done; cat; }
   TICO_RUNNER=fake_runner SSH_USER=u SSH_HOST=h SUDO_PASSWORD=topsecret
   output="$(printf 'echo remote-hi\n' | remote_sudo 'bash -s')"
-  # argv is exactly: sudo -S bash -s  (no -p, no empty arg)
-  [[ "$output" == *$'ARG:sudo\nARG:-S\nARG:bash -s\n'* ]]
+  # argv is exactly: sudo -S --prompt= bash -s  (no -p, no empty arg)
+  [[ "$output" == *$'ARG:sudo\nARG:-S\nARG:--prompt=\nARG:bash -s\n'* ]]
   [[ "$output" != *$'ARG:-p\n'* ]]
   # the password line precedes the caller's script on stdin
   pw_line="$(printf '%s\n' "$output" | grep -n '^topsecret$' | cut -d: -f1)"

@@ -81,19 +81,23 @@ remote_sudo() {
   # it to `sudo -S` on stdin ahead of any caller-supplied script. Without one
   # (key mode / NOPASSWD), keep the original plain `sudo`.
   #
-  # NOTE: no `-p ''`. ssh flattens argv into a single string for the remote
-  # shell, and an empty '' argument collapses to nothing — so `sudo -S -p ''
-  # bash -c ...` arrives as `sudo -S -p bash -c ...`, where `-p` swallows `bash`
-  # and `-c` becomes an invalid sudo option (usage error). Dropping `-p` lets
-  # `sudo -S` read the password from stdin; its prompt goes to stderr, harmless.
+  # NOTE: `--prompt=`, never `-p ''`. ssh flattens argv into a single string
+  # for the remote shell, and an empty '' argument collapses to nothing — so
+  # `sudo -S -p '' bash -c ...` arrives as `sudo -S -p bash -c ...`, where `-p`
+  # swallows `bash` and `-c` becomes an invalid sudo option (usage error).
+  # `--prompt=` is a single word, so it survives the flattening and sets an
+  # empty prompt. The prompt must be silenced: it is not "harmless" on stderr —
+  # a visible `[sudo] password for ...:` during a quiet stretch (mysql, the
+  # verify window) bait an operator into typing the password into the local
+  # tty, which echoes it in plaintext (nothing on this side disables echo).
   if [ -n "${SUDO_PASSWORD:-}" ]; then
     if [ -t 0 ]; then
       # Plain-args call, no piped script: send just the password.
-      printf '%s\n' "$SUDO_PASSWORD" | "$TICO_RUNNER" "${SSH_USER}@${SSH_HOST}" sudo -S "$@"
+      printf '%s\n' "$SUDO_PASSWORD" | "$TICO_RUNNER" "${SSH_USER}@${SSH_HOST}" sudo -S --prompt= "$@"
     else
       # Heredoc/piped stdin: password first, then the caller's script — `sudo -S`
       # consumes the first line, the invoked `bash -s` reads the rest.
-      { printf '%s\n' "$SUDO_PASSWORD"; cat; } | "$TICO_RUNNER" "${SSH_USER}@${SSH_HOST}" sudo -S "$@"
+      { printf '%s\n' "$SUDO_PASSWORD"; cat; } | "$TICO_RUNNER" "${SSH_USER}@${SSH_HOST}" sudo -S --prompt= "$@"
     fi
   else
     "$TICO_RUNNER" "${SSH_USER}@${SSH_HOST}" sudo "$@"
