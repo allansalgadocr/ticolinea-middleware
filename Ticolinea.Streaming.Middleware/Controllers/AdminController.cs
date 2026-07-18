@@ -46,13 +46,22 @@ public class AdminController : ControllerBase
             {
                 var it = items[i];
                 var status = statuses[i];
+                var (playlistAgeSeconds, playlist) = await ReadPlaylistMetricsAsync(it.id);
                 rows.Add(new
                 {
                     id = it.id,
                     nombre = it.nombre,
                     running = status.IsRunning,
                     uptimeSec = status.IsRunning ? StreamingService.GetStreamUptimeSeconds(it.id) : 0,
-                    procesoId = status.ProcessId ?? it.proceso
+                    procesoId = status.ProcessId ?? it.proceso,
+                    // Output-health metrics (observation only). Nulls mean the playlist
+                    // file is missing/unreadable, NOT that the endpoint failed.
+                    playlistAgeSeconds,
+                    mediaSequence = playlist?.MediaSequence,
+                    targetDuration = playlist?.TargetDuration,
+                    lastSegment = playlist?.LastSegment,
+                    // FFmpeg launches since the service process booted (not persisted).
+                    restartCount = StreamingService.GetRestartCount(it.id)
                 });
             }
             return Ok(rows);
@@ -121,6 +130,31 @@ public class AdminController : ControllerBase
         catch (Exception ex)
         {
             return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
+    // Reads output-health metrics for one stream's HLS playlist. The path is the
+    // same convention LiveController.Streaming uses (STREAMS_FOLDER + "{id}_.m3u8",
+    // which is also what StreamingService passes to ffmpeg) — do not invent a
+    // parallel one. FFmpeg rewrites the file continuously; the temp_file hls_flag
+    // makes the rename atomic, but the file can still vanish or race between the
+    // Exists check and the read, so everything is wrapped: any failure returns
+    // (null, null) instead of failing the whole /streams response.
+    private static async Task<(double? ageSeconds, HlsPlaylistInfo? playlist)> ReadPlaylistMetricsAsync(int streamId)
+    {
+        try
+        {
+            var playlistFile = Path.Combine(Constantes.Global.STREAMS_FOLDER, $"{streamId}_.m3u8");
+            var fileInfo = new FileInfo(playlistFile);
+            if (!fileInfo.Exists) return (null, null);
+
+            double age = Math.Max(0, (DateTime.UtcNow - fileInfo.LastWriteTimeUtc).TotalSeconds);
+            var playlist = HlsPlaylistInfo.Parse(await System.IO.File.ReadAllTextAsync(playlistFile));
+            return (age, playlist);
+        }
+        catch
+        {
+            return (null, null);
         }
     }
 

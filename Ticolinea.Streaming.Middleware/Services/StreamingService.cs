@@ -24,6 +24,14 @@ namespace ticolinea.stream.service.Services
         private static readonly int _maxFailures = 3;
         private static readonly TimeSpan _circuitBreakerTimeout = TimeSpan.FromMinutes(8);
         
+        // Observability only (AdminController /api/admin/streams): FFmpeg launches per
+        // stream since THIS SERVICE PROCESS BOOTED — not persisted, resets to 0 on
+        // service restart. Incremented at the single launch choke point
+        // (StartedCommandEvent in LanzarProcesoFfmpeg), so supervised restarts and
+        // forced starts (ForzarInicioInmediato) both count. Never cleared on
+        // stop/CleanupStreamState on purpose: the operator wants the history.
+        private static readonly ConcurrentDictionary<int, int> _restartCounts = new();
+
         private static readonly ConcurrentDictionary<int, DateTime> _lastLogTime = new();
         private static readonly TimeSpan _logThrottleInterval = TimeSpan.FromSeconds(4);
         private static readonly ConcurrentDictionary<int, DateTime> _lastBufferAlert = new();
@@ -347,6 +355,7 @@ namespace ticolinea.stream.service.Services
                         case StartedCommandEvent started:
                             processId = started.ProcessId;
                             processStarted = true;
+                            _restartCounts.AddOrUpdate(stream.StreamId, 1, (_, n) => n + 1);
                             if (!startupSemaphoreReleased)
                             {
                                 _startupSemaphore.Release();
@@ -560,6 +569,13 @@ namespace ticolinea.stream.service.Services
                 _logger.Error($"ffprobe falló para {input}: {ex.Message}", ex);
                 return null;
             }
+        }
+
+        // FFmpeg launches for this stream since the service process booted (see
+        // _restartCounts). 0 if the stream was never launched by this process.
+        public static int GetRestartCount(int streamId)
+        {
+            return _restartCounts.TryGetValue(streamId, out var count) ? count : 0;
         }
 
         // Seconds since this stream's ffmpeg was last (re)started, or 0 if not tracked.
