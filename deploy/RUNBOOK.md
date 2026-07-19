@@ -39,6 +39,14 @@
   supervision relaunches it; 3-restarts-per-10min budget, then Degraded (observe-only). Same
   per-node revert procedure if needed.
 
+## Versions, tags and artifacts
+
+- Every middleware change that ships bumps `VERSION` (semver). CI then creates an
+  annotated tag `node-vX.Y.Z` on the built commit and a **GitHub Release** with the
+  artifact zip attached — Releases never expire (Actions run artifacts die at 30 days),
+  so old versions stay deployable and `git checkout node-vX.Y.Z` is exactly what runs.
+- Prefer downloading artifacts from the Release page for anything older than a month.
+
 ## Update a running client
 
 - `./deploy/tico status <slug>` first. Do not update during prime-time viewing hours.

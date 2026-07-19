@@ -4,6 +4,10 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Needed by the tag-and-release step (git push of the version tag + gh release).
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -51,3 +55,29 @@ jobs:
           name: node-${{ steps.ver.outputs.version }}
           path: publish/
           retention-days: 30
+
+      # Every VERSION bump gets a permanent, traceable release: an annotated
+      # node-vX.Y.Z tag on the exact built commit, plus a GitHub Release with
+      # the artifact attached (Releases never expire; run artifacts die at 30
+      # days). Idempotent: an existing tag skips everything, so rebuilds of
+      # the same version never fight. Tag prefix 'node-v' avoids the legacy
+      # v1.0.6-era tag namespace.
+      - name: Tag and release this version
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver="$(cat VERSION)"
+          tag="node-v$ver"
+          if [ -n "$(git ls-remote --tags origin "refs/tags/$tag")" ]; then
+            echo "$tag already exists — skipping tag/release"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "node $ver (automated from build-node)"
+          git push origin "$tag"
+          (cd publish && zip -qr "../node-$ver.zip" .)
+          gh release create "$tag" "node-$ver.zip" \
+            --title "node $ver" \
+            --notes "Automated node artifact for version $ver. Deploy: unzip, then ./deploy/tico deploy <slug> --tag $ver --artifact <dir>"
