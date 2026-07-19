@@ -17,7 +17,9 @@ namespace Ticolinea.Streaming.Middleware.Tests;
 //  d) a circuit-open (or guard-disabled) launch rejection is a WaitForBreaker —
 //     it consumes no budget at all, and
 //  e) the same stable-runtime rule guards the circuit breaker's own record
-//     (NextBreakerFailureCount), sharing IsStableRuntime so layers can't drift.
+//     (DecideFailureRecord, a 4-case transition over exit class x stability
+//     whose action also encodes the apply/timestamp semantics), sharing
+//     IsStableRuntime so layers can't drift.
 // runtimeSeconds is measured from the REAL ffmpeg start (StartedCommandEvent),
 // never from before the queue/semaphore waits.
 public class SupervisionRetryDecisionTests
@@ -181,26 +183,81 @@ public class SupervisionRetryDecisionTests
         decision.NewRetryCount.Should().Be(3);
     }
 
-    // ---------- breaker failure record (NextBreakerFailureCount) ----------
+    // ---------- breaker failure record (DecideFailureRecord) ----------
     // The retryCount lifetime defect existed one layer deeper: _failureTracker
     // only cleared on exit 0 or at launch time (>=8 min gap), so a stale entry
     // survived long healthy runs and organic failures separated by hours could
-    // ever reach _maxFailures. Same shared stable-runtime rule as DecideRetry.
+    // ever reach _maxFailures. And skipping the record on watchdog kills is not
+    // enough: a STABLE run that ends in a watchdog kill proved health just like
+    // one that ends organically — it must CLEAR the history, not dodge it.
+    // Four cases over (exit class x stability); the action also encodes the
+    // apply/timestamp semantics (Remove = drop entry, LeaveUntouched = do not
+    // rewrite lastFailure on a non-failure, Set = write with fresh timestamp).
 
     [Theory]
-    [InlineData(300, 1)]   // exactly at the threshold: first failure
-    [InlineData(3600, 1)]  // hours of healthy output before dying: first failure
-    public void Breaker_record_after_stable_run_resets_to_first_failure(double runtime, int expected)
+    [InlineData(300)]   // exactly at the threshold
+    [InlineData(3600)]  // hours of healthy output before dying
+    public void Stable_organic_failure_records_as_first_failure(double runtime)
     {
-        StreamingService.NextBreakerFailureCount(runtime, currentFailures: 2).Should().Be(expected);
+        var record = StreamingService.DecideFailureRecord(
+            watchdogKill: false, runtime, currentFailures: 2);
+
+        record.Action.Should().Be(StreamingService.FailureRecordAction.Set);
+        record.NewFailures.Should().Be(1);
     }
 
     [Theory]
-    [InlineData(30, 3)]    // rapid failure: increments toward the breaker
-    [InlineData(299.9, 3)] // just under the threshold: still increments
-    public void Breaker_record_after_unstable_run_increments(double runtime, int expected)
+    [InlineData(30)]    // rapid failure: increments toward the breaker
+    [InlineData(299.9)] // just under the threshold: still increments
+    public void Rapid_organic_failure_increments(double runtime)
     {
-        StreamingService.NextBreakerFailureCount(runtime, currentFailures: 2).Should().Be(expected);
+        var record = StreamingService.DecideFailureRecord(
+            watchdogKill: false, runtime, currentFailures: 2);
+
+        record.Action.Should().Be(StreamingService.FailureRecordAction.Set);
+        record.NewFailures.Should().Be(3);
+    }
+
+    [Fact]
+    public void Stable_watchdog_exit_clears_the_failure_history()
+    {
+        // The health is proven and a wedge is not an organic failure: the entry
+        // is removed entirely (no entry, no timestamp).
+        var record = StreamingService.DecideFailureRecord(
+            watchdogKill: true, runtimeSeconds: 3600, currentFailures: 2);
+
+        record.Action.Should().Be(StreamingService.FailureRecordAction.Remove);
+        record.NewFailures.Should().Be(0);
+    }
+
+    [Fact]
+    public void Rapid_watchdog_exit_leaves_the_entry_untouched()
+    {
+        // Proves nothing: neither count nor clear — and LeaveUntouched means the
+        // apply site must NOT rewrite the entry, because (sameCount, now) would
+        // refresh lastFailure on a non-failure, extending the breaker window and
+        // defeating the launch-time >=8 min gap removal.
+        var record = StreamingService.DecideFailureRecord(
+            watchdogKill: true, runtimeSeconds: 30, currentFailures: 2);
+
+        record.Action.Should().Be(StreamingService.FailureRecordAction.LeaveUntouched);
+        record.NewFailures.Should().Be(2);
+    }
+
+    [Fact]
+    public void Stable_watchdog_exit_between_organic_failures_resets_the_breaker_path()
+    {
+        // The reviewer's exact scenario: 2 rapid organic failures, then a stable
+        // (>=300s) run ending in a watchdog kill, then a rapid organic failure.
+        // The breaker count must finish at 1, not 3.
+        int failures = 0;
+
+        failures = Apply(StreamingService.DecideFailureRecord(false, 30, failures), failures);   // 1
+        failures = Apply(StreamingService.DecideFailureRecord(false, 30, failures), failures);   // 2
+        failures = Apply(StreamingService.DecideFailureRecord(true, 3600, failures), failures);  // Remove -> 0
+        failures = Apply(StreamingService.DecideFailureRecord(false, 30, failures), failures);   // 1
+
+        failures.Should().Be(1);
     }
 
     [Fact]
@@ -211,9 +268,19 @@ public class SupervisionRetryDecisionTests
         int failures = 0;
         for (int i = 0; i < 3; i++)
         {
-            failures = StreamingService.NextBreakerFailureCount(3600, failures);
+            failures = Apply(StreamingService.DecideFailureRecord(false, 3600, failures), failures);
         }
 
         failures.Should().Be(1);
     }
+
+    // Mirrors the apply site in LanzarProcesoFfmpeg: Remove drops the entry (0),
+    // Set writes NewFailures, LeaveUntouched keeps the current value.
+    private static int Apply(StreamingService.FailureRecordDecision record, int current) =>
+        record.Action switch
+        {
+            StreamingService.FailureRecordAction.Remove => 0,
+            StreamingService.FailureRecordAction.Set => record.NewFailures,
+            _ => current
+        };
 }

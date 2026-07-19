@@ -121,7 +121,7 @@ namespace ticolinea.stream.service.Services
 
         // Regla compartida del "reset por corrida estable": única fuente para el
         // presupuesto de reintentos (DecideRetry) y para el registro del breaker
-        // (NextBreakerFailureCount) — las dos capas no pueden divergir.
+        // (DecideFailureRecord) — las dos capas no pueden divergir.
         private static bool IsStableRuntime(double runtimeSeconds) =>
             runtimeSeconds >= StableRuntimeResetSeconds;
 
@@ -181,11 +181,42 @@ namespace ticolinea.stream.service.Services
         // así que una entrada rancia (failures=2 de la semana pasada) sobrevivía
         // y el siguiente fallo orgánico la incrementaba con timestamp FRESCO: 3
         // fallos orgánicos en la vida del canal, separados por horas de servicio
-        // sano, disparaban el breaker de 8 min. Regla compartida con DecideRetry
-        // vía IsStableRuntime: un fallo tras corrida estable se REGISTRA como
-        // primero (1), no se incrementa.
-        public static int NextBreakerFailureCount(double runtimeSeconds, int currentFailures) =>
-            IsStableRuntime(runtimeSeconds) ? 1 : currentFailures + 1;
+        // sano, disparaban el breaker de 8 min. Y saltarse el registro en los
+        // kills del watchdog tampoco basta: una corrida ESTABLE terminada por el
+        // watchdog probó salud igual que una terminada por fallo orgánico — si
+        // ese caso no limpia, la entrada rancia sobrevive por la puerta de atrás.
+        //
+        // Transición pura de 4 casos (regla compartida con DecideRetry vía
+        // IsStableRuntime), aplicada para AMBAS clases de exit. La acción codifica
+        // también la semántica del timestamp al aplicarla:
+        //   estable + watchdog → Remove          (salud probada; un cuelgue no es
+        //                                         fallo orgánico: borrar la entrada
+        //                                         ENTERA — sin entrada, sin timestamp)
+        //   estable + orgánico → Set(1)          (primer fallo, timestamp fresco)
+        //   rápida  + watchdog → LeaveUntouched  (no prueba nada: ni contar ni
+        //                                         limpiar, y NO reescribir — un
+        //                                         (mismoCount, now) refrescaría
+        //                                         lastFailure en un no-fallo,
+        //                                         extendiendo la ventana del breaker
+        //                                         y anulando la limpieza de ≥8 min
+        //                                         del lanzamiento)
+        //   rápida  + orgánico → Set(actual + 1) (camino al breaker, como siempre)
+        public enum FailureRecordAction { Remove, LeaveUntouched, Set }
+
+        public readonly record struct FailureRecordDecision(FailureRecordAction Action, int NewFailures);
+
+        public static FailureRecordDecision DecideFailureRecord(
+            bool watchdogKill, double runtimeSeconds, int currentFailures)
+        {
+            if (IsStableRuntime(runtimeSeconds))
+                return watchdogKill
+                    ? new FailureRecordDecision(FailureRecordAction.Remove, 0)
+                    : new FailureRecordDecision(FailureRecordAction.Set, 1);
+
+            return watchdogKill
+                ? new FailureRecordDecision(FailureRecordAction.LeaveUntouched, currentFailures)
+                : new FailureRecordDecision(FailureRecordAction.Set, currentFailures + 1);
+        }
 
         // Resultado de una corrida completa de ffmpeg: el exit code, si ese exit
         // fue provocado por un kill intencional del watchdog, CUÁNDO arrancó de
@@ -658,38 +689,50 @@ namespace ticolinea.stream.service.Services
                 // -1) no hay marca posible: fue fallo de lanzamiento.
                 watchdogKill = processStarted
                     && TryConsumeWatchdogKillMark(stream.StreamId, processId, failureTime);
+
+                // Transición del registro del breaker para AMBAS clases de exit
+                // (ver DecideFailureRecord): saltar el registro sólo en los kills
+                // del watchdog dejaba viva una entrada rancia cuando la corrida
+                // ESTABLE terminaba en kill — el caso estable+watchdog debe
+                // LIMPIAR el historial, no esquivarlo.
+                double failureRuntimeSeconds = startedAtUtc is DateTime startedAtFailure
+                    ? (failureTime - startedAtFailure).TotalSeconds
+                    : 0;
+                int trackedFailures = _failureTracker.TryGetValue(stream.StreamId, out var trackedEntry)
+                    ? trackedEntry.failures
+                    : 0;
+                var record = DecideFailureRecord(watchdogKill, failureRuntimeSeconds, trackedFailures);
+
+                switch (record.Action)
+                {
+                    case FailureRecordAction.Remove:
+                        // Estable + watchdog: salud probada — historial limpiado
+                        // entero (sin entrada, sin timestamp).
+                        _failureTracker.TryRemove(stream.StreamId, out _);
+                        break;
+                    case FailureRecordAction.Set:
+                        _failureTracker[stream.StreamId] = (record.NewFailures, failureTime);
+                        if (record.NewFailures >= _maxFailures)
+                        {
+                            _logger.Error($"Stream {stream.StreamId}: Circuit breaker triggered after {record.NewFailures} failures");
+                        }
+                        break;
+                    default:
+                        // LeaveUntouched (rápida + watchdog): NO escribir — un
+                        // (mismoCount, now) refrescaría lastFailure en un no-fallo,
+                        // extendiendo la ventana del breaker y anulando la limpieza
+                        // de ≥8 min del lanzamiento.
+                        break;
+                }
+
                 if (watchdogKill)
                 {
                     // Kill intencional del watchdog: el relanzo supervisado sigue su
-                    // curso normal (_minRestartInterval, BD), pero este exit NO
-                    // cuenta como fallo para el circuit breaker ni para el contador
-                    // de reintentos de la supervisión.
-                    _logger.Debug($"Stream {stream.StreamId}: exit {exitCode} provocado por kill del watchdog; no cuenta como fallo.");
-                }
-                else
-                {
-                    // Mismo "reset por corrida estable" que DecideRetry (regla
-                    // compartida IsStableRuntime/NextBreakerFailureCount): sin esto,
-                    // una entrada rancia del tracker sobrevivía corridas sanas de
-                    // horas (la limpieza de ≥8 min sólo corre en el LANZAMIENTO, y
-                    // durante una corrida sana no hay lanzamientos) y cada fallo
-                    // orgánico la incrementaba con timestamp fresco — 3 fallos en
-                    // la vida del canal disparaban el breaker. Un fallo tras
-                    // corrida estable se registra como PRIMERO. La limpieza de
-                    // lanzamiento se conserva: cubre huecos que sí cruzan relanzos.
-                    double failureRuntimeSeconds = startedAtUtc is DateTime startedAtFailure
-                        ? (failureTime - startedAtFailure).TotalSeconds
-                        : 0;
-                    _failureTracker.AddOrUpdate(stream.StreamId,
-                        (1, failureTime),
-                        (_, existing) => (NextBreakerFailureCount(failureRuntimeSeconds, existing.failures), failureTime)
-                    );
-
-                    var currentFailures = _failureTracker[stream.StreamId].failures;
-                    if (currentFailures >= _maxFailures)
-                    {
-                        _logger.Error($"Stream {stream.StreamId}: Circuit breaker triggered after {currentFailures} failures");
-                    }
+                    // curso normal (_minRestartInterval, BD) y este exit no consume
+                    // presupuesto de reintentos.
+                    _logger.Debug(record.Action == FailureRecordAction.Remove
+                        ? $"Stream {stream.StreamId}: exit {exitCode} por kill del watchdog tras corrida estable; historial de fallos del breaker limpiado."
+                        : $"Stream {stream.StreamId}: exit {exitCode} por kill del watchdog; no cuenta como fallo (historial del breaker intacto).");
                 }
             }
             else if (!wasCancelled)
