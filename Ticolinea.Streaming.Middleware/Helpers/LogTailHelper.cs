@@ -24,6 +24,33 @@ public static class LogTailHelper
             ? DefaultLogDirectory
             : configuredDirectory.TrimEnd('/');
 
+    // Log retention: TL.* files older than N days are deleted by the daily
+    // janitor (Jobs.LimpiarLogsViejos) — log4net's date rolling NEVER removes
+    // previous days on its own, so without this every node leaks disk slowly.
+    public const int DefaultRetentionDays = 14;
+
+    // Resolved once at startup (Log4netExtensions) so the static Hangfire job
+    // reads the SAME directory/retention the appender uses.
+    public static string? CurrentLogDirectory { get; set; }
+    public static int CurrentRetentionDays { get; set; } = DefaultRetentionDays;
+
+    // Pure: which files should the janitor delete? Only TL.-prefixed files
+    // (never touches foreign files in the directory), strictly older than the
+    // retention window by last-write time (covers size-rolled .1/.2 suffixes,
+    // whose names don't parse as dates).
+    public static IEnumerable<string> SelectExpiredLogFiles(
+        IEnumerable<(string Name, DateTime LastWriteUtc)> files,
+        DateTime nowUtc,
+        int retentionDays)
+    {
+        var cutoff = nowUtc.AddDays(-Math.Max(1, retentionDays));
+        foreach (var (name, lastWriteUtc) in files)
+        {
+            if (name.StartsWith("TL.", StringComparison.Ordinal) && lastWriteUtc < cutoff)
+                yield return name;
+        }
+    }
+
     public static string LogFileName(DateTime date) => $"TL.{date:yyyyMMdd}.log";
 
     public static string LogFilePath(string logDirectory, DateTime date) =>

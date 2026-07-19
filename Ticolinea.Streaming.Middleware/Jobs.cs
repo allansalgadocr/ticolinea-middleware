@@ -39,6 +39,36 @@ namespace ticolinea.stream.service
             await new Services.PackageSyncService(client).SyncAsync(forced: false);
         }
 
+        // Daily log janitor: log4net's date rolling never deletes previous days'
+        // TL.* files — without this every node (and main) leaks disk slowly.
+        // Directory/retention stashed at startup from the same config the
+        // appender uses. Deletion failures are logged and skipped (a held-open
+        // file just gets retried tomorrow).
+        public static Task LimpiarLogsViejos()
+        {
+            var dir = Helpers.LogTailHelper.CurrentLogDirectory;
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return Task.CompletedTask;
+            var files = Directory.GetFiles(dir)
+                .Select(f => (Name: Path.GetFileName(f), LastWriteUtc: File.GetLastWriteTimeUtc(f)))
+                .ToList();
+            var expired = Helpers.LogTailHelper.SelectExpiredLogFiles(
+                files, DateTime.UtcNow, Helpers.LogTailHelper.CurrentRetentionDays).ToList();
+            foreach (var name in expired)
+            {
+                try
+                {
+                    File.Delete(Path.Combine(dir, name));
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn($"log janitor: no se pudo borrar {name}: {ex.Message}");
+                }
+            }
+            if (expired.Count > 0)
+                _logger.Info($"log janitor: {expired.Count} archivo(s) de log con más de {Helpers.LogTailHelper.CurrentRetentionDays} días eliminados");
+            return Task.CompletedTask;
+        }
+
         [DisableConcurrentExecution(60)]
         public static async Task RevisarStreams()
         {

@@ -141,6 +141,9 @@ RecurringJob.AddOrUpdate("kill_connections", () => Jobs.MataConexionesSinUso(), 
 RecurringJob.AddOrUpdate("check_offline_streams", () => Jobs.VerificarStreamsCaidos(), "*/35 * * * *");
 // Changed from every 5 minutes to every 15 minutes (67% reduction in DB queries)
 RecurringJob.AddOrUpdate("remove_large_files", () => Jobs.EliminarArchivosGrandes(), "*/15 * * * *");
+// Daily at 04:10 local (after the 03:00 restart window): prune TL.* log files
+// older than Logging:RetentionDays (default 14) — date rolling never does.
+RecurringJob.AddOrUpdate("clean_old_logs", () => Jobs.LimpiarLogsViejos(), "10 4 * * *");
 RecurringJob.AddOrUpdate("remove_stream_errors", () => Jobs.LimpiaErrores(), Cron.Daily);
 RecurringJob.AddOrUpdate("monitor_system_resources", () => Jobs.MonitorearRecursosSistema(), "*/10 * * * *"); // Every 10 minutes
 
