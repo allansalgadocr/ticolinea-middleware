@@ -394,8 +394,11 @@ namespace ticolinea.stream.service
         // mínimo de 12s). Al matar únicamente el PID, el loop SupervisarStream que ya
         // está vivo recibe el ExitedCommandEvent (exit != 0) y relanza por el camino
         // supervisado normal (LanzarProcesoFfmpeg): el circuit breaker conserva su
-        // historial, el kill cuenta como fallo (un canal que se cuelga repetido DEBE
-        // acercarse al breaker) y aplican backoff + intervalo mínimo. Tampoco se toca
+        // historial y aplican backoff + intervalo mínimo. El kill en sí NO cuenta
+        // como fallo del breaker: se marca vía StreamingService.MarkWatchdogKill
+        // justo antes de matar, y el manejo del exit consume esa marca — el watchdog
+        // ya tiene su propio presupuesto (WatchdogPolicy) y sin la marca 3 kills en
+        // <8 min disparaban el breaker y dejaban el canal caído. Tampoco se toca
         // la BD: el ExitedCommandEvent ya dispara ActualizarCanalEstado y el relanzo
         // ActualizaInfoCanal, igual que en cualquier caída de ffmpeg.
         public static async Task<bool> MatarProcesoParaWatchdog(int streamId)
@@ -420,6 +423,9 @@ namespace ticolinea.stream.service
                             var proc = Process.GetProcessById(pid);
                             if (proc.HasExited) continue;
 
+                            // Marca ANTES del kill (sólo con PID vivo encontrado):
+                            // el exit != 0 resultante no debe contar para el breaker.
+                            StreamingService.MarkWatchdogKill(streamId);
                             proc.Kill(true);
                             killedAny = true;
                             _logger.Info($"✅ Watchdog: proceso {pid} del stream {streamId} eliminado (la supervisión lo relanzará).");

@@ -1,6 +1,7 @@
 using System;
 using FluentAssertions;
 using ticolinea.stream.service.Helpers;
+using ticolinea.stream.service.Services;
 using Xunit;
 
 namespace Ticolinea.Streaming.Middleware.Tests;
@@ -256,23 +257,100 @@ public class WatchdogPolicyTests
         state.TotalRestarts.Should().Be(3);
     }
 
-    [Fact]
-    public void No_restart_while_degraded_only_observation()
+    // Drives a wedged stream through budget exhaustion into Degraded, returning
+    // the state and the time of the last budgeted restart.
+    private static (StreamProgress state, DateTime lastRestart) Degrade()
     {
         var state = new StreamProgress();
         var lastRestart = ExhaustBudget(state);
         Step(Obs(lastRestart.AddSeconds(31), playlistAge: 600), state);
         Step(Obs(lastRestart.AddSeconds(40), playlistAge: 600), state).Should().Be(WatchdogAction.MarkDegraded);
+        state.Degraded.Should().BeTrue();
+        return (state, lastRestart);
+    }
 
-        // Hours of staleness later: still only CountStale, never Restart/MarkDegraded again
-        // (the ERROR log happens once, on the MarkDegraded transition).
-        for (int i = 1; i <= 5; i++)
-        {
-            Step(Obs(lastRestart.AddHours(i), playlistAge: 9999), state)
-                .Should().Be(WatchdogAction.CountStale);
-        }
+    [Fact]
+    public void Degraded_wedged_channel_gets_slow_probe_restart_every_10_minutes()
+    {
+        // Slow-retry contract: a permanently wedged channel must NOT stall forever.
+        // While Degraded, one probe Restart is granted per DegradedRetryInterval
+        // (10 min) since the last restart — escalation stays monotonic
+        // (normal: up to 3/10min → degraded: 1/10min).
+        var (state, lastRestart) = Degrade();
+
+        // Before the interval elapses: observation only.
+        Step(Obs(lastRestart.AddMinutes(9), playlistAge: 600), state)
+            .Should().Be(WatchdogAction.CountStale);
+
+        // At 10 min since the last restart: probe.
+        var probe1 = lastRestart.AddMinutes(10);
+        Step(Obs(probe1, playlistAge: 600), state).Should().Be(WatchdogAction.Restart);
+        state.Degraded.Should().BeTrue();          // probe does NOT clear Degraded
+        state.TotalRestarts.Should().Be(4);
+        state.LastRestartUtc.Should().Be(probe1);
+
+        // Still wedged after the probe: stale counting resumes, no early restart...
+        Step(Obs(probe1.AddSeconds(20), playlistAge: 600), state).Should().Be(WatchdogAction.CountStale);
+        Step(Obs(probe1.AddSeconds(40), playlistAge: 600), state).Should().Be(WatchdogAction.CountStale);
+
+        // ...until the next 10-min interval grants the next probe.
+        var probe2 = probe1.AddMinutes(10);
+        Step(Obs(probe2, playlistAge: 600), state).Should().Be(WatchdogAction.Restart);
+        state.Degraded.Should().BeTrue();
+        state.TotalRestarts.Should().Be(5);
+    }
+
+    [Fact]
+    public void Degraded_stale_before_10_minutes_only_counts_stale()
+    {
+        var (state, lastRestart) = Degrade();
+
+        var action = Step(Obs(lastRestart.AddMinutes(9), playlistAge: 600), state);
+
+        action.Should().Be(WatchdogAction.CountStale);
         state.TotalRestarts.Should().Be(3);
         state.Degraded.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Degraded_probe_updates_restart_clock_but_not_window_budget()
+    {
+        // The probe deliberately does NOT consume window budget: Degraded already
+        // rate-limits it harder (1/10min) than the window would, and ClearDegraded
+        // resets the window anyway.
+        var (state, lastRestart) = Degrade();
+        var windowStartBefore = state.WindowStartUtc;
+        state.WatchdogRestartsInWindow.Should().Be(3);
+
+        var probeAt = lastRestart.AddMinutes(10);
+        Step(Obs(probeAt, playlistAge: 600), state).Should().Be(WatchdogAction.Restart);
+
+        state.WatchdogRestartsInWindow.Should().Be(3);      // unchanged
+        state.WindowStartUtc.Should().Be(windowStartBefore); // unchanged
+        state.LastRestartUtc.Should().Be(probeAt);
+        state.Degraded.Should().BeTrue();
+        state.ConsecutiveStaleChecks.Should().Be(0);
+    }
+
+    [Fact]
+    public void Degraded_probe_then_two_advances_clears_degraded()
+    {
+        // Existing recovery contract intact: only two progress advances clear
+        // Degraded — including when the progress comes from a probe restart.
+        var (state, lastRestart) = Degrade();
+        var probeAt = lastRestart.AddMinutes(10);
+        Step(Obs(probeAt, playlistAge: 600), state).Should().Be(WatchdogAction.Restart);
+
+        var t1 = probeAt.AddSeconds(30);
+        Step(Obs(t1, mediaSequence: 200, playlistAge: 0), state).Should().Be(WatchdogAction.Progress);
+        state.Degraded.Should().BeTrue();
+        state.ProgressAdvancesWhileDegraded.Should().Be(1);
+
+        var t2 = t1.AddSeconds(5);
+        Step(Obs(t2, mediaSequence: 201, playlistAge: 0), state).Should().Be(WatchdogAction.ClearDegraded);
+        state.Degraded.Should().BeFalse();
+        state.WatchdogRestartsInWindow.Should().Be(0);
+        state.WindowStartUtc.Should().Be(t2);
     }
 
     [Fact]
@@ -337,6 +415,50 @@ public class WatchdogPolicyTests
         state.WatchdogRestartsInWindow.Should().Be(1);          // fresh window
         state.WindowStartUtc.Should().Be(late.AddSeconds(5));
         state.TotalRestarts.Should().Be(4);
+    }
+
+    // ---------- watchdog kill marks (StreamingService) ----------
+    // Fix: an intentional watchdog kill must not feed the app circuit breaker.
+    // Only the pure mark→consume semantics are testable here (explicit clock,
+    // unique stream ids against the static registry); the _failureTracker skip
+    // itself lives inside LanzarProcesoFfmpeg's exit handling (private static
+    // state driven by a real ffmpeg exit) and is exercised only via integration.
+
+    [Fact]
+    public void Watchdog_kill_mark_is_consumed_exactly_once()
+    {
+        StreamingService.MarkWatchdogKill(990101, T0);
+
+        StreamingService.TryConsumeWatchdogKillMark(990101, T0.AddSeconds(5)).Should().BeTrue();
+        // Consumed: a second exit (real failure) within the TTL must count.
+        StreamingService.TryConsumeWatchdogKillMark(990101, T0.AddSeconds(6)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Stale_watchdog_kill_mark_is_ignored_and_removed()
+    {
+        StreamingService.MarkWatchdogKill(990102, T0);
+
+        // 61s > 60s TTL: a leaked mark cannot mask a real future failure.
+        StreamingService.TryConsumeWatchdogKillMark(990102, T0.AddSeconds(61)).Should().BeFalse();
+        // And it was removed, not merely ignored.
+        StreamingService.TryConsumeWatchdogKillMark(990102, T0.AddSeconds(62)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Consume_without_mark_is_false()
+    {
+        StreamingService.TryConsumeWatchdogKillMark(990103, T0).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Remarking_refreshes_the_mark_timestamp()
+    {
+        StreamingService.MarkWatchdogKill(990104, T0);
+        StreamingService.MarkWatchdogKill(990104, T0.AddSeconds(50));
+
+        // 100s after the first mark but only 50s after the refresh: still fresh.
+        StreamingService.TryConsumeWatchdogKillMark(990104, T0.AddSeconds(100)).Should().BeTrue();
     }
 
     // ---------- purity of Evaluate ----------

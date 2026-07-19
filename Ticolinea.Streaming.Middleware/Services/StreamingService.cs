@@ -37,6 +37,31 @@ namespace ticolinea.stream.service.Services
         private static readonly ConcurrentDictionary<int, DateTime> _lastBufferAlert = new();
         private static readonly TimeSpan _bufferAlertThrottleInterval = TimeSpan.FromMinutes(10);
 
+        // Marcas de kill intencional del watchdog (Jobs.MatarProcesoParaWatchdog las
+        // pone justo ANTES de matar el ffmpeg). El exit != 0 que ese kill provoca NO
+        // debe alimentar _failureTracker: el watchdog tiene su propio presupuesto
+        // (WatchdogPolicy, 3 por ventana de 10 min) y sin esta marca 3 kills de
+        // watchdog con menos de 8 min entre sí disparaban el circuit breaker en el
+        // relanzo — canal caído 8 min por reinicios intencionales. La marca se
+        // consume una sola vez y caduca a los 60s (una marca huérfana no puede
+        // enmascarar un fallo real futuro).
+        private static readonly ConcurrentDictionary<int, DateTime> _watchdogKillMarks = new();
+        private static readonly TimeSpan _watchdogKillMarkTtl = TimeSpan.FromSeconds(60);
+
+        public static void MarkWatchdogKill(int streamId) =>
+            MarkWatchdogKill(streamId, DateTime.UtcNow);
+
+        // Sobrecargas con reloj explícito (patrón WatchdogPolicy): públicas para que
+        // la semántica marca→consumo sea unit-testeable de forma determinista.
+        public static void MarkWatchdogKill(int streamId, DateTime nowUtc) =>
+            _watchdogKillMarks[streamId] = nowUtc;
+
+        // Consumo de un solo uso: TryRemove SIEMPRE quita la marca (fresca o
+        // caducada); sólo devuelve true si además estaba dentro del TTL.
+        public static bool TryConsumeWatchdogKillMark(int streamId, DateTime nowUtc) =>
+            _watchdogKillMarks.TryRemove(streamId, out var markedAt)
+            && nowUtc - markedAt <= _watchdogKillMarkTtl;
+
         private class ProbeInfo
         {
             public List<ProbeStream> Streams { get; set; } = new();
@@ -439,20 +464,33 @@ namespace ticolinea.stream.service.Services
             if (!wasCancelled && exitCode != 0)
             {
                 var failureTime = DateTime.UtcNow;
-                _failureTracker.AddOrUpdate(stream.StreamId, 
-                    (1, failureTime),
-                    (_, existing) => (existing.failures + 1, failureTime)
-                );
-                
-                var currentFailures = _failureTracker[stream.StreamId].failures;
-                if (currentFailures >= _maxFailures)
+                if (TryConsumeWatchdogKillMark(stream.StreamId, failureTime))
                 {
-                    _logger.Error($"Stream {stream.StreamId}: Circuit breaker triggered after {currentFailures} failures");
+                    // Kill intencional del watchdog: el relanzo supervisado sigue su
+                    // curso normal (backoff, _minRestartInterval, BD), pero este exit
+                    // NO cuenta como fallo para el circuit breaker.
+                    _logger.Debug($"Stream {stream.StreamId}: exit {exitCode} provocado por kill del watchdog; no cuenta para el circuit breaker.");
+                }
+                else
+                {
+                    _failureTracker.AddOrUpdate(stream.StreamId,
+                        (1, failureTime),
+                        (_, existing) => (existing.failures + 1, failureTime)
+                    );
+
+                    var currentFailures = _failureTracker[stream.StreamId].failures;
+                    if (currentFailures >= _maxFailures)
+                    {
+                        _logger.Error($"Stream {stream.StreamId}: Circuit breaker triggered after {currentFailures} failures");
+                    }
                 }
             }
             else if (!wasCancelled)
             {
                 _failureTracker.TryRemove(stream.StreamId, out _);
+                // Salida limpia: descartar una marca de watchdog que quedara viva
+                // (carrera kill/exit-0) para que no enmascare un fallo real posterior.
+                _watchdogKillMarks.TryRemove(stream.StreamId, out _);
             }
 
             return exitCode;
@@ -464,6 +502,7 @@ namespace ticolinea.stream.service.Services
             _failureTracker.TryRemove(streamId, out _);
             _lastLogTime.TryRemove(streamId, out _);
             _lastBufferAlert.TryRemove(streamId, out _);
+            _watchdogKillMarks.TryRemove(streamId, out _);
         }
 
         private static bool ShouldLogError(int streamId, string errorText)

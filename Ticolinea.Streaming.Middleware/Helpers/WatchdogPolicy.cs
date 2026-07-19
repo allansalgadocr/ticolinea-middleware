@@ -13,7 +13,7 @@ public sealed class StreamProgress
     public int ConsecutiveStaleChecks;
     public int WatchdogRestartsInWindow;         // presupuesto: ventana deslizante de 10 min
     public DateTime WindowStartUtc;
-    public bool Degraded;                        // presupuesto agotado — sólo observar
+    public bool Degraded;                        // presupuesto agotado — sonda lenta (1 cada DegradedRetryInterval)
     public int ProgressAdvancesWhileDegraded;    // avances vistos estando Degraded (2 lo limpian)
     public int TotalRestarts;                    // reinicios de watchdog desde el boot del servicio (observabilidad)
 }
@@ -33,7 +33,7 @@ public enum WatchdogAction
 {
     None,           // dentro del grace, o sin datos concluyentes, o no-stale
     Progress,       // hubo avance (o primera observación): resetear contador stale
-    CountStale,     // stale confirmado pero sin reiniciar (falta 2do chequeo, cooldown, o Degraded)
+    CountStale,     // stale confirmado pero sin reiniciar (falta 2do chequeo, cooldown, o Degraded esperando sonda)
     Restart,        // matar el ffmpeg colgado y dejar que la supervisión lo relance
     MarkDegraded,   // presupuesto agotado: marcar Degraded (log ERROR una sola vez)
     ClearDegraded   // 2do avance estando Degraded: limpiar y resetear presupuesto
@@ -57,6 +57,11 @@ public static class WatchdogPolicy
     public const int MaxRestartsPerWindow = 3;           // presupuesto por ventana
     public static readonly TimeSpan BudgetWindow = TimeSpan.FromMinutes(10);
     public const int AdvancesToClearDegraded = 2;        // avances que limpian Degraded
+    // Sonda lenta estando Degraded: un canal permanentemente colgado no puede
+    // quedarse sin reinicio para siempre (sólo el progreso limpia Degraded, y un
+    // proceso colgado jamás progresa). Un Restart-sonda cada 10 min mantiene la
+    // escalación monotónica: normal hasta 3/10min → degraded 1/10min.
+    public static readonly TimeSpan DegradedRetryInterval = TimeSpan.FromMinutes(10);
 
     public static double GraceSeconds(int targetDuration) =>
         Math.Max(GraceMultiplier * Math.Max(0, targetDuration), GraceMinSeconds);
@@ -105,9 +110,17 @@ public static class WatchdogPolicy
         if (staleChecksIncludingThis < MinConsecutiveStaleChecks)
             return WatchdogAction.CountStale;
 
-        // Degraded: presupuesto agotado — observar solamente, jamás reiniciar.
+        // Degraded: presupuesto agotado — observar, con una sonda lenta. Si el
+        // canal sigue stale y ya pasó DegradedRetryInterval desde el último
+        // reinicio, se concede UN Restart-sonda (no limpia Degraded: eso sólo lo
+        // hacen 2 avances de progreso). El intervalo de 10 min implica de sobra
+        // el cooldown de 30s, por eso esta rama no lo re-verifica.
         if (state.Degraded)
+        {
+            if (obs.NowUtc - state.LastRestartUtc >= DegradedRetryInterval)
+                return WatchdogAction.Restart;
             return WatchdogAction.CountStale;
+        }
 
         // Cooldown entre reinicios de watchdog.
         if ((obs.NowUtc - state.LastRestartUtc).TotalSeconds < RestartCooldownSeconds)
@@ -148,12 +161,21 @@ public static class WatchdogPolicy
                 break;
 
             case WatchdogAction.Restart:
-                if (obs.NowUtc - state.WindowStartUtc >= BudgetWindow)
+                // Restart-sonda estando Degraded: NO consume presupuesto de
+                // ventana. Decisión deliberada: Degraded ya limita la tasa a
+                // 1 por DegradedRetryInterval (más estricto que la ventana), y
+                // al limpiarse Degraded ClearDegraded resetea la ventana de
+                // todos modos — contar la sonda sólo distorsionaría esa cuenta.
+                // Tampoco limpia Degraded (sólo 2 avances de progreso lo hacen).
+                if (!state.Degraded)
                 {
-                    state.WindowStartUtc = obs.NowUtc;
-                    state.WatchdogRestartsInWindow = 0;
+                    if (obs.NowUtc - state.WindowStartUtc >= BudgetWindow)
+                    {
+                        state.WindowStartUtc = obs.NowUtc;
+                        state.WatchdogRestartsInWindow = 0;
+                    }
+                    state.WatchdogRestartsInWindow++;
                 }
-                state.WatchdogRestartsInWindow++;
                 state.TotalRestarts++;
                 state.LastRestartUtc = obs.NowUtc;
                 state.ConsecutiveStaleChecks = 0;

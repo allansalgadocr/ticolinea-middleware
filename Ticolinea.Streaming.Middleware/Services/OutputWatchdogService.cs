@@ -19,7 +19,10 @@ namespace ticolinea.stream.service.Services;
 // supervisión → CleanupStreamState borra lo mismo). En su lugar,
 // Jobs.MatarProcesoParaWatchdog mata SOLO el PID: el loop SupervisarStream que
 // sigue vivo ve el exit != 0 y relanza por el camino supervisado normal, con
-// breaker, backoff e intervalo mínimo de 12s intactos. Además la política exige
+// breaker, backoff e intervalo mínimo de 12s intactos. El kill tampoco ALIMENTA
+// el breaker: se marca vía StreamingService.MarkWatchdogKill y el manejo del exit
+// consume la marca sin incrementar _failureTracker — el watchdog ya gasta su
+// propio presupuesto (WatchdogPolicy) por cada kill. Además la política exige
 // ProcessUptimeSeconds > 0 (_lastProcessStart rastreado), que sólo es cierto
 // mientras esa supervisión está viva — el kill no puede dejar huérfano a nadie.
 //
@@ -174,23 +177,44 @@ public sealed class OutputWatchdogService : BackgroundService
             await Task.Delay(_doubleReadDelay, ct);
             var obs = await ObserveAsync(streamId);
             var action = WatchdogPolicy.Evaluate(obs, state);
-            WatchdogPolicy.Apply(action, obs, state);
 
             if (action != WatchdogAction.Restart)
             {
+                WatchdogPolicy.Apply(action, obs, state);
                 _logger.Debug($"Watchdog: reinicio de stream {streamId} abortado por double-read (acción: {action}).");
                 return;
             }
 
+            // WARN de intención (aún sin presupuesto gastado): el kill viene ahora.
             _logger.Warn(
                 $"Watchdog: reiniciando stream {streamId} — ffmpeg vivo sin progreso de salida " +
                 $"(playlist age {(obs.PlaylistAgeSeconds.HasValue ? obs.PlaylistAgeSeconds.Value.ToString("F0") + "s" : "sin playlist")}, " +
-                $"mediaSequence {obs.MediaSequence}, uptime {obs.ProcessUptimeSeconds:F0}s). " +
-                $"Reinicio {state.WatchdogRestartsInWindow}/{WatchdogPolicy.MaxRestartsPerWindow} en la ventana de {WatchdogPolicy.BudgetWindow.TotalMinutes:F0} min.");
+                $"mediaSequence {obs.MediaSequence}, uptime {obs.ProcessUptimeSeconds:F0}s).");
 
             // Matar SOLO el proceso: la supervisión viva lo relanza por el camino
             // normal, preservando circuit breaker / backoff / intervalo mínimo.
-            await Jobs.MatarProcesoParaWatchdog(streamId);
+            // El presupuesto se gasta DESPUÉS y sólo si el kill encontró y mató un
+            // proceso: un kill fallido/en carrera aplica CountStale, no Restart —
+            // tres kills fallidos no pueden degradar un canal que nunca se reinició.
+            var killed = await Jobs.MatarProcesoParaWatchdog(streamId);
+            WatchdogPolicy.Apply(killed ? WatchdogAction.Restart : WatchdogAction.CountStale, obs, state);
+
+            if (!killed)
+            {
+                _logger.Warn($"Watchdog: no se encontró proceso vivo que matar para stream {streamId}; presupuesto no consumido.");
+            }
+            else if (state.Degraded)
+            {
+                _logger.Warn(
+                    $"Watchdog: stream {streamId} reiniciado (sonda DEGRADED, 1 cada " +
+                    $"{WatchdogPolicy.DegradedRetryInterval.TotalMinutes:F0} min; no consume presupuesto de ventana).");
+            }
+            else
+            {
+                _logger.Warn(
+                    $"Watchdog: stream {streamId} reiniciado. " +
+                    $"Reinicio {state.WatchdogRestartsInWindow}/{WatchdogPolicy.MaxRestartsPerWindow} en la ventana de {WatchdogPolicy.BudgetWindow.TotalMinutes:F0} min.");
+            }
         }
         finally
         {
