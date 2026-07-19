@@ -21,6 +21,11 @@ _tico_resolve_paths() {
 deploy_health() { remote_health; }
 deploy_baseline_ids()  { remote_fresh_stream_ids; }
 deploy_recovered_ids() { remote_recovered_stream_ids; }
+# Which release does `current` actually resolve to? The identity signal the
+# swap must be judged by — health alone can't name the serving release.
+deploy_current_release() {
+  remote "readlink $TICO_CURRENT_LINK 2>/dev/null | xargs -r basename || true" | tr -d '\r'
+}
 
 # Pure, locally-testable verification core: which baseline stream IDs have no
 # post-marker segment yet? Args are whitespace/newline-separated ID lists;
@@ -95,7 +100,10 @@ deploy_rollback_to() { # previous_tag
   # quoting and only the first word reaches `bash -c`. Unquoted heredoc so the
   # LOCAL vars ($TICO_RELEASES_DIR/$prev/$TICO_CURRENT_LINK) expand here; no
   # remote-shell var is referenced, so nothing needs escaping.
-  remote_sudo 'bash -s' <<REMOTE
+  # Explicit exit on failure: rollback also runs in set -e-suppressed context
+  # (called from the if-condition chain). A silent rollback failure would leave
+  # a broken release serving while the operator reads "rolled back".
+  remote_sudo 'bash -s' <<REMOTE || die "ROLLBACK FAILED — manual intervention required (see RUNBOOK 'Roll back by hand')"
 set -euo pipefail
 ln -sfn $TICO_RELEASES_DIR/$prev $TICO_CURRENT_LINK.tmp
 mv -T $TICO_CURRENT_LINK.tmp $TICO_CURRENT_LINK
@@ -153,20 +161,41 @@ deploy_run_swap_and_verify() { # new_tag, previous_tag
   # the new process is exec'd, and its first segment lands seconds later, so
   # the new process's output postdates the marker. Worst case its very first
   # segment is ignored and verification waits ~one more segment.
-  remote_sudo 'bash -s' <<REMOTE
+  # EXPLICIT error check: this function is called from an `if` condition, so
+  # `set -e` is suppressed for its whole body (bash rule). Without the check,
+  # a failed swap (ssh drop, sudo denial) fell through to a health-only verify
+  # that happily attested the OLD release still serving — false success
+  # (happened in production: 'Permission denied' mid-run, 'Deploy verified').
+  if ! remote_sudo 'bash -s' <<REMOTE
 set -euo pipefail
 ln -sfn $TICO_RELEASES_DIR/$new $TICO_CURRENT_LINK.tmp
 mv -T $TICO_CURRENT_LINK.tmp $TICO_CURRENT_LINK
 systemctl restart ticolinea-streaming
 touch /srv/${PROVIDER}/.tico-deploy-marker
 REMOTE
+  then
+    warn "Swap step FAILED (ssh/sudo error) — the serving release is unchanged. Re-run the deploy."
+    return 1
+  fi
+  # Identity check: health alone can't tell WHICH release is serving (on a
+  # channel-less node verify is health-only). The swap is real only if
+  # `current` now resolves to the new tag.
+  local live; live="$(deploy_current_release)"
+  if [ "$live" != "$new" ]; then
+    warn "current resolves to '${live:-unknown}', expected '$new' — swap did not take. Re-run the deploy."
+    return 1
+  fi
   if deploy_verify "$baseline"; then
     log "Deploy $new verified."
     return 0
   fi
   warn "Verification failed for $new."
-  if [ -n "$prev" ]; then
+  # Roll back only if the new release is actually the one serving; when the
+  # swap never took, restarting the healthy old release would be pure harm.
+  if [ -n "$prev" ] && [ "$(deploy_current_release)" = "$new" ]; then
     deploy_rollback_to "$prev"
+  elif [ -n "$prev" ]; then
+    warn "serving release is not $new — no rollback performed."
   else
     # Dying here (the old behavior) aborted mid-cleanup with a rollback error
     # while the real state — new release live but unverified — went unreported.

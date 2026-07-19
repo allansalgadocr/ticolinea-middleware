@@ -24,6 +24,12 @@ setup() {
   # only apply when these are unset.
   TICO_VERIFY_TRIES=1
   TICO_VERIFY_SLEEP=0
+  # Default identity stub: behave like a real box — `current` resolves to the
+  # last swap the mock recorded. Tests that need a divergent box state
+  # (swap "succeeded" but didn't take) override this per-test.
+  deploy_current_release() {
+    mock_calls_joined 2>/dev/null | sed -n 's|.*ln -sfn [^ ]*/releases/\([^ ]*\) .*|\1|p' | tail -1
+  }
 }
 
 @test "verify passes when health is 200 and every baseline stream recovered" {
@@ -348,4 +354,36 @@ setup() {
   run bash -c 'printf "v9\nv8\nv7\nv6\nv5\nv4\nv3\nv2\nv1\n" | { source deploy/lib/commands/deploy.sh; deploy_select_prunable v1; }'
   [ "$status" -eq 0 ]
   [ "$output" = "$(printf "v4\nv3\nv2")" ]
+}
+
+@test "a failed swap aborts the deploy: no false success, no rollback" {
+  # Production incident: ssh auth died exactly at the swap step; the function
+  # (called from an if-condition, so set -e suppressed) fell through to a
+  # health-only verify that attested the OLD release -> 'Deploy verified'.
+  MOCK_OUT=""
+  MOCK_FAIL_ON="ln -sfn /opt/acme/releases/2.0.0"
+  deploy_health() { echo 200; }
+  BASELINE_IDS=""
+  status=0
+  deploy_run_swap_and_verify "2.0.0" "1.0.0" 2>"$BATS_TEST_TMPDIR/err" || status=$?
+  [ "$status" -ne 0 ]
+  grep -q "Swap step FAILED" "$BATS_TEST_TMPDIR/err"
+  # And no rollback: the old release is still serving untouched.
+  ! mock_calls_joined | grep -q 'ln -sfn /opt/acme/releases/1.0.0'
+}
+
+@test "identity mismatch after swap fails the deploy without rollback" {
+  # The swap command reported success but `current` still resolves elsewhere:
+  # health alone must never bless the deploy, and rolling back would bounce a
+  # healthy old release for nothing.
+  MOCK_OUT=""
+  deploy_health() { echo 200; }
+  deploy_current_release() { echo "1.0.0"; }
+  BASELINE_IDS=""
+  status=0
+  deploy_run_swap_and_verify "2.0.0" "1.0.0" 2>"$BATS_TEST_TMPDIR/err" || status=$?
+  [ "$status" -ne 0 ]
+  grep -q "swap did not take" "$BATS_TEST_TMPDIR/err"
+  # Exactly one ln -sfn (the attempted swap) — no second one for a rollback.
+  [ "$(mock_calls_joined | grep -c 'ln -sfn')" -eq 1 ]
 }
