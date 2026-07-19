@@ -38,29 +38,146 @@ namespace ticolinea.stream.service.Services
         private static readonly TimeSpan _bufferAlertThrottleInterval = TimeSpan.FromMinutes(10);
 
         // Marcas de kill intencional del watchdog (Jobs.MatarProcesoParaWatchdog las
-        // pone justo ANTES de matar el ffmpeg). El exit != 0 que ese kill provoca NO
-        // debe alimentar _failureTracker: el watchdog tiene su propio presupuesto
+        // pone justo ANTES de cada Kill() que realmente intenta). El exit != 0 que
+        // ese kill provoca NO debe alimentar _failureTracker ni el presupuesto de
+        // reintentos de SupervisarStream: el watchdog tiene su propio presupuesto
         // (WatchdogPolicy, 3 por ventana de 10 min) y sin esta marca 3 kills de
         // watchdog con menos de 8 min entre sí disparaban el circuit breaker en el
-        // relanzo — canal caído 8 min por reinicios intencionales. La marca se
-        // consume una sola vez y caduca a los 60s (una marca huérfana no puede
-        // enmascarar un fallo real futuro).
-        private static readonly ConcurrentDictionary<int, DateTime> _watchdogKillMarks = new();
+        // relanzo — canal caído 8 min por reinicios intencionales.
+        //
+        // La marca es un CONTADOR por stream, no un booleano: el watchdog puede
+        // matar VARIOS PIDs en una pasada (pgrep) — una marca por kill entregado.
+        // Si un Kill() falla o el PID ya había muerto, Jobs la retira
+        // (RetractWatchdogKillMark): el invariante es marcas vivas == kills
+        // realmente entregados, así una marca sin kill no puede enmascarar un
+        // fallo real. Sólo el exit del proceso SUPERVISADO pasa por el manejador
+        // de LanzarProcesoFfmpeg; las marcas de PIDs duplicados/rogue quedan
+        // huérfanas y las purga el TTL de 60s (una entrada caducada se descarta
+        // ENTERA, nunca se consume ni revive).
+        private static readonly ConcurrentDictionary<int, (int count, DateTime markedAt)> _watchdogKillMarks = new();
         private static readonly TimeSpan _watchdogKillMarkTtl = TimeSpan.FromSeconds(60);
 
         public static void MarkWatchdogKill(int streamId) =>
             MarkWatchdogKill(streamId, DateTime.UtcNow);
 
         // Sobrecargas con reloj explícito (patrón WatchdogPolicy): públicas para que
-        // la semántica marca→consumo sea unit-testeable de forma determinista.
+        // la semántica marca→consumo→retiro sea unit-testeable de forma determinista.
         public static void MarkWatchdogKill(int streamId, DateTime nowUtc) =>
-            _watchdogKillMarks[streamId] = nowUtc;
+            _watchdogKillMarks.AddOrUpdate(
+                streamId,
+                (1, nowUtc),
+                (_, existing) => nowUtc - existing.markedAt > _watchdogKillMarkTtl
+                    ? (1, nowUtc)                     // lo caducado no revive: cuenta desde 1
+                    : (existing.count + 1, nowUtc));  // acumula y refresca markedAt
 
-        // Consumo de un solo uso: TryRemove SIEMPRE quita la marca (fresca o
-        // caducada); sólo devuelve true si además estaba dentro del TTL.
-        public static bool TryConsumeWatchdogKillMark(int streamId, DateTime nowUtc) =>
-            _watchdogKillMarks.TryRemove(streamId, out var markedAt)
-            && nowUtc - markedAt <= _watchdogKillMarkTtl;
+        // Consumo de un solo uso POR KILL: decrementa (elimina al llegar a 0) y
+        // devuelve true sólo dentro del TTL; una entrada caducada se elimina
+        // ENTERA y devuelve false.
+        public static bool TryConsumeWatchdogKillMark(int streamId, DateTime nowUtc)
+        {
+            while (_watchdogKillMarks.TryGetValue(streamId, out var mark))
+            {
+                if (nowUtc - mark.markedAt > _watchdogKillMarkTtl)
+                {
+                    _watchdogKillMarks.TryRemove(KeyValuePair.Create(streamId, mark));
+                    return false;
+                }
+
+                if (mark.count <= 1
+                        ? _watchdogKillMarks.TryRemove(KeyValuePair.Create(streamId, mark))
+                        : _watchdogKillMarks.TryUpdate(streamId, (mark.count - 1, mark.markedAt), mark))
+                {
+                    return true;
+                }
+                // Carrera con otro Mark/Consume/Retract: reintentar sobre el valor fresco.
+            }
+
+            return false;
+        }
+
+        public static void RetractWatchdogKillMark(int streamId) =>
+            RetractWatchdogKillMark(streamId, DateTime.UtcNow);
+
+        // Retiro de una marca cuyo kill NO se entregó (Kill() lanzó, o el PID ya
+        // había salido): decrementa sin "consumir". Mantiene el invariante
+        // marcas vivas == kills entregados.
+        public static void RetractWatchdogKillMark(int streamId, DateTime nowUtc)
+        {
+            while (_watchdogKillMarks.TryGetValue(streamId, out var mark))
+            {
+                if (nowUtc - mark.markedAt > _watchdogKillMarkTtl)
+                {
+                    _watchdogKillMarks.TryRemove(KeyValuePair.Create(streamId, mark));
+                    return;
+                }
+
+                if (mark.count <= 1
+                        ? _watchdogKillMarks.TryRemove(KeyValuePair.Create(streamId, mark))
+                        : _watchdogKillMarks.TryUpdate(streamId, (mark.count - 1, mark.markedAt), mark))
+                {
+                    return;
+                }
+            }
+        }
+
+        // ---- Decisión de reintento de SupervisarStream (pura, unit-testeable) ----
+
+        public const int MaxSupervisionRetries = 10;
+        public const int RetryBaseDelaySeconds = 5;
+        public const int RetryMaxDelaySeconds = 300;      // 5 minutos máximo de backoff
+        // 5 min de ejecución sana antes de caer ⇒ el fallo cuenta como el PRIMERO.
+        public const int StableRuntimeResetSeconds = 300;
+        // Relanzo tras kill del watchdog: correctivo, queremos recuperación rápida.
+        // El intervalo mínimo de 12s (_minRestartInterval) lo sigue aplicando
+        // LanzarProcesoFfmpeg — este delay corto sólo evita un loop caliente.
+        public const int WatchdogRelaunchDelaySeconds = 2;
+
+        public enum RetryKind
+        {
+            // Kill intencional del watchdog: relanzar sin gastar presupuesto de reintentos.
+            RelaunchAfterWatchdogKill,
+            // Fallo genuino con presupuesto restante: backoff exponencial (el jitter lo aplica el caller).
+            BackoffAndRetry,
+            // MaxSupervisionRetries fallos genuinos consecutivos y rápidos: parada final de seguridad.
+            StopSupervision
+        }
+
+        public readonly record struct RetryDecision(RetryKind Kind, int NewRetryCount, int BaseDelaySeconds);
+
+        // Dado un exit != 0: ¿cuenta contra el presupuesto, cuánto esperar, o parar?
+        // - watchdogKill: NO incrementa — el watchdog ya gasta su propio presupuesto
+        //   (WatchdogPolicy) por cada kill; contarlo aquí también convertía reinicios
+        //   correctivos en sentencia de muerte del canal.
+        // - runtimeSeconds >= StableRuntimeResetSeconds: el proceso corrió sano un
+        //   buen rato antes de caer ⇒ resetear ANTES de incrementar (es un primer
+        //   fallo, no el N-ésimo). Sin esto retryCount se acumulaba de por vida —
+        //   sólo exit 0 lo reseteaba y un canal en vivo sano nunca sale con 0 —
+        //   así que 10 fallos orgánicos repartidos en semanas (cada uno recuperado)
+        //   detenían la supervisión permanentemente.
+        // El tope de MaxSupervisionRetries queda así reservado para fallos genuinos
+        // RÁPIDOS y CONSECUTIVOS (con el circuit breaker también en juego): parada
+        // final de seguridad aceptable.
+        public static RetryDecision DecideRetry(bool watchdogKill, double runtimeSeconds, int currentRetryCount)
+        {
+            if (watchdogKill)
+                return new RetryDecision(RetryKind.RelaunchAfterWatchdogKill, currentRetryCount, WatchdogRelaunchDelaySeconds);
+
+            int newCount = (runtimeSeconds >= StableRuntimeResetSeconds ? 0 : currentRetryCount) + 1;
+            if (newCount >= MaxSupervisionRetries)
+                return new RetryDecision(RetryKind.StopSupervision, newCount, 0);
+
+            int delay = Math.Min(
+                RetryBaseDelaySeconds * (int)Math.Pow(2, Math.Min(newCount - 1, 6)),
+                RetryMaxDelaySeconds);
+            return new RetryDecision(RetryKind.BackoffAndRetry, newCount, delay);
+        }
+
+        // Resultado de una corrida completa de ffmpeg: el exit code y si ese exit
+        // fue provocado por un kill intencional del watchdog. La clasificación sale
+        // del ÚNICO consumo de la marca (TryConsumeWatchdogKillMark) en el manejo
+        // del exit: ese consumo alimenta dos usos — saltar _failureTracker y esta
+        // señal para que SupervisarStream no gaste presupuesto de reintentos.
+        private readonly record struct FfmpegExitResult(int ExitCode, bool WatchdogKill);
 
         private class ProbeInfo
         {
@@ -147,52 +264,71 @@ namespace ticolinea.stream.service.Services
             }
         }
 
-        // Fix 2: Improved retry logic with exponential backoff
+        // Fix 2: Improved retry logic with exponential backoff.
+        // La decisión de reintento (contador/delay/parada) vive en DecideRetry
+        // (pura, unit-testeada); aquí sólo se mide el runtime y se aplica.
         private static async Task SupervisarStream(StreamDb stream, CancellationToken cancellationToken)
         {
             int retryCount = 0;
-            const int maxRetries = 10;
-            const int baseDelaySeconds = 5;
-            const int maxDelaySeconds = 300; // 5 minutes max
 
             _logger.Debug($"Iniciando supervisión para stream {stream.StreamId}");
 
             while (!cancellationToken.IsCancellationRequested)
             {
+                // Fuera del try: el catch también mide cuánto corrió esta iteración.
+                // Nota: incluye la espera de semáforo/intervalo mínimo dentro de
+                // LanzarProcesoFfmpeg (<12s + espera de semáforo), ruido aceptable
+                // frente al umbral de 300s.
+                var launchedAtUtc = DateTime.UtcNow;
                 try
                 {
                     _logger.Debug($"Iniciando/reiniciando stream {stream.StreamId}... (intento {retryCount + 1})");
 
-                    int exitCode = await LanzarProcesoFfmpeg(stream, cancellationToken);
+                    var result = await LanzarProcesoFfmpeg(stream, cancellationToken);
 
                     if (cancellationToken.IsCancellationRequested)
                     {
                         break;
                     }
 
-                    if (exitCode != 0)
+                    if (result.ExitCode != 0)
                     {
-                        retryCount++;
-                        if (retryCount >= maxRetries)
+                        double runtimeSeconds = (DateTime.UtcNow - launchedAtUtc).TotalSeconds;
+                        var decision = DecideRetry(result.WatchdogKill, runtimeSeconds, retryCount);
+                        if (!result.WatchdogKill && decision.NewRetryCount == 1 && retryCount > 1)
                         {
-                            _logger.Error($"Stream {stream.StreamId} falló {maxRetries} veces consecutivas. Deteniendo supervisión.");
+                            _logger.Debug($"Stream {stream.StreamId}: contador de reintentos reseteado tras {runtimeSeconds:F0}s de ejecución estable.");
+                        }
+                        retryCount = decision.NewRetryCount;
+
+                        if (decision.Kind == RetryKind.StopSupervision)
+                        {
+                            _logger.Error($"Stream {stream.StreamId} falló {MaxSupervisionRetries} veces consecutivas. Deteniendo supervisión.");
                             _tokens.TryRemove(stream.StreamId, out _);
                             break;
                         }
 
-                        // Exponential backoff with jitter to prevent thundering herd
-                        int delaySeconds = Math.Min(
-                            baseDelaySeconds * (int)Math.Pow(2, Math.Min(retryCount - 1, 6)),
-                            maxDelaySeconds
-                        );
-                        
-                        // Add random jitter (±25%)
-                        int jitter = (int)(delaySeconds * 0.25 * (Random.Shared.NextDouble() - 0.5));
-                        delaySeconds = Math.Max(1, delaySeconds + jitter);
+                        if (decision.Kind == RetryKind.RelaunchAfterWatchdogKill)
+                        {
+                            // Correctivo, no fallo: relanzo rápido sin backoff exponencial
+                            // y sin gastar presupuesto. El intervalo mínimo de 12s lo
+                            // sigue aplicando LanzarProcesoFfmpeg.
+                            _logger.Info($"Stream {stream.StreamId}: relanzo por watchdog (exit {result.ExitCode}); no consume presupuesto de reintentos.");
+                            await Task.Delay(TimeSpan.FromSeconds(decision.BaseDelaySeconds), cancellationToken);
+                        }
+                        else
+                        {
+                            // Exponential backoff with jitter to prevent thundering herd
+                            int delaySeconds = decision.BaseDelaySeconds;
 
-                        _logger.Error($"FFmpeg falló (exitCode {exitCode}) para {stream.StreamId}. Reintentando en {delaySeconds}s...");
-                        
-                        await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+                            // Add random jitter (±25%)
+                            int jitter = (int)(delaySeconds * 0.25 * (Random.Shared.NextDouble() - 0.5));
+                            delaySeconds = Math.Max(1, delaySeconds + jitter);
+
+                            _logger.Error($"FFmpeg falló (exitCode {result.ExitCode}) para {stream.StreamId}. Reintentando en {delaySeconds}s... (fallo {retryCount}/{MaxSupervisionRetries})");
+
+                            await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+                        }
                     }
                     else
                     {
@@ -202,7 +338,7 @@ namespace ticolinea.stream.service.Services
                             _logger.Debug($"Stream {stream.StreamId} recuperado exitosamente después de {retryCount} intentos");
                             retryCount = 0;
                         }
-                        
+
                         // Small delay even on success to prevent immediate restart
                         await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
                     }
@@ -214,17 +350,24 @@ namespace ticolinea.stream.service.Services
                 }
                 catch (Exception ex)
                 {
-                    retryCount++;
                     _logger.Error($"Error inesperado en supervisión del stream {stream.StreamId}: {ex.Message}", ex);
-                    
-                    if (retryCount >= maxRetries)
+
+                    // Mismo presupuesto que un exit != 0 genuino (incluye el reset por
+                    // corrida estable); el delay fijo corto es el histórico de esta ruta.
+                    var decision = DecideRetry(
+                        watchdogKill: false,
+                        (DateTime.UtcNow - launchedAtUtc).TotalSeconds,
+                        retryCount);
+                    retryCount = decision.NewRetryCount;
+
+                    if (decision.Kind == RetryKind.StopSupervision)
                     {
-                        _logger.Error($"Stream {stream.StreamId} falló {maxRetries} veces por errores inesperados. Deteniendo supervisión.");
+                        _logger.Error($"Stream {stream.StreamId} falló {MaxSupervisionRetries} veces por errores inesperados. Deteniendo supervisión.");
                         _tokens.TryRemove(stream.StreamId, out _);
                         break;
                     }
-                    
-                    await Task.Delay(TimeSpan.FromSeconds(baseDelaySeconds), cancellationToken);
+
+                    await Task.Delay(TimeSpan.FromSeconds(RetryBaseDelaySeconds), cancellationToken);
                 }
             }
 
@@ -237,13 +380,13 @@ namespace ticolinea.stream.service.Services
             }
         }
 
-        private static async Task<int> LanzarProcesoFfmpeg(StreamDb stream, CancellationToken cancellationToken)
+        private static async Task<FfmpegExitResult> LanzarProcesoFfmpeg(StreamDb stream, CancellationToken cancellationToken)
         {
             // Check if FFmpeg processes are allowed
             if (!StreamExecutionGuard.CanStartFFmpegProcesses())
             {
                 _logger.Warn($"FFmpeg processes disabled - cannot launch FFmpeg for stream {stream.StreamId}");
-                return -1; // Return error code to indicate failure
+                return new FfmpegExitResult(-1, false); // Return error code to indicate failure
             }
 
             var now = DateTime.UtcNow;
@@ -253,7 +396,7 @@ namespace ticolinea.stream.service.Services
                 {
                     var remainingTime = _circuitBreakerTimeout - (now - failureInfo.lastFailure);
                     _logger.Warn($"Stream {stream.StreamId}: Circuit breaker active, skipping restart for {remainingTime.TotalMinutes:F1} more minutes");
-                    return -1;
+                    return new FfmpegExitResult(-1, false);
                 }
                 else if (now - failureInfo.lastFailure >= _circuitBreakerTimeout)
                 {
@@ -461,15 +604,21 @@ namespace ticolinea.stream.service.Services
                 exitCode = 0;
             }
 
+            bool watchdogKill = false;
             if (!wasCancelled && exitCode != 0)
             {
                 var failureTime = DateTime.UtcNow;
-                if (TryConsumeWatchdogKillMark(stream.StreamId, failureTime))
+                // ÚNICO consumo de la marca: alimenta dos usos — saltar el circuit
+                // breaker aquí y la clasificación que SupervisarStream usa para no
+                // gastar presupuesto de reintentos (FfmpegExitResult.WatchdogKill).
+                watchdogKill = TryConsumeWatchdogKillMark(stream.StreamId, failureTime);
+                if (watchdogKill)
                 {
                     // Kill intencional del watchdog: el relanzo supervisado sigue su
-                    // curso normal (backoff, _minRestartInterval, BD), pero este exit
-                    // NO cuenta como fallo para el circuit breaker.
-                    _logger.Debug($"Stream {stream.StreamId}: exit {exitCode} provocado por kill del watchdog; no cuenta para el circuit breaker.");
+                    // curso normal (_minRestartInterval, BD), pero este exit NO
+                    // cuenta como fallo para el circuit breaker ni para el contador
+                    // de reintentos de la supervisión.
+                    _logger.Debug($"Stream {stream.StreamId}: exit {exitCode} provocado por kill del watchdog; no cuenta como fallo.");
                 }
                 else
                 {
@@ -488,12 +637,13 @@ namespace ticolinea.stream.service.Services
             else if (!wasCancelled)
             {
                 _failureTracker.TryRemove(stream.StreamId, out _);
-                // Salida limpia: descartar una marca de watchdog que quedara viva
-                // (carrera kill/exit-0) para que no enmascare un fallo real posterior.
+                // Salida limpia: descartar TODAS las marcas de watchdog que quedaran
+                // vivas (carrera kill/exit-0) para que no enmascaren un fallo real
+                // posterior.
                 _watchdogKillMarks.TryRemove(stream.StreamId, out _);
             }
 
-            return exitCode;
+            return new FfmpegExitResult(exitCode, watchdogKill);
         }
 
         private static void CleanupStreamState(int streamId)

@@ -19,10 +19,13 @@ namespace ticolinea.stream.service.Services;
 // supervisión → CleanupStreamState borra lo mismo). En su lugar,
 // Jobs.MatarProcesoParaWatchdog mata SOLO el PID: el loop SupervisarStream que
 // sigue vivo ve el exit != 0 y relanza por el camino supervisado normal, con
-// breaker, backoff e intervalo mínimo de 12s intactos. El kill tampoco ALIMENTA
-// el breaker: se marca vía StreamingService.MarkWatchdogKill y el manejo del exit
-// consume la marca sin incrementar _failureTracker — el watchdog ya gasta su
-// propio presupuesto (WatchdogPolicy) por cada kill. Además la política exige
+// breaker e intervalo mínimo de 12s intactos. El kill tampoco ALIMENTA el
+// breaker NI el contador de reintentos de SupervisarStream: se marca vía
+// StreamingService.MarkWatchdogKill (contador por kill entregado, con retiro si
+// el kill falla) y el manejo del exit consume una marca — sin incrementar
+// _failureTracker y clasificando el exit como relanzo correctivo (DecideRetry,
+// delay corto en vez de backoff) — el watchdog ya gasta su propio presupuesto
+// (WatchdogPolicy) por cada kill. Además la política exige
 // ProcessUptimeSeconds > 0 (_lastProcessStart rastreado), que sólo es cierto
 // mientras esa supervisión está viva — el kill no puede dejar huérfano a nadie.
 //

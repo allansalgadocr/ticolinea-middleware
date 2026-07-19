@@ -461,6 +461,75 @@ public class WatchdogPolicyTests
         StreamingService.TryConsumeWatchdogKillMark(990104, T0.AddSeconds(100)).Should().BeTrue();
     }
 
+    // Fix (round 2): the mark is a COUNT — MatarProcesoParaWatchdog may kill
+    // several PIDs (pgrep) in one pass, one mark per delivered kill; a mark whose
+    // kill was never delivered is retracted. Invariant: live marks == kills
+    // actually delivered.
+
+    [Fact]
+    public void Two_kills_leave_two_marks_each_consumed_once()
+    {
+        StreamingService.MarkWatchdogKill(990105, T0);
+        StreamingService.MarkWatchdogKill(990105, T0.AddSeconds(1));
+
+        StreamingService.TryConsumeWatchdogKillMark(990105, T0.AddSeconds(5)).Should().BeTrue();
+        StreamingService.TryConsumeWatchdogKillMark(990105, T0.AddSeconds(6)).Should().BeTrue();
+        // Third exit within the TTL is a REAL failure and must count.
+        StreamingService.TryConsumeWatchdogKillMark(990105, T0.AddSeconds(7)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Retract_cancels_an_undelivered_kill_mark()
+    {
+        StreamingService.MarkWatchdogKill(990106, T0);
+        StreamingService.RetractWatchdogKillMark(990106, T0.AddSeconds(1));
+
+        // The kill never happened: a real failure right after must count.
+        StreamingService.TryConsumeWatchdogKillMark(990106, T0.AddSeconds(2)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Retract_removes_only_one_mark_of_several()
+    {
+        StreamingService.MarkWatchdogKill(990107, T0);
+        StreamingService.MarkWatchdogKill(990107, T0.AddSeconds(1));
+        StreamingService.RetractWatchdogKillMark(990107, T0.AddSeconds(2));
+
+        StreamingService.TryConsumeWatchdogKillMark(990107, T0.AddSeconds(3)).Should().BeTrue();
+        StreamingService.TryConsumeWatchdogKillMark(990107, T0.AddSeconds(4)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Retract_without_mark_is_a_noop()
+    {
+        StreamingService.RetractWatchdogKillMark(990108, T0);
+
+        StreamingService.TryConsumeWatchdogKillMark(990108, T0.AddSeconds(1)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Expired_entry_is_dropped_wholly_never_consumed_mark_by_mark()
+    {
+        StreamingService.MarkWatchdogKill(990109, T0);
+        StreamingService.MarkWatchdogKill(990109, T0.AddSeconds(1));
+
+        // 61s past the LAST mark: both marks expired — the entry is removed
+        // whole, not decremented, so neither consume succeeds.
+        StreamingService.TryConsumeWatchdogKillMark(990109, T0.AddSeconds(62)).Should().BeFalse();
+        StreamingService.TryConsumeWatchdogKillMark(990109, T0.AddSeconds(63)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Marking_over_an_expired_entry_does_not_revive_it()
+    {
+        StreamingService.MarkWatchdogKill(990110, T0);
+        // 120s later the first mark is long expired; a new kill starts from 1.
+        StreamingService.MarkWatchdogKill(990110, T0.AddSeconds(120));
+
+        StreamingService.TryConsumeWatchdogKillMark(990110, T0.AddSeconds(125)).Should().BeTrue();
+        StreamingService.TryConsumeWatchdogKillMark(990110, T0.AddSeconds(126)).Should().BeFalse();
+    }
+
     // ---------- purity of Evaluate ----------
 
     [Fact]

@@ -395,12 +395,19 @@ namespace ticolinea.stream.service
         // está vivo recibe el ExitedCommandEvent (exit != 0) y relanza por el camino
         // supervisado normal (LanzarProcesoFfmpeg): el circuit breaker conserva su
         // historial y aplican backoff + intervalo mínimo. El kill en sí NO cuenta
-        // como fallo del breaker: se marca vía StreamingService.MarkWatchdogKill
-        // justo antes de matar, y el manejo del exit consume esa marca — el watchdog
-        // ya tiene su propio presupuesto (WatchdogPolicy) y sin la marca 3 kills en
-        // <8 min disparaban el breaker y dejaban el canal caído. Tampoco se toca
-        // la BD: el ExitedCommandEvent ya dispara ActualizarCanalEstado y el relanzo
-        // ActualizaInfoCanal, igual que en cualquier caída de ffmpeg.
+        // como fallo del breaker ni del contador de reintentos: se marca vía
+        // StreamingService.MarkWatchdogKill justo antes de CADA Kill() que
+        // realmente se intenta (la marca es un contador — pgrep puede devolver
+        // varios PIDs), y el manejo del exit consume UNA marca por exit. Si el
+        // Kill() lanza (o el PID resultó ya muerto), la marca se retira
+        // (RetractWatchdogKillMark): marcas vivas == kills entregados. Sólo el
+        // exit del proceso SUPERVISADO pasa por ese manejador, así que las marcas
+        // de PIDs duplicados/rogue quedan huérfanas — el TTL de 60s las purga sin
+        // que puedan consumirse. El watchdog ya tiene su propio presupuesto
+        // (WatchdogPolicy) y sin la marca 3 kills en <8 min disparaban el breaker
+        // y dejaban el canal caído. Tampoco se toca la BD: el ExitedCommandEvent
+        // ya dispara ActualizarCanalEstado y el relanzo ActualizaInfoCanal, igual
+        // que en cualquier caída de ffmpeg.
         public static async Task<bool> MatarProcesoParaWatchdog(int streamId)
         {
             bool killedAny = false;
@@ -423,16 +430,32 @@ namespace ticolinea.stream.service
                             var proc = Process.GetProcessById(pid);
                             if (proc.HasExited) continue;
 
-                            // Marca ANTES del kill (sólo con PID vivo encontrado):
-                            // el exit != 0 resultante no debe contar para el breaker.
+                            // Marca inmediatamente ANTES de cada kill intentado:
+                            // el exit != 0 resultante no debe contar como fallo.
                             StreamingService.MarkWatchdogKill(streamId);
-                            proc.Kill(true);
+                            try
+                            {
+                                proc.Kill(true);
+                            }
+                            catch
+                            {
+                                // El kill NO se entregó: retirar la marca para que
+                                // no enmascare un fallo real dentro del TTL.
+                                StreamingService.RetractWatchdogKillMark(streamId);
+                                throw;
+                            }
                             killedAny = true;
                             _logger.Info($"✅ Watchdog: proceso {pid} del stream {streamId} eliminado (la supervisión lo relanzará).");
                         }
                         catch (ArgumentException)
                         {
                             _logger.Warn($"⚠️ Watchdog: proceso con PID {pid} ya no existe.");
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            // Kill() sobre un proceso que salió entre el HasExited y
+                            // el kill: no hubo kill entregado (marca ya retirada).
+                            _logger.Warn($"⚠️ Watchdog: proceso {pid} salió antes del kill.");
                         }
                         catch (Exception ex)
                         {
