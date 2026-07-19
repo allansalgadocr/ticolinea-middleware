@@ -28,32 +28,54 @@ setup() {
 
 @test "verify passes when health is 200 and streams are fresh" {
   MOCK_OUT="200"
-  # health returns 200; stream count returns 200 too, but we stub separately:
+  # health returns 200; the post-restart count is stubbed separately:
   deploy_health() { echo 200; }
-  deploy_fresh() { echo 5; }
+  deploy_fresh_after_marker() { echo 5; }
   run deploy_verify 3
   [ "$status" -eq 0 ]
 }
 
 @test "verify fails when health is 503" {
   deploy_health() { echo 503; }
-  deploy_fresh() { echo 5; }
+  deploy_fresh_after_marker() { echo 5; }
   run deploy_verify 3
   [ "$status" -ne 0 ]
 }
 
 @test "verify fails when streams did not recover" {
   deploy_health() { echo 200; }
-  deploy_fresh() { echo 0; }
+  deploy_fresh_after_marker() { echo 0; }
   run deploy_verify 3
   [ "$status" -ne 0 ]
+}
+
+@test "verify ignores pre-restart segments: a high mmin count cannot pass it" {
+  # THE regression for the false-positive finding: during the ~60s verify
+  # window right after swap+restart, segments the OLD process wrote are still
+  # <1min old — the mmin-window count sees plenty. A dead NEW process must
+  # still fail verification: only the marker-based (post-restart) count gates.
+  deploy_health() { echo 200; }
+  deploy_fresh() { echo 7; }               # old process's segments, still "fresh" by mtime window
+  deploy_fresh_after_marker() { echo 0; }  # nothing written since the restart
+  run deploy_verify 3
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"fresh=0/3"* ]]
+}
+
+@test "verify passes on the marker count alone, whatever the mmin window says" {
+  # Converse of the regression above: the marker count is the whole signal.
+  deploy_health() { echo 200; }
+  deploy_fresh() { echo 0; }
+  deploy_fresh_after_marker() { echo 5; }
+  run deploy_verify 3
+  [ "$status" -eq 0 ]
 }
 
 @test "verify passes health-only when min_fresh is 0 (first deploy, spec B)" {
   # RUNBOOK spec B: a freshly-provisioned node has no channel rows, so it is
   # healthy but serves nothing. With min_fresh 0 that must verify.
   deploy_health() { echo 200; }
-  deploy_fresh() { echo 0; }
+  deploy_fresh_after_marker() { echo 0; }
   run deploy_verify 0 0
   [ "$status" -eq 0 ]
 }
@@ -62,14 +84,14 @@ setup() {
   # Redeploys must not be weakened by the first-deploy path: a baseline of 0
   # with no explicit min_fresh still demands at least one fresh segment.
   deploy_health() { echo 200; }
-  deploy_fresh() { echo 0; }
+  deploy_fresh_after_marker() { echo 0; }
   run deploy_verify 0
   [ "$status" -ne 0 ]
 }
 
 @test "verify logs health per failed attempt" {
   deploy_health() { echo 503; }
-  deploy_fresh() { echo 0; }
+  deploy_fresh_after_marker() { echo 0; }
   run deploy_verify 0
   [ "$status" -ne 0 ]
   [[ "$output" == *"health=503"* ]]
@@ -77,7 +99,7 @@ setup() {
 
 @test "verify logs the fresh shortfall when health is 200 but streams lag" {
   deploy_health() { echo 200; }
-  deploy_fresh() { echo 0; }
+  deploy_fresh_after_marker() { echo 0; }
   run deploy_verify 3
   [ "$status" -ne 0 ]
   [[ "$output" == *"health=200"* ]]
@@ -87,24 +109,35 @@ setup() {
 @test "swap sends the atomic symlink+restart sequence over stdin, targeting the new tag" {
   # The swap now goes over stdin (heredoc), so its script lands in the recorded
   # call via mock_runner's stdin capture — not in argv. The safety-critical
-  # ordering (stage a .tmp link, atomically mv -T it into place, then restart the
-  # unit) must still be exactly this, and it must target the NEW tag.
+  # ordering (stage a .tmp link, atomically mv -T it into place, touch the
+  # verify marker, then restart the unit) must still be exactly this, and it
+  # must target the NEW tag.
   MOCK_OUT=""
   deploy_health() { echo 200; }
-  deploy_fresh() { echo 5; }
+  deploy_fresh_after_marker() { echo 5; }
   status=0
   deploy_run_swap_and_verify "1.2.0" "1.1.0" || status=$?
   [ "$status" -eq 0 ]
   local calls; calls="$(mock_calls_joined)"
   echo "$calls" | grep -q 'ln -sfn /opt/acme/releases/1.2.0 /opt/acme/current.tmp'
   echo "$calls" | grep -q 'mv -T /opt/acme/current.tmp /opt/acme/current'
+  echo "$calls" | grep -q 'touch /srv/acme/.tico-deploy-marker'
   echo "$calls" | grep -q 'systemctl restart ticolinea-streaming'
+  # The touch must precede the restart — the marker's mtime is the fence
+  # deploy_verify counts segments against, so a touch after the restart would
+  # discard the new process's earliest output (and one missing entirely would
+  # make every verification count 0). index()-based, so the literal path needs
+  # no regex escaping.
+  printf '%s\n' "$calls" | awk '
+    index($0, "touch /srv/acme/.tico-deploy-marker") { t = NR }
+    index($0, "systemctl restart ticolinea-streaming") { if (!r) r = NR }
+    END { exit !(t && r && t < r) }'
 }
 
 @test "auto-rollback repoints current to the previous tag on verify failure" {
   MOCK_OUT=""
   deploy_health() { echo 503; }   # force verify failure
-  deploy_fresh() { echo 0; }
+  deploy_fresh_after_marker() { echo 0; }
   PREVIOUS_TAG="1.0.0"
   # Not `run`: bats `run` captures via command substitution, which forks a
   # subshell — MOCK_CALLS mutations made by mock_runner inside it would be
@@ -125,7 +158,7 @@ setup() {
 @test "first deploy (no previous): healthy node with zero streams verifies" {
   MOCK_OUT=""
   deploy_health() { echo 200; }
-  deploy_fresh() { echo 0; }
+  deploy_fresh_after_marker() { echo 0; }
   BASELINE_FRESH=0
   status=0
   deploy_run_swap_and_verify "1.0.0" "" || status=$?
@@ -138,7 +171,7 @@ setup() {
   # has never existed — baseline 0, not just "no previous", relaxes the floor.
   MOCK_OUT=""
   deploy_health() { echo 200; }
-  deploy_fresh() { echo 0; }
+  deploy_fresh_after_marker() { echo 0; }
   BASELINE_FRESH=0
   status=0
   deploy_run_swap_and_verify "1.0.1" "1.0.0" || status=$?
@@ -148,7 +181,7 @@ setup() {
 @test "first-deploy verify failure skips rollback and leaves the release in place" {
   MOCK_OUT=""
   deploy_health() { echo 503; }
-  deploy_fresh() { echo 0; }
+  deploy_fresh_after_marker() { echo 0; }
   BASELINE_FRESH=0
   status=0
   deploy_run_swap_and_verify "1.0.0" "" 2>"$BATS_TEST_TMPDIR/stderr" || status=$?
@@ -164,7 +197,8 @@ setup() {
 @test "cmd_deploy first-deploy failure says the new tag was left in place (no bogus rollback claim)" {
   push() { :; }
   deploy_health() { echo 503; }
-  deploy_fresh() { echo 0; }
+  deploy_fresh() { echo 0; }               # pre-swap baseline
+  deploy_fresh_after_marker() { echo 0; }  # post-swap verification
   MOCK_OUT=""
   # Preflight: health != 200 must land in the "no running node yet" branch,
   # so the systemctl is-active probe has to fail.
@@ -201,7 +235,8 @@ setup() {
   # assert their content via mock_runner's stdin capture.
   push() { :; }
   deploy_health() { echo 200; }
-  deploy_fresh() { echo 5; }
+  deploy_fresh() { echo 5; }               # pre-swap baseline (mmin window — unchanged)
+  deploy_fresh_after_marker() { echo 5; }  # post-swap verification must match the baseline
   MOCK_OUT=""
   local art; art="$(mktemp -d)"
   : > "$art/schema.sql"

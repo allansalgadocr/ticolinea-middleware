@@ -55,6 +55,9 @@
   logging `verify: health=... fresh=...` per attempt. On failure it auto-rolls-back
   (a first deploy has nothing to roll back to — the new release stays in place,
   reported as unverified). Viewers absorb ~30s (the HLS buffer) if it recovers in time.
+- Verification counts only segments written **after** the restart (a marker file is
+  touched at swap time; `find -newer` gates on it) — segments the old process left
+  behind can never satisfy it.
 
 ## Roll back a bad release (normal path)
 

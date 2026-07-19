@@ -33,6 +33,19 @@ teardown() { rm -rf "$FAKEBIN"; }
   [[ "$output" == *"u@h sudo systemctl restart x"* ]]
 }
 
+@test "remote_fresh_after_marker gates on the marker, counts -newer, and defaults to 0" {
+  # The remote command must (a) refuse to count anything when the marker is
+  # absent — echo 0, fail-safe — and (b) count only segments strictly newer
+  # than the marker, never an -mmin window (which would still see the OLD
+  # process's segments during the verify window).
+  SSH_USER=u SSH_HOST=h PROVIDER=acme run remote_fresh_after_marker
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"-f /srv/acme/.tico-deploy-marker"* ]]
+  [[ "$output" == *"-newer /srv/acme/.tico-deploy-marker"* ]]
+  [[ "$output" == *"else echo 0"* ]]
+  [[ "$output" != *"-mmin"* ]]
+}
+
 @test "password auth routes through sshpass -e ssh with the password opts" {
   cat > "$FAKEBIN/sshpass" <<'EOF'
 #!/usr/bin/env bash

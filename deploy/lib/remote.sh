@@ -120,9 +120,23 @@ remote_health() {
 
 remote_fresh_stream_count() {
   # /srv/${PROVIDER}/streams — namespaced like every other on-box
-  # path. All callers (cmd_deploy, cmd_status, deploy_verify) run after
+  # path. All callers (cmd_deploy's baseline, cmd_status) run after
   # config_load has exported PROVIDER, so it's in scope here.
   # Result is used in numeric -ge/-gt comparisons; strip spaces AND any CR so a
   # stray carriage return can't turn the count into a non-integer.
   remote "find /srv/${PROVIDER}/streams -name '*.ts' -mmin -1 2>/dev/null | wc -l | tr -d ' '" | tr -d '\r'
+}
+
+remote_fresh_after_marker() {
+  # Like remote_fresh_stream_count, but counts only segments written AFTER the
+  # deploy marker (touched by the swap heredoc immediately before systemctl
+  # restart). Post-swap verification must use this, never the -mmin window:
+  # during the ~60s verify window the OLD process's segments are still <1min
+  # old, so a dead new process could pass verification on them. `-newer` the
+  # marker cannot be satisfied by anything written before the restart.
+  # No marker on the box (pre-marker tooling, manual restart) counts as 0 —
+  # fail-safe: verification never passes on output it can't attribute to the
+  # new process. Same hygiene as above: strip spaces AND any CR so the result
+  # survives numeric comparison.
+  remote "if [ -f /srv/${PROVIDER}/.tico-deploy-marker ]; then find /srv/${PROVIDER}/streams -name '*.ts' -newer /srv/${PROVIDER}/.tico-deploy-marker 2>/dev/null | wc -l | tr -d ' '; else echo 0; fi" | tr -d '\r'
 }

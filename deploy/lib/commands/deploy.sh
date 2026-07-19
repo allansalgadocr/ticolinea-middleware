@@ -14,9 +14,13 @@ _tico_resolve_paths() {
   TICO_CURRENT_LINK="/opt/${PROVIDER}/current"
 }
 
-# Seams so tests can stub the two observations independently of the runner.
+# Seams so tests can stub the observations independently of the runner.
+# deploy_fresh (last-minute mtime window) is for the PRE-swap baseline only;
+# deploy_fresh_after_marker is what post-swap verification consults — see
+# deploy_verify for why the two must not be interchanged.
 deploy_health() { remote_health; }
 deploy_fresh()  { remote_fresh_stream_count; }
+deploy_fresh_after_marker() { remote_fresh_after_marker; }
 
 deploy_verify() { # baseline_fresh_count [min_fresh]
   # min_fresh defaults to 1 so redeploys keep their gate; a first deploy passes
@@ -33,7 +37,12 @@ deploy_verify() { # baseline_fresh_count [min_fresh]
     code="$(deploy_health)"
     fresh=""
     if [ "$code" = "200" ]; then
-      fresh="$(deploy_fresh)"
+      # Marker-based, never the -mmin window: right after swap+restart the OLD
+      # process's segments are still <1min old, so a last-minute window would
+      # let a dead new process pass verification on stale output. Only
+      # segments written after the marker (touched in the swap heredoc just
+      # before the restart) count as recovery evidence.
+      fresh="$(deploy_fresh_after_marker)"
       if [ "${fresh:-0}" -ge "$need" ]; then return 0; fi
     fi
     attempt=$((attempt + 1))
@@ -103,10 +112,15 @@ deploy_run_swap_and_verify() { # new_tag, previous_tag
   if [ -z "$prev" ] || [ "${baseline:-0}" -eq 0 ] 2>/dev/null; then min=0; fi
   # Over stdin (heredoc), not `bash -c "A && B"` argv — ssh flattens argv and
   # breaks a multi-word `-c` payload. Unquoted heredoc: local vars expand here.
+  # The marker touch MUST precede the restart: its mtime is the fence
+  # deploy_verify counts segments against (find -newer), so only output the
+  # new process wrote can satisfy verification — segments the old process
+  # left behind are older than the marker by construction.
   remote_sudo 'bash -s' <<REMOTE
 set -euo pipefail
 ln -sfn $TICO_RELEASES_DIR/$new $TICO_CURRENT_LINK.tmp
 mv -T $TICO_CURRENT_LINK.tmp $TICO_CURRENT_LINK
+touch /srv/${PROVIDER}/.tico-deploy-marker
 systemctl restart ticolinea-streaming
 REMOTE
   if deploy_verify "$baseline" "$min"; then
