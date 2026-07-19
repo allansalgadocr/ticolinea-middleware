@@ -44,12 +44,49 @@ _tico_real_runner() { # host, command...
   local host="$1"; shift
   local opts; opts="$(_tico_ssh_opts)"
   _tico_mux_arm  # tear the master down when the run exits
-  if _tico_uses_password; then
-    # shellcheck disable=SC2086,SC2029
-    sshpass -e ssh $opts "$host" "$@"
+
+  # Payload stdin (remote_sudo's password+script) is consumed by the first
+  # attempt — buffer it so a retry can replay it. Only when the caller marks
+  # it explicitly (TICO_STDIN_PAYLOAD=1): sniffing [ -t 0 ] hangs when stdin
+  # is open but silent (bats, cron, CI).
+  local stdin_buf="" have_stdin=0
+  if [ "${TICO_STDIN_PAYLOAD:-0}" = "1" ]; then
+    stdin_buf="$(cat)"; have_stdin=1
+  fi
+
+  # Exit 255 is ssh's own transport/auth failure (a remote command's status
+  # is anything else). Seen in production: a WireGuard flap kills the mux
+  # master mid-run and the re-auth lands during the flap — one denied
+  # connection between healthy neighbors. One delayed retry heals it; a
+  # second identical failure is real and propagates.
+  local rc=0
+  _tico_ssh_attempt "$have_stdin" "$stdin_buf" "$opts" "$host" "$@"; rc=$?
+  if [ "$rc" -eq 255 ]; then
+    echo "[tico] ssh transport error to $host — retrying once in 2s" >&2
+    sleep 2
+    _tico_ssh_attempt "$have_stdin" "$stdin_buf" "$opts" "$host" "$@"; rc=$?
+  fi
+  return "$rc"
+}
+
+_tico_ssh_attempt() { # have_stdin, stdin_buf, opts, host, command...
+  local have_stdin="$1" stdin_buf="$2" opts="$3" host="$4"; shift 4
+  if [ "$have_stdin" -eq 1 ]; then
+    if _tico_uses_password; then
+      # shellcheck disable=SC2086,SC2029
+      printf '%s\n' "$stdin_buf" | sshpass -e ssh $opts "$host" "$@"
+    else
+      # shellcheck disable=SC2086,SC2029
+      printf '%s\n' "$stdin_buf" | ssh $opts "$host" "$@"
+    fi
   else
-    # shellcheck disable=SC2086,SC2029
-    ssh $opts "$host" "$@"
+    if _tico_uses_password; then
+      # shellcheck disable=SC2086,SC2029
+      sshpass -e ssh $opts "$host" "$@"
+    else
+      # shellcheck disable=SC2086,SC2029
+      ssh $opts "$host" "$@"
+    fi
   fi
 }
 
@@ -93,11 +130,11 @@ remote_sudo() {
   if [ -n "${SUDO_PASSWORD:-}" ]; then
     if [ -t 0 ]; then
       # Plain-args call, no piped script: send just the password.
-      printf '%s\n' "$SUDO_PASSWORD" | "$TICO_RUNNER" "${SSH_USER}@${SSH_HOST}" sudo -S --prompt= "$@"
+      printf '%s\n' "$SUDO_PASSWORD" | TICO_STDIN_PAYLOAD=1 "$TICO_RUNNER" "${SSH_USER}@${SSH_HOST}" sudo -S --prompt= "$@"
     else
       # Heredoc/piped stdin: password first, then the caller's script — `sudo -S`
       # consumes the first line, the invoked `bash -s` reads the rest.
-      { printf '%s\n' "$SUDO_PASSWORD"; cat; } | "$TICO_RUNNER" "${SSH_USER}@${SSH_HOST}" sudo -S --prompt= "$@"
+      { printf '%s\n' "$SUDO_PASSWORD"; cat; } | TICO_STDIN_PAYLOAD=1 "$TICO_RUNNER" "${SSH_USER}@${SSH_HOST}" sudo -S --prompt= "$@"
     fi
   else
     "$TICO_RUNNER" "${SSH_USER}@${SSH_HOST}" sudo "$@"

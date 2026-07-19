@@ -157,3 +157,50 @@ EOF
   [[ "$output" != *"-S"* ]]
   [[ "$output" != *"-p ''"* ]]
 }
+
+@test "runner retries once on ssh exit 255 and succeeds" {
+  # Production pattern: a WireGuard flap kills one connection mid-run
+  # (Permission denied / transport error, ssh exit 255) while the calls
+  # before and after are fine. One delayed retry heals it.
+  cat > "$FAKEBIN/ssh" <<'FAKE'
+#!/usr/bin/env bash
+marker="${TICO_TEST_MARKER:?}"
+if [ ! -f "$marker" ]; then touch "$marker"; exit 255; fi
+printf 'attempt2 %s\n' "$*"
+FAKE
+  chmod +x "$FAKEBIN/ssh"
+  export TICO_TEST_MARKER="$FAKEBIN/flap-once"
+  run _tico_real_runner u@h echo hi
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"attempt2"* ]]
+  [[ "$output" == *"u@h echo hi"* ]]
+}
+
+@test "runner retry replays piped stdin (sudo password + script survive the flap)" {
+  cat > "$FAKEBIN/ssh" <<'FAKE'
+#!/usr/bin/env bash
+marker="${TICO_TEST_MARKER:?}"
+if [ ! -f "$marker" ]; then cat >/dev/null; touch "$marker"; exit 255; fi
+printf 'ARGS:%s\n' "$*"; sed 's/^/STDIN:/'
+FAKE
+  chmod +x "$FAKEBIN/ssh"
+  export TICO_TEST_MARKER="$FAKEBIN/flap-stdin"
+  output="$(printf 'secret\necho remote-script\n' | TICO_STDIN_PAYLOAD=1 _tico_real_runner u@h sudo -S bash -s)"
+  [[ "$output" == *"ARGS:"*"u@h sudo -S bash -s"* ]]
+  [[ "$output" == *"STDIN:secret"* ]]
+  [[ "$output" == *"STDIN:echo remote-script"* ]]
+}
+
+@test "runner does not retry a remote command's own nonzero exit" {
+  cat > "$FAKEBIN/ssh" <<'FAKE'
+#!/usr/bin/env bash
+count="${TICO_TEST_MARKER:?}.count"
+echo x >> "$count"
+exit 7
+FAKE
+  chmod +x "$FAKEBIN/ssh"
+  export TICO_TEST_MARKER="$FAKEBIN/no-retry"
+  run _tico_real_runner u@h false
+  [ "$status" -eq 7 ]
+  [ "$(wc -l < "$FAKEBIN/no-retry.count" | tr -d ' ')" -eq 1 ]
+}
