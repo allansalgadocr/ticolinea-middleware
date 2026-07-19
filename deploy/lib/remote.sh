@@ -127,16 +127,31 @@ remote_fresh_stream_count() {
   remote "find /srv/${PROVIDER}/streams -name '*.ts' -mmin -1 2>/dev/null | wc -l | tr -d ' '" | tr -d '\r'
 }
 
-remote_fresh_after_marker() {
-  # Like remote_fresh_stream_count, but counts only segments written AFTER the
-  # deploy marker (touched by the swap heredoc immediately before systemctl
-  # restart). Post-swap verification must use this, never the -mmin window:
-  # during the ~60s verify window the OLD process's segments are still <1min
-  # old, so a dead new process could pass verification on them. `-newer` the
-  # marker cannot be satisfied by anything written before the restart.
-  # No marker on the box (pre-marker tooling, manual restart) counts as 0 —
-  # fail-safe: verification never passes on output it can't attribute to the
-  # new process. Same hygiene as above: strip spaces AND any CR so the result
-  # survives numeric comparison.
-  remote "if [ -f /srv/${PROVIDER}/.tico-deploy-marker ]; then find /srv/${PROVIDER}/streams -name '*.ts' -newer /srv/${PROVIDER}/.tico-deploy-marker 2>/dev/null | wc -l | tr -d ' '; else echo 0; fi" | tr -d '\r'
+# Segment filenames are {StreamId}_{seq}.ts next to {StreamId}_.m3u8 —
+# StreamingService.cs builds `-hls_segment_filename .../{StreamId}_%d.ts`, so
+# the ID is everything before the first underscore. Both ID-set helpers below
+# lean on that: `sed 's/_.*//'` over basenames (-printf '%f') yields the set of
+# stream IDs that produced segments in the window. GNU findutils (-printf) is
+# fine — targets are Ubuntu 22.04/24.04, never BusyBox. CR-stripping hygiene as
+# above; output is one ID per line (sort -u), consumers word-split it.
+
+remote_fresh_stream_ids() {
+  # The pre-swap BASELINE: distinct stream IDs with a segment in the last
+  # minute. Verification is per-channel ("every one of these recovered"), not
+  # an aggregate count — a count lets fast channels mask a dead one, and a
+  # 60s-window count can't be reproduced inside the shorter post-restart
+  # observation window (which is what made healthy deploys roll back).
+  remote "find /srv/${PROVIDER}/streams -name '*.ts' -mmin -1 -printf '%f\n' 2>/dev/null | sed 's/_.*//' | sort -u" | tr -d '\r'
+}
+
+remote_recovered_stream_ids() {
+  # Post-swap RECOVERY evidence: distinct stream IDs with a segment written
+  # AFTER the deploy marker (touched by the swap heredoc right after
+  # systemctl restart). Never the -mmin window: during the ~60s verify window
+  # the OLD process's segments are still <1min old, so a dead new process
+  # could pass verification on them. `-newer` the marker cannot be satisfied
+  # by anything written before the restart. No marker on the box (pre-marker
+  # tooling, manual restart) yields an EMPTY set — fail-safe: verification
+  # never passes on output it can't attribute to the new process.
+  remote "if [ -f /srv/${PROVIDER}/.tico-deploy-marker ]; then find /srv/${PROVIDER}/streams -name '*.ts' -newer /srv/${PROVIDER}/.tico-deploy-marker -printf '%f\n' 2>/dev/null | sed 's/_.*//' | sort -u; fi" | tr -d '\r'
 }

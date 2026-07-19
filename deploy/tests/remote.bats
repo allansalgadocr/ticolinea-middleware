@@ -33,17 +33,35 @@ teardown() { rm -rf "$FAKEBIN"; }
   [[ "$output" == *"u@h sudo systemctl restart x"* ]]
 }
 
-@test "remote_fresh_after_marker gates on the marker, counts -newer, and defaults to 0" {
-  # The remote command must (a) refuse to count anything when the marker is
-  # absent — echo 0, fail-safe — and (b) count only segments strictly newer
-  # than the marker, never an -mmin window (which would still see the OLD
-  # process's segments during the verify window).
-  SSH_USER=u SSH_HOST=h PROVIDER=acme run remote_fresh_after_marker
+@test "remote_recovered_stream_ids gates on the marker, selects -newer, extracts the ID set" {
+  # The remote command must (a) yield an EMPTY set when the marker is absent —
+  # fail-safe, no `if` branch emits anything — and (b) select only segments
+  # strictly newer than the marker, never an -mmin window (which would still
+  # see the OLD process's segments during the verify window), then reduce
+  # basenames ({StreamId}_{seq}.ts) to the distinct stream-ID set.
+  SSH_USER=u SSH_HOST=h PROVIDER=acme run remote_recovered_stream_ids
   [ "$status" -eq 0 ]
   [[ "$output" == *"-f /srv/acme/.tico-deploy-marker"* ]]
   [[ "$output" == *"-newer /srv/acme/.tico-deploy-marker"* ]]
-  [[ "$output" == *"else echo 0"* ]]
+  [[ "$output" == *"-printf '%f\\n'"* ]]
+  [[ "$output" == *"sed 's/_.*//'"* ]]
+  [[ "$output" == *"sort -u"* ]]
   [[ "$output" != *"-mmin"* ]]
+  [[ "$output" != *"wc -l"* ]]
+}
+
+@test "remote_fresh_stream_ids uses the last-minute window and extracts the ID set" {
+  # Pre-swap baseline only: the -mmin window is correct BEFORE the restart
+  # (the marker doesn't exist yet for this deploy) and must reduce segment
+  # basenames to the distinct stream-ID set, not a count.
+  SSH_USER=u SSH_HOST=h PROVIDER=acme run remote_fresh_stream_ids
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"/srv/acme/streams"* ]]
+  [[ "$output" == *"-mmin -1"* ]]
+  [[ "$output" == *"-printf '%f\\n'"* ]]
+  [[ "$output" == *"sed 's/_.*//'"* ]]
+  [[ "$output" == *"sort -u"* ]]
+  [[ "$output" != *"wc -l"* ]]
 }
 
 @test "password auth routes through sshpass -e ssh with the password opts" {

@@ -22,8 +22,8 @@
 9. A freshly-provisioned node has no channel rows yet (that is spec B). It will be
    healthy but serve nothing until the panel package sync exists or rows are seeded.
    Accordingly, any deploy to a node that was serving nothing (first deploy, or an
-   update inside this window) verifies **health only**; the fresh-stream check only
-   gates updates of a node that was already serving ("recovered to baseline").
+   update inside this window) verifies **health only**; the per-channel recovery check
+   only gates updates of a node that was already serving ("recovered to baseline").
 
 ## Runtime flags
 
@@ -52,12 +52,15 @@
 ```
 
 - The tool stages, swaps, restarts, and verifies streams recovered within ~60s,
-  logging `verify: health=... fresh=...` per attempt. On failure it auto-rolls-back
+  logging `verify: health=... recovered=<n>/<baseline> missing: ...` per attempt
+  (the missing list is capped at 5 IDs). On failure it auto-rolls-back
   (a first deploy has nothing to roll back to — the new release stays in place,
   reported as unverified). Viewers absorb ~30s (the HLS buffer) if it recovers in time.
-- Verification counts only segments written **after** the restart (a marker file is
-  touched at swap time; `find -newer` gates on it) — segments the old process left
-  behind can never satisfy it.
+- Verification is **per-channel**: every stream ID that had a segment in the minute
+  before the swap must write at least one segment **after** the restart (a marker
+  file is touched right after `systemctl restart`; `find -newer` gates on it).
+  Segments the old process left behind can never satisfy it, and a single dead
+  channel fails the deploy no matter how busy the others are.
 
 ## Roll back a bad release (normal path)
 

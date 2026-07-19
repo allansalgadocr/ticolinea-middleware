@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 # Fixture globals below (SSH_HOST, PROVIDER, TICO_VERIFY_TRIES, ...) are read
 # by the sourced lib/*.sh functions, not this file, and the deploy_health /
-# deploy_fresh stubs are invoked indirectly from deploy.sh — both patterns
-# read as "unused" to a single-file shellcheck pass.
+# deploy_baseline_ids / deploy_recovered_ids stubs are invoked indirectly from
+# deploy.sh — both patterns read as "unused" to a single-file shellcheck pass.
 # shellcheck disable=SC2034,SC2329
 load helpers
 
@@ -26,119 +26,147 @@ setup() {
   TICO_VERIFY_SLEEP=0
 }
 
-@test "verify passes when health is 200 and streams are fresh" {
+@test "verify passes when health is 200 and every baseline stream recovered" {
   MOCK_OUT="200"
-  # health returns 200; the post-restart count is stubbed separately:
+  # health returns 200; the post-restart ID set is stubbed separately:
   deploy_health() { echo 200; }
-  deploy_fresh_after_marker() { echo 5; }
-  run deploy_verify 3
+  deploy_recovered_ids() { printf '10\n20\n30\n'; }
+  run deploy_verify "10 20 30"
   [ "$status" -eq 0 ]
 }
 
-@test "verify fails when health is 503" {
+@test "verify fails when health is 503 even if every stream recovered" {
   deploy_health() { echo 503; }
-  deploy_fresh_after_marker() { echo 5; }
-  run deploy_verify 3
+  deploy_recovered_ids() { printf '10\n20\n30\n'; }
+  run deploy_verify "10 20 30"
   [ "$status" -ne 0 ]
 }
 
-@test "verify fails when streams did not recover" {
+@test "verify fails when no baseline stream recovered (empty post-marker set)" {
+  # Also THE marker regression: right after swap+restart the OLD process's
+  # segments are still <1min old, but they are older than the marker, so the
+  # recovered set is empty — a dead new process can never pass on stale output.
   deploy_health() { echo 200; }
-  deploy_fresh_after_marker() { echo 0; }
-  run deploy_verify 3
+  deploy_recovered_ids() { :; }
+  run deploy_verify "10 20 30"
   [ "$status" -ne 0 ]
+  [[ "$output" == *"recovered=0/3"* ]]
 }
 
-@test "verify ignores pre-restart segments: a high mmin count cannot pass it" {
-  # THE regression for the false-positive finding: during the ~60s verify
-  # window right after swap+restart, segments the OLD process wrote are still
-  # <1min old — the mmin-window count sees plenty. A dead NEW process must
-  # still fail verification: only the marker-based (post-restart) count gates.
+@test "per-channel: baseline recovers with fewer total segments than the old aggregate needed" {
+  # Finding 3b (false-rollback regression): with 6s segments a 60s-window
+  # baseline saw ~10 segments/channel, but the post-restart observation window
+  # observes at most ~9 — an aggregate count gate rolled back HEALTHY deploys
+  # by construction. Per-channel, one post-marker segment per baseline ID is
+  # enough: 3 recovered segments total here, where the old aggregate rule
+  # (post-marker total >= baseline total) would have demanded far more.
   deploy_health() { echo 200; }
-  deploy_fresh() { echo 7; }               # old process's segments, still "fresh" by mtime window
-  deploy_fresh_after_marker() { echo 0; }  # nothing written since the restart
-  run deploy_verify 3
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"fresh=0/3"* ]]
-}
-
-@test "verify passes on the marker count alone, whatever the mmin window says" {
-  # Converse of the regression above: the marker count is the whole signal.
-  deploy_health() { echo 200; }
-  deploy_fresh() { echo 0; }
-  deploy_fresh_after_marker() { echo 5; }
-  run deploy_verify 3
+  deploy_recovered_ids() { printf 'A\nB\nC\n'; }  # one segment each, all channels alive
+  run deploy_verify "A B C"
   [ "$status" -eq 0 ]
 }
 
-@test "verify passes health-only when min_fresh is 0 (first deploy, spec B)" {
+@test "per-channel: one dead channel fails verification however busy the others are" {
+  # Finding 3a: an aggregate count let fast channels mask a dead one. The
+  # recovered SET contains only A and B — C never wrote a post-marker segment,
+  # so verification must fail and name it.
+  deploy_health() { echo 200; }
+  deploy_recovered_ids() { printf 'A\nB\n'; }
+  run deploy_verify "A B C"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"recovered=2/3"* ]]
+  [[ "$output" == *"missing: C"* ]]
+}
+
+@test "verify passes health-only on an empty baseline (first deploy / spec B)" {
   # RUNBOOK spec B: a freshly-provisioned node has no channel rows, so it is
-  # healthy but serves nothing. With min_fresh 0 that must verify.
+  # healthy but serves nothing. An empty baseline set must verify on health
+  # alone — the recovered set (also empty) is not consulted.
   deploy_health() { echo 200; }
-  deploy_fresh_after_marker() { echo 0; }
-  run deploy_verify 0 0
+  deploy_recovered_ids() { :; }
+  run deploy_verify ""
   [ "$status" -eq 0 ]
 }
 
-@test "verify keeps the fresh floor of 1 when min_fresh is omitted" {
-  # Redeploys must not be weakened by the first-deploy path: a baseline of 0
-  # with no explicit min_fresh still demands at least one fresh segment.
-  deploy_health() { echo 200; }
-  deploy_fresh_after_marker() { echo 0; }
-  run deploy_verify 0
+@test "verify health-only still requires health: empty baseline with 503 fails" {
+  deploy_health() { echo 503; }
+  deploy_recovered_ids() { :; }
+  run deploy_verify ""
   [ "$status" -ne 0 ]
 }
 
 @test "verify logs health per failed attempt" {
   deploy_health() { echo 503; }
-  deploy_fresh_after_marker() { echo 0; }
-  run deploy_verify 0
+  deploy_recovered_ids() { :; }
+  run deploy_verify "A"
   [ "$status" -ne 0 ]
   [[ "$output" == *"health=503"* ]]
+  [[ "$output" == *"recovered=?/1"* ]]
 }
 
-@test "verify logs the fresh shortfall when health is 200 but streams lag" {
+@test "verify caps the reported missing list at 5 IDs" {
   deploy_health() { echo 200; }
-  deploy_fresh_after_marker() { echo 0; }
-  run deploy_verify 3
+  deploy_recovered_ids() { :; }
+  run deploy_verify "1 2 3 4 5 6 7"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"health=200"* ]]
-  [[ "$output" == *"fresh=0/3"* ]]
+  [[ "$output" == *"recovered=0/7"* ]]
+  [[ "$output" == *"missing: 1 2 3 4 5 (+2 more)"* ]]
+  [[ "$output" != *"missing: 1 2 3 4 5 6"* ]]
+}
+
+@test "deploy_missing_ids matches whole IDs, never substrings" {
+  # ID 5 must not be satisfied by ID 55's segments (or vice versa).
+  run deploy_missing_ids "5 55" "55"
+  [ "$status" -eq 0 ]
+  [ "$output" = "5" ]
+}
+
+@test "deploy_missing_ids accepts newline-separated sets (sort -u output shape)" {
+  run deploy_missing_ids "$(printf 'A\nB\nC\n')" "$(printf 'A\nC\n')"
+  [ "$status" -eq 0 ]
+  [ "$output" = "B" ]
+}
+
+@test "deploy_missing_ids is empty when baseline is a subset of recovered" {
+  run deploy_missing_ids "A B" "$(printf 'A\nB\nEXTRA\n')"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 @test "swap sends the atomic symlink+restart sequence over stdin, targeting the new tag" {
   # The swap now goes over stdin (heredoc), so its script lands in the recorded
   # call via mock_runner's stdin capture — not in argv. The safety-critical
-  # ordering (stage a .tmp link, atomically mv -T it into place, touch the
-  # verify marker, then restart the unit) must still be exactly this, and it
+  # ordering (stage a .tmp link, atomically mv -T it into place, restart the
+  # unit, then touch the verify marker) must still be exactly this, and it
   # must target the NEW tag.
   MOCK_OUT=""
   deploy_health() { echo 200; }
-  deploy_fresh_after_marker() { echo 5; }
+  deploy_recovered_ids() { printf 'A\n'; }
+  BASELINE_IDS="A"
   status=0
   deploy_run_swap_and_verify "1.2.0" "1.1.0" || status=$?
   [ "$status" -eq 0 ]
   local calls; calls="$(mock_calls_joined)"
   echo "$calls" | grep -q 'ln -sfn /opt/acme/releases/1.2.0 /opt/acme/current.tmp'
   echo "$calls" | grep -q 'mv -T /opt/acme/current.tmp /opt/acme/current'
-  echo "$calls" | grep -q 'touch /srv/acme/.tico-deploy-marker'
   echo "$calls" | grep -q 'systemctl restart ticolinea-streaming'
-  # The touch must precede the restart — the marker's mtime is the fence
-  # deploy_verify counts segments against, so a touch after the restart would
-  # discard the new process's earliest output (and one missing entirely would
-  # make every verification count 0). index()-based, so the literal path needs
-  # no regex escaping.
+  echo "$calls" | grep -q 'touch /srv/acme/.tico-deploy-marker'
+  # The restart must precede the touch — the old service's ffmpeg children
+  # keep writing until systemctl stops the cgroup, so a marker touched before
+  # the restart would count the old process's final segments as post-restart
+  # recovery evidence (verification could pass on a dead new process).
+  # index()-based, so the literal path needs no regex escaping.
   printf '%s\n' "$calls" | awk '
-    index($0, "touch /srv/acme/.tico-deploy-marker") { t = NR }
+    index($0, "touch /srv/acme/.tico-deploy-marker") { if (!t) t = NR }
     index($0, "systemctl restart ticolinea-streaming") { if (!r) r = NR }
-    END { exit !(t && r && t < r) }'
+    END { exit !(t && r && r < t) }'
 }
 
 @test "auto-rollback repoints current to the previous tag on verify failure" {
   MOCK_OUT=""
   deploy_health() { echo 503; }   # force verify failure
-  deploy_fresh_after_marker() { echo 0; }
-  PREVIOUS_TAG="1.0.0"
+  deploy_recovered_ids() { :; }
+  BASELINE_IDS="A B"
   # Not `run`: bats `run` captures via command substitution, which forks a
   # subshell — MOCK_CALLS mutations made by mock_runner inside it would be
   # lost, making the grep below always fail regardless of behavior. Capture
@@ -158,8 +186,8 @@ setup() {
 @test "first deploy (no previous): healthy node with zero streams verifies" {
   MOCK_OUT=""
   deploy_health() { echo 200; }
-  deploy_fresh_after_marker() { echo 0; }
-  BASELINE_FRESH=0
+  deploy_recovered_ids() { :; }
+  BASELINE_IDS=""
   status=0
   deploy_run_swap_and_verify "1.0.0" "" || status=$?
   [ "$status" -eq 0 ]
@@ -168,11 +196,12 @@ setup() {
 @test "redeploy of a zero-baseline node verifies health-only (spec B window persists)" {
   # A node past its first deploy can still have no channel rows (spec B lasts
   # until the panel sync exists). Updating it must not demand a stream that
-  # has never existed — baseline 0, not just "no previous", relaxes the floor.
+  # has never existed — an empty baseline SET, not just "no previous",
+  # relaxes verification to health-only.
   MOCK_OUT=""
   deploy_health() { echo 200; }
-  deploy_fresh_after_marker() { echo 0; }
-  BASELINE_FRESH=0
+  deploy_recovered_ids() { :; }
+  BASELINE_IDS=""
   status=0
   deploy_run_swap_and_verify "1.0.1" "1.0.0" || status=$?
   [ "$status" -eq 0 ]
@@ -181,8 +210,8 @@ setup() {
 @test "first-deploy verify failure skips rollback and leaves the release in place" {
   MOCK_OUT=""
   deploy_health() { echo 503; }
-  deploy_fresh_after_marker() { echo 0; }
-  BASELINE_FRESH=0
+  deploy_recovered_ids() { :; }
+  BASELINE_IDS=""
   status=0
   deploy_run_swap_and_verify "1.0.0" "" 2>"$BATS_TEST_TMPDIR/stderr" || status=$?
   [ "$status" -ne 0 ]
@@ -197,8 +226,8 @@ setup() {
 @test "cmd_deploy first-deploy failure says the new tag was left in place (no bogus rollback claim)" {
   push() { :; }
   deploy_health() { echo 503; }
-  deploy_fresh() { echo 0; }               # pre-swap baseline
-  deploy_fresh_after_marker() { echo 0; }  # post-swap verification
+  deploy_baseline_ids() { :; }   # pre-swap baseline: empty ID set
+  deploy_recovered_ids() { :; }  # post-swap verification: nothing recovered
   MOCK_OUT=""
   # Preflight: health != 200 must land in the "no running node yet" branch,
   # so the systemctl is-active probe has to fail.
@@ -217,7 +246,7 @@ setup() {
 @test "dry-run previews the plan even when the node reports unhealthy" {
   # FIX A: --dry-run must reach the preview regardless of node health.
   deploy_health() { echo 503; }
-  deploy_fresh() { echo 0; }
+  deploy_baseline_ids() { :; }
   local art; art="$(mktemp -d)"
   : > "$art/schema.sql"
   : > "$art/ticolinea.stream.service.dll"
@@ -235,8 +264,8 @@ setup() {
   # assert their content via mock_runner's stdin capture.
   push() { :; }
   deploy_health() { echo 200; }
-  deploy_fresh() { echo 5; }               # pre-swap baseline (mmin window — unchanged)
-  deploy_fresh_after_marker() { echo 5; }  # post-swap verification must match the baseline
+  deploy_baseline_ids() { printf '7\n9\n'; }   # pre-swap baseline (mmin window — ID set)
+  deploy_recovered_ids() { printf '7\n9\n'; }  # post-swap: every baseline ID recovered
   MOCK_OUT=""
   local art; art="$(mktemp -d)"
   : > "$art/schema.sql"

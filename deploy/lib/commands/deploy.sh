@@ -15,40 +15,72 @@ _tico_resolve_paths() {
 }
 
 # Seams so tests can stub the observations independently of the runner.
-# deploy_fresh (last-minute mtime window) is for the PRE-swap baseline only;
-# deploy_fresh_after_marker is what post-swap verification consults — see
-# deploy_verify for why the two must not be interchanged.
+# deploy_baseline_ids (last-minute mtime window) is for the PRE-swap baseline
+# only; deploy_recovered_ids (post-marker) is what post-swap verification
+# consults — see deploy_verify for why the two must not be interchanged.
 deploy_health() { remote_health; }
-deploy_fresh()  { remote_fresh_stream_count; }
-deploy_fresh_after_marker() { remote_fresh_after_marker; }
+deploy_baseline_ids()  { remote_fresh_stream_ids; }
+deploy_recovered_ids() { remote_recovered_stream_ids; }
 
-deploy_verify() { # baseline_fresh_count [min_fresh]
-  # min_fresh defaults to 1 so redeploys keep their gate; a first deploy passes
-  # 0 — RUNBOOK spec B: a freshly-provisioned node has no channel rows yet, so
-  # it is healthy but serves nothing, and health alone is the verifiable signal.
-  local baseline="${1:-0}" min="${2:-1}"
+# Pure, locally-testable verification core: which baseline stream IDs have no
+# post-marker segment yet? Args are whitespace/newline-separated ID lists;
+# prints the missing IDs one per line (empty output = every channel recovered).
+# Matching is exact per-token — padding each side with spaces means ID "5" is
+# never satisfied by ID "55"'s segments.
+deploy_missing_ids() { # baseline_ids, recovered_ids
+  local recovered id
+  recovered=" $(printf '%s' "${2:-}" | tr '\n' ' ') "
+  # shellcheck disable=SC2086 # word-splitting the ID list is the point
+  for id in ${1:-}; do
+    case "$recovered" in
+      *" $id "*) ;;
+      *) printf '%s\n' "$id" ;;
+    esac
+  done
+}
+
+deploy_verify() { # baseline_ids (whitespace-separated; empty => health-only)
+  # Empty baseline = the node was serving nothing before the swap: first
+  # deploy, or any deploy inside the RUNBOOK spec B window (no channel rows
+  # yet), where health alone is the verifiable signal. Same semantics as the
+  # old zero-count rule, now set-based. The verify contract remains "streams
+  # recovered to baseline", never "streams appeared".
+  local baseline="${1:-}"
   # Injectable so tests run instantly; production keeps the ~60s HLS window
   # (12 tries * 5s) unless the caller overrides these.
   local tries="${TICO_VERIFY_TRIES:-12}" interval="${TICO_VERIFY_SLEEP:-5}"
-  local attempt=0 code fresh need
-  need="$min"
-  [ "${baseline:-0}" -gt "$need" ] 2>/dev/null && need="$baseline"
+  local attempt=0 code recovered missing total miss_n shown
+  # shellcheck disable=SC2086 # intentional word-split to count baseline IDs
+  set -- $baseline
+  total=$#
   while [ "$attempt" -lt "$tries" ]; do
     code="$(deploy_health)"
-    fresh=""
+    missing=""
     if [ "$code" = "200" ]; then
-      # Marker-based, never the -mmin window: right after swap+restart the OLD
-      # process's segments are still <1min old, so a last-minute window would
-      # let a dead new process pass verification on stale output. Only
-      # segments written after the marker (touched in the swap heredoc just
-      # before the restart) count as recovery evidence.
-      fresh="$(deploy_fresh_after_marker)"
-      if [ "${fresh:-0}" -ge "$need" ]; then return 0; fi
+      [ "$total" -eq 0 ] && return 0
+      # Per-channel, marker-based: EVERY baseline ID must have written at
+      # least one segment since the restart. An aggregate count is not
+      # recovery evidence — fast channels mask a dead one, and with ~6s
+      # segments the post-restart observation window (~55s minus startup)
+      # can never reproduce a full 60s-window baseline count, so an
+      # aggregate gate rolled back healthy deploys by construction.
+      recovered="$(deploy_recovered_ids)"
+      missing="$(deploy_missing_ids "$baseline" "$recovered")"
+      [ -z "$missing" ] && return 0
     fi
     attempt=$((attempt + 1))
     # Without this the verify window is a 60s silence ending in a bare failure —
-    # indistinguishable from a hang, and no clue whether health or freshness lost.
-    log "verify: health=${code:-?} fresh=${fresh:-?}/${need} (attempt ${attempt}/${tries})"
+    # indistinguishable from a hang, and no clue whether health or recovery lost.
+    if [ "$code" = "200" ] && [ -n "$missing" ]; then
+      miss_n="$(printf '%s\n' "$missing" | grep -c .)"
+      # Cap the missing list so one bad deploy of a large node can't flood the log.
+      shown="$(printf '%s\n' "$missing" | head -5 | tr '\n' ' ')"
+      shown="${shown% }"
+      [ "$miss_n" -gt 5 ] && shown="$shown (+$((miss_n - 5)) more)"
+      log "verify: health=200 recovered=$((total - miss_n))/${total} missing: ${shown} (attempt ${attempt}/${tries})"
+    else
+      log "verify: health=${code:-?} recovered=?/${total} (attempt ${attempt}/${tries})"
+    fi
     [ "$attempt" -lt "$tries" ] && sleep "$interval"
   done
   return 1
@@ -103,27 +135,32 @@ deploy_prune_releases() { # keep the 5 most-recent releases, plus whichever one 
 }
 
 deploy_run_swap_and_verify() { # new_tag, previous_tag
-  local new="$1" prev="$2" baseline="${BASELINE_FRESH:-0}" min=1
-  # Zero baseline (first deploy, or any deploy inside the spec B window where
-  # the node has no channel rows yet): verify health only. Requiring a fresh
-  # segment the node never served contradicted RUNBOOK spec B and made such
-  # deploys fail verification by construction. The verify contract is thus
-  # "streams recovered to baseline", never "streams appeared".
-  if [ -z "$prev" ] || [ "${baseline:-0}" -eq 0 ] 2>/dev/null; then min=0; fi
+  local new="$1" prev="$2" baseline="${BASELINE_IDS:-}"
+  # First deploy (no previous release): health-only regardless of anything on
+  # the box — there is no "recovered to baseline" story when nothing this tool
+  # deployed was serving. An empty baseline set carries the same rule for
+  # redeploys inside the spec B window (node has no channel rows yet):
+  # requiring a stream the node never served would fail by construction.
+  # The verify contract is "streams recovered to baseline", never "streams
+  # appeared".
+  [ -z "$prev" ] && baseline=""
   # Over stdin (heredoc), not `bash -c "A && B"` argv — ssh flattens argv and
   # breaks a multi-word `-c` payload. Unquoted heredoc: local vars expand here.
-  # The marker touch MUST precede the restart: its mtime is the fence
-  # deploy_verify counts segments against (find -newer), so only output the
-  # new process wrote can satisfy verification — segments the old process
-  # left behind are older than the marker by construction.
+  # The restart MUST precede the marker touch: the old service's ffmpeg
+  # children keep writing until systemctl stops the cgroup, so a marker
+  # touched before the restart would count the old process's final segments
+  # as post-restart evidence. The unit is Type=simple — restart returns once
+  # the new process is exec'd, and its first segment lands seconds later, so
+  # the new process's output postdates the marker. Worst case its very first
+  # segment is ignored and verification waits ~one more segment.
   remote_sudo 'bash -s' <<REMOTE
 set -euo pipefail
 ln -sfn $TICO_RELEASES_DIR/$new $TICO_CURRENT_LINK.tmp
 mv -T $TICO_CURRENT_LINK.tmp $TICO_CURRENT_LINK
-touch /srv/${PROVIDER}/.tico-deploy-marker
 systemctl restart ticolinea-streaming
+touch /srv/${PROVIDER}/.tico-deploy-marker
 REMOTE
-  if deploy_verify "$baseline" "$min"; then
+  if deploy_verify "$baseline"; then
     log "Deploy $new verified."
     return 0
   fi
@@ -216,11 +253,17 @@ set -euo pipefail
 mysql -uroot ${DB_NAME} < $TICO_RELEASES_DIR/$tag/schema.sql
 REMOTE
 
-  # 2. Baseline.
-  local previous baseline
+  # 2. Baseline: the SET of stream IDs with a segment in the last minute, not
+  # a count. Verification is per-channel — every one of these IDs must write a
+  # post-restart segment — because an aggregate count lets fast channels mask
+  # a dead one and can't be reproduced inside the shorter verify window.
+  local previous baseline baseline_n
   previous="$(remote "readlink $TICO_CURRENT_LINK 2>/dev/null | xargs -r basename || true")"
-  baseline="$(deploy_fresh || echo 0)"; export BASELINE_FRESH="$baseline"
-  log "Baseline: previous=${previous:-none}, fresh streams=${baseline}"
+  baseline="$(deploy_baseline_ids || true)"; export BASELINE_IDS="$baseline"
+  # shellcheck disable=SC2086 # intentional word-split to count baseline IDs
+  set -- $baseline
+  baseline_n=$#
+  log "Baseline: previous=${previous:-none}, active streams=${baseline_n}"
 
   # 3-5. Swap, verify, auto-rollback.
   if deploy_run_swap_and_verify "$tag" "$previous"; then
