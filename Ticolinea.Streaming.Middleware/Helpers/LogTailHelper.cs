@@ -27,7 +27,7 @@ public static class LogTailHelper
     // Log retention: TL.* files older than N days are deleted by the daily
     // janitor (Jobs.LimpiarLogsViejos) — log4net's date rolling NEVER removes
     // previous days on its own, so without this every node leaks disk slowly.
-    public const int DefaultRetentionDays = 14;
+    public const int DefaultRetentionDays = 7;
 
     // Resolved once at startup (Log4netExtensions) so the static Hangfire job
     // reads the SAME directory/retention the appender uses.
