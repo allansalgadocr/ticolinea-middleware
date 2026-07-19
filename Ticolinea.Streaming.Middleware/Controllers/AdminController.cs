@@ -87,7 +87,57 @@ public class AdminController : ControllerBase
             // esconde deploys/reinicios, que es lo que el operador necesita ver.
             var uptime = (long)(DateTime.UtcNow -
                 System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime()).TotalSeconds;
-            return Ok(new { uptimeSec = uptime, cpuPct = cpu, ramPct = ram, diskPct = disk });
+            // Last catalog sync (scheduled or forced). Nulls/"" until the first
+            // sync of this service process completes (the record is in-memory).
+            var lastSync = PackageSyncService.LastResult;
+            return Ok(new
+            {
+                uptimeSec = uptime, cpuPct = cpu, ramPct = ram, diskPct = disk,
+                lastSyncUtc = lastSync?.CompletedUtc,
+                lastSyncForced = lastSync?.Forced,
+                lastSyncSummary = lastSync?.Summary() ?? ""
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
+    // Operator-FORCED catalog sync. Unlike the scheduled Jobs.SyncPackageCatalog,
+    // the undersized-catalog guard is OFF: whatever the panel returns is applied
+    // in full — adds, updates, AND mass-disables (a deliberate 50% shrink is
+    // operator intent). Runs INLINE (not fire-and-forget): DB upserts plus a few
+    // changed-source restarts — seconds, bounded by the CatalogClient 30s fetch
+    // timeout and the service's 60s sync-lock wait.
+    [HttpPost("sync")]
+    public async Task<IActionResult> ForceSync()
+    {
+        try
+        {
+            // Same client wiring as Jobs.SyncPackageCatalog — one catalog contract.
+            var http = Constantes.Global.HttpClientFactory.CreateClient("PanelApi");
+            http.Timeout = TimeSpan.FromSeconds(30);
+            var client = new CatalogClient(
+                http,
+                Constantes.Global.PANEL_API_URL,
+                Constantes.Global.PANEL_API_KEY,
+                Constantes.Global.PROVIDER_ID);
+
+            var result = await new PackageSyncService(client).SyncAsync(forced: true);
+            if (result == null)
+                return StatusCode(502, new { message = "catalog fetch failed: panel unreachable or returned an error; nothing was changed" });
+
+            return Ok(new
+            {
+                added = result.Added,
+                updated = result.Updated,
+                disabled = result.Disabled,
+                sourcesChanged = result.SourcesChanged,
+                restarted = result.Restarted,
+                completedUtc = result.CompletedUtc,
+                message = result.Summary()
+            });
         }
         catch (Exception ex)
         {
@@ -112,7 +162,7 @@ public class AdminController : ControllerBase
         await gate.WaitAsync();
         try
         {
-            var stream = await LoadStream(id);
+            var stream = await StreamRestartHelper.LoadStream(id);
             if (stream == null) return NotFound(new { success = false, message = $"stream {id} not found" });
 
             switch (action.ToLowerInvariant())
@@ -124,23 +174,11 @@ public class AdminController : ControllerBase
 
                 case "start":
                 case "restart":
-                    // Refresh ProcesoId from a LIVE pgrep before deciding whether to pre-kill,
-                    // mirroring PanelController.IniciarStream (~lines 1150-1160). Without this, an
-                    // orphaned ffmpeg whose DB proceso_id is stale (<= 0) would NOT be pre-killed
-                    // and ForzarInicioInmediato would spawn a SECOND ffmpeg writing the same HLS
-                    // segments -> corrupted output.
-                    var live = await StreamStatusHelper.GetRealTimeStreamStatusAsync(id);
-                    if (live.ProcessId.HasValue && live.ProcessId.Value > 0) stream.ProcesoId = live.ProcessId.Value;
-
-                    if (stream.ProcesoId > 0)
-                    {
-                        await Jobs.DetenerProceso(stream.ProcesoId, stream.StreamId);
-                        await Task.Delay(TimeSpan.FromSeconds(1));
-                    }
-
-                    var started = await StreamingService.ForzarInicioInmediato(stream);
-                    await SetStreamStarted(id);
-                    await SetHabilitado(id);
+                    // Restart body (live-status refresh, pre-kill via DetenerProceso,
+                    // ForzarInicioInmediato, streams_info/streams_tl updates) extracted
+                    // verbatim to StreamRestartHelper.RestartAsync so PackageSyncService
+                    // can bounce changed-source channels with the exact same semantics.
+                    var started = await StreamRestartHelper.RestartAsync(stream);
                     return Ok(new { success = started, message = started ? action + "ed" : "process did not come up" });
 
                 default:
@@ -161,44 +199,9 @@ public class AdminController : ControllerBase
     // this controller and OutputWatchdogService read the exact same file by the
     // exact same convention.
 
-    // Loads a single StreamDb by streams_tl.id. Column list and reader mapping
-    // are copied verbatim from Jobs.ObtenerStreamsActivos (Jobs.cs) so the
-    // types match the real StreamDb model exactly — only the WHERE clause
-    // differs (filtered to one id instead of the "active streams" set).
-    private static async Task<StreamDb?> LoadStream(int id)
-    {
-        await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
-        await cnn.OpenAsync();
-        await using var cmd = cnn.CreateCommand();
-        cmd.CommandText = @"SELECT fuente_stream, stream_id, probesize_ondemand, es_bajodemanda,
-                                   transcode_audio, intervalo, segmentos, framerate, transcode,
-                                   resolucion, bitrate, proceso_id, cgop, gop
-                            FROM streams_tl a
-                            INNER JOIN streams_info b ON a.id = b.stream_id
-                            WHERE a.id = @id;";
-        cmd.Parameters.AddWithValue("@id", id);
-
-        await using var reader = await cmd.ExecuteReaderAsync();
-        if (!await reader.ReadAsync()) return null;
-
-        return new StreamDb
-        {
-            Fuente = reader.GetString(0),
-            StreamId = reader.GetInt32(1),
-            ProbeSize = reader.GetInt32(2),
-            EsBajoDemanda = reader.GetInt32(3),
-            TranscodeAudio = reader.GetString(4),
-            Intervalo = reader.GetInt16(5),
-            Segmentos = reader.GetInt16(6),
-            Framerate = reader.GetInt32(7),
-            Transcode = reader.GetInt32(8),
-            Resolucion = reader.GetString(9),
-            Bitrate = reader.GetString(10),
-            ProcesoId = reader.GetInt32(11),
-            CGOP = reader.GetInt32(12),
-            GOP = reader.GetInt32(13)
-        };
-    }
+    // LoadStream / SetStreamStarted / SetHabilitado moved to
+    // Helpers/StreamRestartHelper so the restart body is shared with
+    // PackageSyncService (changed-source bounces) without duplication.
 
     // Mirrors PanelController.DetenerStream's DB update exactly.
     private static async Task SetStreamInfo(int id, int iniciado, int ejecutando, int procesoId)
@@ -216,29 +219,4 @@ public class AdminController : ControllerBase
         await cmd.ExecuteNonQueryAsync();
     }
 
-    // Mirrors PanelController.IniciarStream's streams_info update exactly.
-    private static async Task SetStreamStarted(int id)
-    {
-        await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
-        await cnn.OpenAsync();
-        await using var cmd = cnn.CreateCommand();
-        cmd.CommandText = "UPDATE `streams_info` " +
-                          "SET iniciado=1, ejecutando=1, reportado_caido=0 " +
-                          "WHERE stream_id=@id; ";
-        cmd.Parameters.AddWithValue("@id", id);
-        await cmd.ExecuteNonQueryAsync();
-    }
-
-    // Mirrors PanelController.IniciarStream's streams_tl update exactly.
-    private static async Task SetHabilitado(int id)
-    {
-        await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
-        await cnn.OpenAsync();
-        await using var cmd = cnn.CreateCommand();
-        cmd.CommandText = "UPDATE `streams_tl` " +
-                          "SET habilitado=1 " +
-                          "WHERE id=@stream_id; ";
-        cmd.Parameters.AddWithValue("@stream_id", id);
-        await cmd.ExecuteNonQueryAsync();
-    }
 }

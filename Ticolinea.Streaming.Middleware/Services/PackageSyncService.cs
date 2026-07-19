@@ -10,22 +10,44 @@ public class PackageSyncService
     private readonly CatalogClient _client;
     private static readonly log4net.ILog _log = log4net.LogManager.GetLogger(typeof(PackageSyncService));
 
+    // Last completed sync (timestamp + counts + forced flag), for GET /api/admin/system.
+    // Reference assignment is atomic; readers only ever see a whole result.
+    public static PackageSyncResult? LastResult { get; private set; }
+
+    // Bound on how long a FORCED (inline, operator-facing) sync waits for an
+    // in-flight scheduled sync before giving up instead of hanging the request.
+    private static readonly TimeSpan _forcedLockWait = TimeSpan.FromSeconds(60);
+
     public PackageSyncService(CatalogClient client) => _client = client;
 
-    public async Task SyncAsync()
+    // forced=false: the unattended path (boot + recurring Hangfire job). Guard ON,
+    //   non-blocking lock (a concurrent sync just skips this tick), failures are
+    //   logged and swallowed.
+    // forced=true: the operator path (POST /api/admin/sync). Guard OFF — the
+    //   catalog is fully authoritative, including mass-disables. Waits (bounded)
+    //   for an in-flight sync, and rethrows DB failures so the caller can report.
+    // Returns null when the catalog fetch failed (panel unreachable / non-2xx) —
+    // nothing was mutated — or when a scheduled run skipped/failed.
+    public async Task<PackageSyncResult?> SyncAsync(bool forced)
     {
-        if (!await _lock.WaitAsync(0)) { _log.Warn("Package sync already running; skipping this tick."); return; }
+        if (forced)
+        {
+            if (!await _lock.WaitAsync(_forcedLockWait))
+                throw new InvalidOperationException("Another package sync is already running; try again shortly.");
+        }
+        else if (!await _lock.WaitAsync(0)) { _log.Warn("Package sync already running; skipping this tick."); return null; }
         try
         {
             var catalog = await _client.FetchAsync();
-            if (catalog == null) { _log.Warn("Catalog fetch failed; keeping current streams unchanged."); return; }
+            if (catalog == null) { _log.Warn("Catalog fetch failed; keeping current streams unchanged."); return null; }
 
             await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
             await cnn.OpenAsync();
 
-            var current = await ReadSyncedIdsAsync(cnn);
+            var current = await ReadSyncedStreamsAsync(cnn);
             var enabledCount = await ReadEnabledSyncedCountAsync(cnn);
-            var decision = PackageSyncPlan.Build(catalog, current, enabledCount);
+            var decision = PackageSyncPlan.Build(catalog, current.Keys.ToList(), enabledCount,
+                enforceGuard: !forced, currentFuentes: current);
             if (decision.SkipDisable)
                 _log.Warn($"Undersized catalog ({catalog.Count} vs {enabledCount} enabled); applying upserts, skipping disables.");
 
@@ -40,21 +62,79 @@ public class PackageSyncService
                 foreach (var id in decision.IdsToDisable)
                     await DisableStreamAsync(cnn, tx, id);
                 await tx.CommitAsync();
-                _log.Info($"Package sync ok: {decision.Upserts.Count} upserted, {decision.IdsToDisable.Count} disabled.");
+                _log.Info($"Package sync ok ({(forced ? "forced" : "scheduled")}): {decision.Upserts.Count} upserted, {decision.IdsToDisable.Count} disabled.");
             }
-            catch (Exception ex) { await tx.RollbackAsync(); _log.Error("Package sync failed; rolled back.", ex); }
+            catch (Exception ex)
+            {
+                await tx.RollbackAsync();
+                _log.Error("Package sync failed; rolled back.", ex);
+                if (forced) throw;
+                return null;
+            }
+
+            // Post-commit: bounce RUNNING channels whose fuente changed, on BOTH
+            // paths — the DB now holds the new source but each live channel's
+            // SupervisarStream loop captured the OLD StreamDb, so without an
+            // operator-style restart it would keep (re)launching the stale fuente.
+            var restarted = await RestartChangedSourceStreamsAsync(decision.SourceChangedIds);
+
+            var result = PackageSyncResult.FromDecision(decision);
+            result.Restarted = restarted;
+            result.Forced = forced;
+            result.CompletedUtc = DateTime.UtcNow;
+            LastResult = result;
+            _log.Info($"Package sync summary: {result.Summary()}");
+            return result;
         }
         finally { _lock.Release(); }
     }
 
-    private static async Task<List<int>> ReadSyncedIdsAsync(MySqlConnection cnn)
+    // One channel at a time, mirroring AdminController's operator-restart body via
+    // StreamRestartHelper. Per-stream lock is a NON-BLOCKING try-acquire from this
+    // sync context: if an operator action (or watchdog restart) is in flight on the
+    // channel, its bounce is skipped and it counts as not-restarted — it converges
+    // on the new fuente on its next operator/watchdog cycle or process start.
+    private static async Task<int> RestartChangedSourceStreamsAsync(IReadOnlyList<int> changedIds)
     {
-        var ids = new List<int>();
+        var restarted = 0;
+        foreach (var id in changedIds)
+        {
+            var gate = StreamLocks.For(id);
+            if (!await gate.WaitAsync(0))
+            {
+                _log.Warn($"Stream {id}: fuente cambió pero hay una acción en vuelo; se omite el reinicio.");
+                continue;
+            }
+            try
+            {
+                var live = await StreamStatusHelper.GetRealTimeStreamStatusAsync(id);
+                if (!live.IsRunning) continue; // not running: picks up the new fuente on next start
+
+                var stream = await StreamRestartHelper.LoadStream(id); // fresh row = new fuente
+                if (stream == null) continue;
+
+                if (await StreamRestartHelper.RestartAsync(stream)) restarted++;
+                else _log.Warn($"Stream {id}: reinicio por cambio de fuente no levantó el proceso; la supervisión reintentará.");
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"Stream {id}: error al reiniciar por cambio de fuente.", ex);
+            }
+            finally { gate.Release(); }
+        }
+        return restarted;
+    }
+
+    // id → fuente_stream for the FULL sincronizado=1 set. Keys feed the disable
+    // set-math (as before); values feed source-change detection.
+    private static async Task<Dictionary<int, string?>> ReadSyncedStreamsAsync(MySqlConnection cnn)
+    {
+        var rows = new Dictionary<int, string?>();
         await using var cmd = cnn.CreateCommand();
-        cmd.CommandText = "SELECT id FROM streams_tl WHERE sincronizado = 1;";
+        cmd.CommandText = "SELECT id, fuente_stream FROM streams_tl WHERE sincronizado = 1;";
         await using var r = await cmd.ExecuteReaderAsync();
-        while (await r.ReadAsync()) ids.Add(r.GetInt32(0));
-        return ids;
+        while (await r.ReadAsync()) rows[r.GetInt32(0)] = r.IsDBNull(1) ? null : r.GetString(1);
+        return rows;
     }
 
     // Denominator for the undersized-catalog guard: "channels we're actually serving now",

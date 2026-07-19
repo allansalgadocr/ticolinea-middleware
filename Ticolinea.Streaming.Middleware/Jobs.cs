@@ -24,7 +24,9 @@ namespace ticolinea.stream.service
 
         // Package sync (Spec B): pulls this node's channel catalog from the panel
         // and upserts streams_tl/streams_info. Runs on a Hangfire recurring
-        // schedule (see Program.cs) plus once on boot.
+        // schedule (see Program.cs) plus once on boot. forced=false keeps the
+        // undersized-catalog guard ON for this unattended path; the operator's
+        // forced sync lives in AdminController (POST /api/admin/sync).
         public static async Task SyncPackageCatalog()
         {
             var http = Constantes.Global.HttpClientFactory.CreateClient("PanelApi");
@@ -34,7 +36,7 @@ namespace ticolinea.stream.service
                 Constantes.Global.PANEL_API_URL,
                 Constantes.Global.PANEL_API_KEY,
                 Constantes.Global.PROVIDER_ID);
-            await new Services.PackageSyncService(client).SyncAsync();
+            await new Services.PackageSyncService(client).SyncAsync(forced: false);
         }
 
         [DisableConcurrentExecution(60)]
