@@ -259,6 +259,10 @@ namespace ticolinea.stream.service
                 var result = await Cli
                     .Wrap("/bin/pgrep")
                     .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
+                    // pgrep exits 1 when NO process matches — a normal answer for a
+                    // down channel, not an error. Default CliWrap validation turned it
+                    // into an exception (log spam + broke the forced-start path).
+                    .WithValidation(CommandResultValidation.None)
                     .ExecuteBufferedAsync();
                 string output = result.StandardOutput;
                 string[] procesos = output.Split(
@@ -297,6 +301,10 @@ namespace ticolinea.stream.service
                 var result = await Cli
                     .Wrap("/bin/pgrep")
                     .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
+                    // pgrep exits 1 when NO process matches — a normal answer for a
+                    // down channel, not an error. Default CliWrap validation turned it
+                    // into an exception (log spam + broke the forced-start path).
+                    .WithValidation(CommandResultValidation.None)
                     .ExecuteBufferedAsync();
                 string output = result.StandardOutput;
                 string[] procesos = output.Split(
@@ -338,6 +346,10 @@ namespace ticolinea.stream.service
                 var result = await Cli
                     .Wrap("/bin/pgrep")
                     .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
+                    // pgrep exits 1 when NO process matches — a normal answer for a
+                    // down channel, not an error. Default CliWrap validation turned it
+                    // into an exception (log spam + broke the forced-start path).
+                    .WithValidation(CommandResultValidation.None)
                     .ExecuteBufferedAsync();
 
                 string output = result.StandardOutput;
@@ -418,6 +430,10 @@ namespace ticolinea.stream.service
                 var result = await Cli
                     .Wrap("/bin/pgrep")
                     .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
+                    // pgrep exits 1 when NO process matches — a normal answer for a
+                    // down channel, not an error. Default CliWrap validation turned it
+                    // into an exception (log spam + broke the forced-start path).
+                    .WithValidation(CommandResultValidation.None)
                     .ExecuteBufferedAsync();
 
                 string[] procesos = result.StandardOutput
@@ -493,6 +509,10 @@ namespace ticolinea.stream.service
             var result = await Cli
                 .Wrap("/bin/pgrep")
                 .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
+                // pgrep exits 1 when NO process matches — a normal answer for a
+                // down channel, not an error. Default CliWrap validation turned it
+                // into an exception (log spam + broke the forced-start path).
+                .WithValidation(CommandResultValidation.None)
                 .ExecuteBufferedAsync();
             string output = result.StandardOutput;
             string[] lines = output.Split(

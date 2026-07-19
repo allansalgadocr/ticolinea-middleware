@@ -28,6 +28,10 @@ namespace ticolinea.stream.service.Helpers
                 // Check if process is actually running using pgrep
                 var result = await Cli.Wrap("/bin/pgrep")
                     .WithArguments(new[] { "-f", $"/{streamId}_.m3u8" })
+                    // pgrep exits 1 when NO process matches — a normal answer for a
+                    // down channel, not an error. Default CliWrap validation turned it
+                    // into an exception (log spam + broke the forced-start path).
+                    .WithValidation(CommandResultValidation.None)
                     .ExecuteBufferedAsync();
 
                 if (!string.IsNullOrEmpty(result.StandardOutput))
