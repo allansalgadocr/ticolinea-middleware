@@ -259,7 +259,15 @@ REMOTE
   # a dead one and can't be reproduced inside the shorter verify window.
   local previous baseline baseline_n
   previous="$(remote "readlink $TICO_CURRENT_LINK 2>/dev/null | xargs -r basename || true")"
-  baseline="$(deploy_baseline_ids || true)"; export BASELINE_IDS="$baseline"
+  # FAIL CLOSED: a capture failure (ssh drop, permission error, missing
+  # streams dir) must never collapse into the legitimate empty set — empty
+  # relaxes verification to health-only (spec B), so failing open here would
+  # verify a busy node's deploy without checking a single channel. Only a
+  # successful capture (exit 0), empty or not, may proceed.
+  if ! baseline="$(deploy_baseline_ids)"; then
+    die "could not capture active-stream baseline — refusing to deploy without it"
+  fi
+  export BASELINE_IDS="$baseline"
   # shellcheck disable=SC2086 # intentional word-split to count baseline IDs
   set -- $baseline
   baseline_n=$#

@@ -243,6 +243,51 @@ setup() {
   [[ "$output" == *"tico status"* ]]
 }
 
+@test "cmd_deploy fails closed when baseline capture fails: dies before any swap" {
+  # Round-3 finding: `|| true` on the capture converted ssh drops, permission
+  # errors, and a missing streams dir into an EMPTY baseline — which verify
+  # treats as the legitimate spec B "serves nothing" case and passes on
+  # health alone. A capture failure on a busy node must refuse to deploy.
+  push() { :; }
+  deploy_health() { echo 200; }
+  deploy_baseline_ids() { return 9; }  # capture failure, NOT an empty set
+  deploy_recovered_ids() { :; }
+  MOCK_OUT=""
+  MOCK_LOG="$BATS_TEST_TMPDIR/calls.log"
+  local art; art="$(mktemp -d)"
+  : > "$art/schema.sql"
+  : > "$art/ticolinea.stream.service.dll"
+  run cmd_deploy example --tag 3.0.0 --artifact "$art"
+  rm -rf "$art"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not capture active-stream baseline"* ]]
+  [[ "$output" == *"refusing to deploy"* ]]
+  # The die precedes deploy_run_swap_and_verify: the persisted call log
+  # (staging calls land in it, so it exists) must show no symlink swap and no
+  # restart — the serving release was left untouched.
+  [ -f "$MOCK_LOG" ]
+  ! grep -q 'ln -sfn' "$MOCK_LOG"
+  ! grep -q 'systemctl restart' "$MOCK_LOG"
+}
+
+@test "cmd_deploy: empty-but-successful baseline still verifies health-only (spec B intact)" {
+  # The fail-closed capture must not break the legitimate case: exit 0 with
+  # an empty set means the node genuinely serves nothing, and the deploy
+  # verifies on health alone.
+  push() { :; }
+  deploy_health() { echo 200; }
+  deploy_baseline_ids() { :; }   # exit 0, empty set
+  deploy_recovered_ids() { :; }
+  MOCK_OUT=""
+  local art; art="$(mktemp -d)"
+  : > "$art/schema.sql"
+  : > "$art/ticolinea.stream.service.dll"
+  run cmd_deploy example --tag 3.1.0 --artifact "$art"
+  rm -rf "$art"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Deploy complete"* ]]
+}
+
 @test "dry-run previews the plan even when the node reports unhealthy" {
   # FIX A: --dry-run must reach the preview regardless of node health.
   deploy_health() { echo 503; }

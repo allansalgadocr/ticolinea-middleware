@@ -141,7 +141,19 @@ remote_fresh_stream_ids() {
   # an aggregate count — a count lets fast channels mask a dead one, and a
   # 60s-window count can't be reproduced inside the shorter post-restart
   # observation window (which is what made healthy deploys roll back).
-  remote "find /srv/${PROVIDER}/streams -name '*.ts' -mmin -1 -printf '%f\n' 2>/dev/null | sed 's/_.*//' | sort -u" | tr -d '\r'
+  #
+  # FAIL CLOSED. An empty baseline relaxes verification to health-only
+  # (spec B), so a capture FAILURE must never be mistaken for "no active
+  # streams". Remote side: pipefail + an explicit streams-dir assert, and no
+  # stderr suppression on find — a missing dir or a permission error exits
+  # nonzero (and surfaces in the tool output) instead of masquerading as an
+  # idle node (a `find|sed|sort` pipeline's status comes from sort, which
+  # succeeds on empty input). Local side: capture-then-emit, no pipeline, so
+  # `tr` can't mask the remote exit status either. Empty output WITH exit 0
+  # is the only legitimate "nothing active" signal.
+  local out
+  out="$(remote "set -o pipefail; [ -d /srv/${PROVIDER}/streams ] || exit 9; find /srv/${PROVIDER}/streams -name '*.ts' -mmin -1 -printf '%f\n' | sed 's/_.*//' | sort -u")" || return
+  printf '%s\n' "$out" | tr -d '\r'
 }
 
 remote_recovered_stream_ids() {
@@ -150,8 +162,17 @@ remote_recovered_stream_ids() {
   # systemctl restart). Never the -mmin window: during the ~60s verify window
   # the OLD process's segments are still <1min old, so a dead new process
   # could pass verification on them. `-newer` the marker cannot be satisfied
-  # by anything written before the restart. No marker on the box (pre-marker
-  # tooling, manual restart) yields an EMPTY set — fail-safe: verification
-  # never passes on output it can't attribute to the new process.
-  remote "if [ -f /srv/${PROVIDER}/.tico-deploy-marker ]; then find /srv/${PROVIDER}/streams -name '*.ts' -newer /srv/${PROVIDER}/.tico-deploy-marker -printf '%f\n' 2>/dev/null | sed 's/_.*//' | sort -u; fi" | tr -d '\r'
+  # by anything written before the restart.
+  #
+  # Unlike the baseline capture above, this side is intentionally FAIL-SAFE
+  # rather than fail-closed: no marker on the box (pre-marker tooling, manual
+  # restart) yields an EMPTY set, and deploy_verify ignores this function's
+  # exit status — because an empty/failed recovered set can only make
+  # verification keep retrying and eventually roll back (a false NEGATIVE),
+  # never pass on output it can't attribute to the new process. The pipefail
+  # + dir assert mirror remote_fresh_stream_ids for consistency and so real
+  # errors still surface in the tool output.
+  local out
+  out="$(remote "set -o pipefail; [ -d /srv/${PROVIDER}/streams ] || exit 9; if [ -f /srv/${PROVIDER}/.tico-deploy-marker ]; then find /srv/${PROVIDER}/streams -name '*.ts' -newer /srv/${PROVIDER}/.tico-deploy-marker -printf '%f\n' | sed 's/_.*//' | sort -u; fi")" || return
+  printf '%s\n' "$out" | tr -d '\r'
 }

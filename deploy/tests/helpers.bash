@@ -14,7 +14,12 @@ load_lib() { source "$TICO_ROOT/lib/$1"; }
 # script into the recorded call so tests can assert on its content. We only cat
 # on `bash -s` calls so the many plain `remote "cmd"` calls (no stdin redirect)
 # never block on an empty/inherited stdin.
-mock_runner_reset() { MOCK_CALLS=(); MOCK_OUT=""; MOCK_FAIL_ON=""; }
+# MOCK_LOG (optional): a file path to ALSO append every record to. bats `run`
+# captures via a subshell, so MOCK_CALLS mutations made under `run` are lost to
+# the test shell — a file survives. Set it in tests that must assert on calls
+# made (or not made) by a function they can only invoke via `run` (e.g. one
+# that die()s, which would exit the test shell if called directly).
+mock_runner_reset() { MOCK_CALLS=(); MOCK_OUT=""; MOCK_FAIL_ON=""; MOCK_LOG=""; }
 mock_runner() {
   shift  # discard host arg
   local rec="$*"
@@ -22,6 +27,9 @@ mock_runner() {
     *"bash -s"*) rec="$rec"$'\n'"$(cat)";;
   esac
   MOCK_CALLS+=("$rec")
+  if [ -n "${MOCK_LOG:-}" ]; then
+    printf '%s\n' "$rec" >> "$MOCK_LOG"
+  fi
   if [ -n "$MOCK_FAIL_ON" ] && [[ "$rec" == *"$MOCK_FAIL_ON"* ]]; then
     return 1
   fi

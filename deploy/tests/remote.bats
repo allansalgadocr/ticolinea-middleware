@@ -38,9 +38,13 @@ teardown() { rm -rf "$FAKEBIN"; }
   # fail-safe, no `if` branch emits anything — and (b) select only segments
   # strictly newer than the marker, never an -mmin window (which would still
   # see the OLD process's segments during the verify window), then reduce
-  # basenames ({StreamId}_{seq}.ts) to the distinct stream-ID set.
+  # basenames ({StreamId}_{seq}.ts) to the distinct stream-ID set. It carries
+  # the same pipefail + dir-assert as the baseline capture (consistency;
+  # errors surface) even though its failure direction is fail-safe.
   SSH_USER=u SSH_HOST=h PROVIDER=acme run remote_recovered_stream_ids
   [ "$status" -eq 0 ]
+  [[ "$output" == *"set -o pipefail"* ]]
+  [[ "$output" == *"[ -d /srv/acme/streams ] || exit 9"* ]]
   [[ "$output" == *"-f /srv/acme/.tico-deploy-marker"* ]]
   [[ "$output" == *"-newer /srv/acme/.tico-deploy-marker"* ]]
   [[ "$output" == *"-printf '%f\\n'"* ]]
@@ -48,20 +52,39 @@ teardown() { rm -rf "$FAKEBIN"; }
   [[ "$output" == *"sort -u"* ]]
   [[ "$output" != *"-mmin"* ]]
   [[ "$output" != *"wc -l"* ]]
+  [[ "$output" != *"2>/dev/null"* ]]
 }
 
-@test "remote_fresh_stream_ids uses the last-minute window and extracts the ID set" {
+@test "remote_fresh_stream_ids fails closed: pipefail, dir assert, no error suppression" {
   # Pre-swap baseline only: the -mmin window is correct BEFORE the restart
   # (the marker doesn't exist yet for this deploy) and must reduce segment
-  # basenames to the distinct stream-ID set, not a count.
+  # basenames to the distinct stream-ID set, not a count. Because an empty
+  # baseline relaxes verification to health-only, capture failures must exit
+  # nonzero instead of reading as an idle node: pipefail so a find failure
+  # isn't laundered by sort, an explicit streams-dir assert, and no
+  # 2>/dev/null anywhere — errors must surface.
   SSH_USER=u SSH_HOST=h PROVIDER=acme run remote_fresh_stream_ids
   [ "$status" -eq 0 ]
+  [[ "$output" == *"set -o pipefail"* ]]
+  [[ "$output" == *"[ -d /srv/acme/streams ] || exit 9"* ]]
   [[ "$output" == *"/srv/acme/streams"* ]]
   [[ "$output" == *"-mmin -1"* ]]
   [[ "$output" == *"-printf '%f\\n'"* ]]
   [[ "$output" == *"sed 's/_.*//'"* ]]
   [[ "$output" == *"sort -u"* ]]
   [[ "$output" != *"wc -l"* ]]
+  [[ "$output" != *"2>/dev/null"* ]]
+}
+
+@test "remote_fresh_stream_ids propagates a remote failure as its own exit status" {
+  # The local capture-then-emit shape must not launder the remote exit code
+  # through `| tr` (a pipeline's status comes from its last command). A
+  # failing remote means a failing helper — that is what cmd_deploy's
+  # fail-closed guard keys on.
+  failing_runner() { return 9; }
+  TICO_RUNNER=failing_runner SSH_USER=u SSH_HOST=h PROVIDER=acme run remote_fresh_stream_ids
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
 }
 
 @test "password auth routes through sshpass -e ssh with the password opts" {
