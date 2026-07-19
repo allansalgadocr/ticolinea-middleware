@@ -95,9 +95,14 @@ public class AdminController : ControllerBase
         }
     }
 
-    [HttpPost("streams/{id:int}/{action}")]
-    public async Task<IActionResult> Control(int id, string action)
+    // Parámetro de ruta 'command', NO 'action': en attribute routing 'action'
+    // es el token reservado del nombre del método — la ruta sólo casaba cuando
+    // el segmento era literalmente "Control", así que start/stop/restart
+    // devolvían 404. La forma de la URL no cambia.
+    [HttpPost("streams/{id:int}/{command}")]
+    public async Task<IActionResult> Control(int id, string command)
     {
+        var action = command;
         // Per-stream lock shared with OutputWatchdogService: serializes operator
         // actions against watchdog restarts on the same stream. The operator side
         // WAITS (the watchdog holds it for ~3s max: 2s double-read + kill); the
