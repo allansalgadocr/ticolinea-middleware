@@ -82,7 +82,11 @@ public class AdminController : ControllerBase
         try
         {
             var (cpu, ram, disk) = await Jobs.ObtenerMetricasSaludAsync();
-            var uptime = Environment.TickCount64 / 1000;
+            // Uptime del SERVICIO, no del host: TickCount64 es el uptime del SO
+            // (meses) — no coincide con el uptime de middleware del dashboard y
+            // esconde deploys/reinicios, que es lo que el operador necesita ver.
+            var uptime = (long)(DateTime.UtcNow -
+                System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime()).TotalSeconds;
             return Ok(new { uptimeSec = uptime, cpuPct = cpu, ramPct = ram, diskPct = disk });
         }
         catch (Exception ex)
