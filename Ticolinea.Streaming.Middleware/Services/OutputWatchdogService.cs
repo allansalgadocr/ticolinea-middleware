@@ -21,8 +21,9 @@ namespace ticolinea.stream.service.Services;
 // sigue vivo ve el exit != 0 y relanza por el camino supervisado normal, con
 // breaker e intervalo mínimo de 12s intactos. El kill tampoco ALIMENTA el
 // breaker NI el contador de reintentos de SupervisarStream: se marca vía
-// StreamingService.MarkWatchdogKill (contador por kill entregado, con retiro si
-// el kill falla) y el manejo del exit consume una marca — sin incrementar
+// StreamingService.MarkWatchdogKill(streamId, pid) — una marca por kill
+// entregado, ligada al PID matado, con retiro si el kill falla — y el manejo
+// del exit consume la marca del PID exacto que salió: sin incrementar
 // _failureTracker y clasificando el exit como relanzo correctivo (DecideRetry,
 // delay corto en vez de backoff) — el watchdog ya gasta su propio presupuesto
 // (WatchdogPolicy) por cada kill. Además la política exige

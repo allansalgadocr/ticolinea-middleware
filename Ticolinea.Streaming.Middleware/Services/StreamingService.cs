@@ -45,80 +45,49 @@ namespace ticolinea.stream.service.Services
         // watchdog con menos de 8 min entre sí disparaban el circuit breaker en el
         // relanzo — canal caído 8 min por reinicios intencionales.
         //
-        // La marca es un CONTADOR por stream, no un booleano: el watchdog puede
-        // matar VARIOS PIDs en una pasada (pgrep) — una marca por kill entregado.
-        // Si un Kill() falla o el PID ya había muerto, Jobs la retira
-        // (RetractWatchdogKillMark): el invariante es marcas vivas == kills
-        // realmente entregados, así una marca sin kill no puede enmascarar un
-        // fallo real. Sólo el exit del proceso SUPERVISADO pasa por el manejador
-        // de LanzarProcesoFfmpeg; las marcas de PIDs duplicados/rogue quedan
-        // huérfanas y las purga el TTL de 60s (una entrada caducada se descarta
-        // ENTERA, nunca se consume ni revive).
-        private static readonly ConcurrentDictionary<int, (int count, DateTime markedAt)> _watchdogKillMarks = new();
+        // La marca está ligada al PID matado — clave (streamId, pid) — porque el
+        // watchdog puede matar VARIOS PIDs en una pasada (pgrep): el supervisado
+        // y algún duplicado rogue. El manejo del exit consume EXACTAMENTE la
+        // marca del PID que salió (el ProcessId de StartedCommandEvent), así una
+        // marca de un PID rogue JAMÁS puede clasificar como "kill del watchdog"
+        // un fallo real del proceso supervisado. Si un Kill() falla o el PID ya
+        // había muerto, Jobs retira esa marca (RetractWatchdogKillMark):
+        // invariante, marcas vivas == kills realmente entregados. Las marcas de
+        // PIDs rogue quedan huérfanas (nadie consume su clave) y las purga el
+        // barrido oportunista por TTL de 60s en cada Mark.
+        private static readonly ConcurrentDictionary<(int streamId, int pid), DateTime> _watchdogKillMarks = new();
         private static readonly TimeSpan _watchdogKillMarkTtl = TimeSpan.FromSeconds(60);
 
-        public static void MarkWatchdogKill(int streamId) =>
-            MarkWatchdogKill(streamId, DateTime.UtcNow);
+        public static void MarkWatchdogKill(int streamId, int pid) =>
+            MarkWatchdogKill(streamId, pid, DateTime.UtcNow);
 
         // Sobrecargas con reloj explícito (patrón WatchdogPolicy): públicas para que
         // la semántica marca→consumo→retiro sea unit-testeable de forma determinista.
-        public static void MarkWatchdogKill(int streamId, DateTime nowUtc) =>
-            _watchdogKillMarks.AddOrUpdate(
-                streamId,
-                (1, nowUtc),
-                (_, existing) => nowUtc - existing.markedAt > _watchdogKillMarkTtl
-                    ? (1, nowUtc)                     // lo caducado no revive: cuenta desde 1
-                    : (existing.count + 1, nowUtc));  // acumula y refresca markedAt
-
-        // Consumo de un solo uso POR KILL: decrementa (elimina al llegar a 0) y
-        // devuelve true sólo dentro del TTL; una entrada caducada se elimina
-        // ENTERA y devuelve false.
-        public static bool TryConsumeWatchdogKillMark(int streamId, DateTime nowUtc)
+        public static void MarkWatchdogKill(int streamId, int pid, DateTime nowUtc)
         {
-            while (_watchdogKillMarks.TryGetValue(streamId, out var mark))
+            // Barrido oportunista: las marcas huérfanas (PIDs rogue, cuyo exit no
+            // pasa por LanzarProcesoFfmpeg) no se consumen nunca — purgarlas aquí
+            // evita crecimiento sin límite. El diccionario es minúsculo (una
+            // entrada por kill reciente), el scan es barato.
+            foreach (var entry in _watchdogKillMarks)
             {
-                if (nowUtc - mark.markedAt > _watchdogKillMarkTtl)
-                {
-                    _watchdogKillMarks.TryRemove(KeyValuePair.Create(streamId, mark));
-                    return false;
-                }
-
-                if (mark.count <= 1
-                        ? _watchdogKillMarks.TryRemove(KeyValuePair.Create(streamId, mark))
-                        : _watchdogKillMarks.TryUpdate(streamId, (mark.count - 1, mark.markedAt), mark))
-                {
-                    return true;
-                }
-                // Carrera con otro Mark/Consume/Retract: reintentar sobre el valor fresco.
+                if (nowUtc - entry.Value > _watchdogKillMarkTtl)
+                    _watchdogKillMarks.TryRemove(entry);
             }
 
-            return false;
+            _watchdogKillMarks[(streamId, pid)] = nowUtc;
         }
 
-        public static void RetractWatchdogKillMark(int streamId) =>
-            RetractWatchdogKillMark(streamId, DateTime.UtcNow);
+        // Consumo de un solo uso, por PID exacto: TryRemove SIEMPRE quita la marca
+        // (fresca o caducada); sólo devuelve true si además estaba dentro del TTL.
+        public static bool TryConsumeWatchdogKillMark(int streamId, int pid, DateTime nowUtc) =>
+            _watchdogKillMarks.TryRemove((streamId, pid), out var markedAt)
+            && nowUtc - markedAt <= _watchdogKillMarkTtl;
 
         // Retiro de una marca cuyo kill NO se entregó (Kill() lanzó, o el PID ya
-        // había salido): decrementa sin "consumir". Mantiene el invariante
-        // marcas vivas == kills entregados.
-        public static void RetractWatchdogKillMark(int streamId, DateTime nowUtc)
-        {
-            while (_watchdogKillMarks.TryGetValue(streamId, out var mark))
-            {
-                if (nowUtc - mark.markedAt > _watchdogKillMarkTtl)
-                {
-                    _watchdogKillMarks.TryRemove(KeyValuePair.Create(streamId, mark));
-                    return;
-                }
-
-                if (mark.count <= 1
-                        ? _watchdogKillMarks.TryRemove(KeyValuePair.Create(streamId, mark))
-                        : _watchdogKillMarks.TryUpdate(streamId, (mark.count - 1, mark.markedAt), mark))
-                {
-                    return;
-                }
-            }
-        }
+        // había salido): mantiene el invariante marcas vivas == kills entregados.
+        public static void RetractWatchdogKillMark(int streamId, int pid) =>
+            _watchdogKillMarks.TryRemove((streamId, pid), out _);
 
         // ---- Decisión de reintento de SupervisarStream (pura, unit-testeable) ----
 
@@ -145,24 +114,28 @@ namespace ticolinea.stream.service.Services
         public readonly record struct RetryDecision(RetryKind Kind, int NewRetryCount, int BaseDelaySeconds);
 
         // Dado un exit != 0: ¿cuenta contra el presupuesto, cuánto esperar, o parar?
+        // - Reset por corrida estable PRIMERO, y aplica a AMBAS ramas: un proceso
+        //   que corrió sano ≥ StableRuntimeResetSeconds antes de caer (o de ser
+        //   matado por el watchdog) no debe conservar contadores históricos — el
+        //   próximo fallo es un PRIMER fallo, no el N-ésimo. Sin esto retryCount
+        //   se acumulaba de por vida — sólo exit 0 lo reseteaba y un canal en vivo
+        //   sano nunca sale con 0 — así que 10 fallos orgánicos repartidos en
+        //   semanas (cada uno recuperado) detenían la supervisión permanentemente;
+        //   y un kill de watchdog tras horas sanos preservaba el 9 histórico.
         // - watchdogKill: NO incrementa — el watchdog ya gasta su propio presupuesto
         //   (WatchdogPolicy) por cada kill; contarlo aquí también convertía reinicios
         //   correctivos en sentencia de muerte del canal.
-        // - runtimeSeconds >= StableRuntimeResetSeconds: el proceso corrió sano un
-        //   buen rato antes de caer ⇒ resetear ANTES de incrementar (es un primer
-        //   fallo, no el N-ésimo). Sin esto retryCount se acumulaba de por vida —
-        //   sólo exit 0 lo reseteaba y un canal en vivo sano nunca sale con 0 —
-        //   así que 10 fallos orgánicos repartidos en semanas (cada uno recuperado)
-        //   detenían la supervisión permanentemente.
         // El tope de MaxSupervisionRetries queda así reservado para fallos genuinos
         // RÁPIDOS y CONSECUTIVOS (con el circuit breaker también en juego): parada
         // final de seguridad aceptable.
         public static RetryDecision DecideRetry(bool watchdogKill, double runtimeSeconds, int currentRetryCount)
         {
-            if (watchdogKill)
-                return new RetryDecision(RetryKind.RelaunchAfterWatchdogKill, currentRetryCount, WatchdogRelaunchDelaySeconds);
+            int count = runtimeSeconds >= StableRuntimeResetSeconds ? 0 : currentRetryCount;
 
-            int newCount = (runtimeSeconds >= StableRuntimeResetSeconds ? 0 : currentRetryCount) + 1;
+            if (watchdogKill)
+                return new RetryDecision(RetryKind.RelaunchAfterWatchdogKill, count, WatchdogRelaunchDelaySeconds);
+
+            int newCount = count + 1;
             if (newCount >= MaxSupervisionRetries)
                 return new RetryDecision(RetryKind.StopSupervision, newCount, 0);
 
@@ -172,12 +145,16 @@ namespace ticolinea.stream.service.Services
             return new RetryDecision(RetryKind.BackoffAndRetry, newCount, delay);
         }
 
-        // Resultado de una corrida completa de ffmpeg: el exit code y si ese exit
-        // fue provocado por un kill intencional del watchdog. La clasificación sale
-        // del ÚNICO consumo de la marca (TryConsumeWatchdogKillMark) en el manejo
-        // del exit: ese consumo alimenta dos usos — saltar _failureTracker y esta
+        // Resultado de una corrida completa de ffmpeg: el exit code, si ese exit
+        // fue provocado por un kill intencional del watchdog, y CUÁNDO arrancó de
+        // verdad el proceso (StartedCommandEvent; null si nunca llegó a arrancar —
+        // guard, breaker, o fallo antes del start). SupervisarStream mide el
+        // runtime desde StartedAtUtc, no desde antes del await: las esperas de
+        // semáforo/intervalo mínimo no son "ejecución estable". La clasificación
+        // WatchdogKill sale del ÚNICO consumo de la marca del PID exacto que
+        // salió: ese consumo alimenta dos usos — saltar _failureTracker y esta
         // señal para que SupervisarStream no gaste presupuesto de reintentos.
-        private readonly record struct FfmpegExitResult(int ExitCode, bool WatchdogKill);
+        private readonly record struct FfmpegExitResult(int ExitCode, bool WatchdogKill, DateTime? StartedAtUtc);
 
         private class ProbeInfo
         {
@@ -275,11 +252,6 @@ namespace ticolinea.stream.service.Services
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                // Fuera del try: el catch también mide cuánto corrió esta iteración.
-                // Nota: incluye la espera de semáforo/intervalo mínimo dentro de
-                // LanzarProcesoFfmpeg (<12s + espera de semáforo), ruido aceptable
-                // frente al umbral de 300s.
-                var launchedAtUtc = DateTime.UtcNow;
                 try
                 {
                     _logger.Debug($"Iniciando/reiniciando stream {stream.StreamId}... (intento {retryCount + 1})");
@@ -293,9 +265,15 @@ namespace ticolinea.stream.service.Services
 
                     if (result.ExitCode != 0)
                     {
-                        double runtimeSeconds = (DateTime.UtcNow - launchedAtUtc).TotalSeconds;
+                        // Runtime desde el arranque REAL de ffmpeg (StartedCommandEvent):
+                        // las esperas de semáforo/intervalo mínimo/breaker dentro de
+                        // LanzarProcesoFfmpeg no cuentan como ejecución estable. Sin
+                        // arranque confirmado → 0: nunca califica para el reset.
+                        double runtimeSeconds = result.StartedAtUtc is DateTime startedAt
+                            ? (DateTime.UtcNow - startedAt).TotalSeconds
+                            : 0;
                         var decision = DecideRetry(result.WatchdogKill, runtimeSeconds, retryCount);
-                        if (!result.WatchdogKill && decision.NewRetryCount == 1 && retryCount > 1)
+                        if (decision.NewRetryCount < retryCount)
                         {
                             _logger.Debug($"Stream {stream.StreamId}: contador de reintentos reseteado tras {runtimeSeconds:F0}s de ejecución estable.");
                         }
@@ -352,12 +330,12 @@ namespace ticolinea.stream.service.Services
                 {
                     _logger.Error($"Error inesperado en supervisión del stream {stream.StreamId}: {ex.Message}", ex);
 
-                    // Mismo presupuesto que un exit != 0 genuino (incluye el reset por
-                    // corrida estable); el delay fijo corto es el histórico de esta ruta.
-                    var decision = DecideRetry(
-                        watchdogKill: false,
-                        (DateTime.UtcNow - launchedAtUtc).TotalSeconds,
-                        retryCount);
+                    // Mismo presupuesto que un exit != 0 genuino, pero SIN reset por
+                    // corrida estable: al escapar la excepción no hay StartedAtUtc que
+                    // confirme cuánto corrió realmente ffmpeg — runtime 0 es lo
+                    // conservador (una espera larga en cola no debe "perdonar" fallos).
+                    // El delay fijo corto es el histórico de esta ruta.
+                    var decision = DecideRetry(watchdogKill: false, runtimeSeconds: 0, retryCount);
                     retryCount = decision.NewRetryCount;
 
                     if (decision.Kind == RetryKind.StopSupervision)
@@ -386,7 +364,7 @@ namespace ticolinea.stream.service.Services
             if (!StreamExecutionGuard.CanStartFFmpegProcesses())
             {
                 _logger.Warn($"FFmpeg processes disabled - cannot launch FFmpeg for stream {stream.StreamId}");
-                return new FfmpegExitResult(-1, false); // Return error code to indicate failure
+                return new FfmpegExitResult(-1, false, null); // Return error code to indicate failure
             }
 
             var now = DateTime.UtcNow;
@@ -396,7 +374,7 @@ namespace ticolinea.stream.service.Services
                 {
                     var remainingTime = _circuitBreakerTimeout - (now - failureInfo.lastFailure);
                     _logger.Warn($"Stream {stream.StreamId}: Circuit breaker active, skipping restart for {remainingTime.TotalMinutes:F1} more minutes");
-                    return new FfmpegExitResult(-1, false);
+                    return new FfmpegExitResult(-1, false, null);
                 }
                 else if (now - failureInfo.lastFailure >= _circuitBreakerTimeout)
                 {
@@ -424,6 +402,7 @@ namespace ticolinea.stream.service.Services
             bool processStarted = false;
             bool startupSemaphoreReleased = false;
             bool wasCancelled = false;
+            DateTime? startedAtUtc = null;
             
             try
             {
@@ -525,6 +504,9 @@ namespace ticolinea.stream.service.Services
                         case StartedCommandEvent started:
                             processId = started.ProcessId;
                             processStarted = true;
+                            // Arranque REAL de ffmpeg: base del runtime que decide el
+                            // reset por corrida estable en SupervisarStream/DecideRetry.
+                            startedAtUtc = DateTime.UtcNow;
                             _restartCounts.AddOrUpdate(stream.StreamId, 1, (_, n) => n + 1);
                             if (!startupSemaphoreReleased)
                             {
@@ -608,10 +590,14 @@ namespace ticolinea.stream.service.Services
             if (!wasCancelled && exitCode != 0)
             {
                 var failureTime = DateTime.UtcNow;
-                // ÚNICO consumo de la marca: alimenta dos usos — saltar el circuit
-                // breaker aquí y la clasificación que SupervisarStream usa para no
-                // gastar presupuesto de reintentos (FfmpegExitResult.WatchdogKill).
-                watchdogKill = TryConsumeWatchdogKillMark(stream.StreamId, failureTime);
+                // ÚNICO consumo de la marca, del PID EXACTO que salió: alimenta dos
+                // usos — saltar el circuit breaker aquí y la clasificación que
+                // SupervisarStream usa para no gastar presupuesto de reintentos
+                // (FfmpegExitResult.WatchdogKill). Una marca de un PID rogue tiene
+                // otra clave y no puede consumirse aquí. Sin arranque (processId
+                // -1) no hay marca posible: fue fallo de lanzamiento.
+                watchdogKill = processStarted
+                    && TryConsumeWatchdogKillMark(stream.StreamId, processId, failureTime);
                 if (watchdogKill)
                 {
                     // Kill intencional del watchdog: el relanzo supervisado sigue su
@@ -637,13 +623,16 @@ namespace ticolinea.stream.service.Services
             else if (!wasCancelled)
             {
                 _failureTracker.TryRemove(stream.StreamId, out _);
-                // Salida limpia: descartar TODAS las marcas de watchdog que quedaran
-                // vivas (carrera kill/exit-0) para que no enmascaren un fallo real
-                // posterior.
-                _watchdogKillMarks.TryRemove(stream.StreamId, out _);
+                // Salida limpia: descartar la marca de ESTE PID si quedó viva
+                // (carrera kill/exit-0) para que no enmascare un fallo real
+                // posterior. Marcas de otros PIDs las purga el barrido por TTL.
+                if (processStarted)
+                {
+                    _watchdogKillMarks.TryRemove((stream.StreamId, processId), out _);
+                }
             }
 
-            return new FfmpegExitResult(exitCode, watchdogKill);
+            return new FfmpegExitResult(exitCode, watchdogKill, startedAtUtc);
         }
 
         private static void CleanupStreamState(int streamId)
@@ -652,7 +641,10 @@ namespace ticolinea.stream.service.Services
             _failureTracker.TryRemove(streamId, out _);
             _lastLogTime.TryRemove(streamId, out _);
             _lastBufferAlert.TryRemove(streamId, out _);
-            _watchdogKillMarks.TryRemove(streamId, out _);
+            foreach (var key in _watchdogKillMarks.Keys.Where(k => k.streamId == streamId).ToList())
+            {
+                _watchdogKillMarks.TryRemove(key, out _);
+            }
         }
 
         private static bool ShouldLogError(int streamId, string errorText)

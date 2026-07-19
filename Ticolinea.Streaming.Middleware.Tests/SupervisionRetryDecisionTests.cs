@@ -6,11 +6,16 @@ namespace Ticolinea.Streaming.Middleware.Tests;
 
 // StreamingService.DecideRetry — the pure decision core of SupervisarStream's
 // retry loop ("given exitCode != 0: watchdogKill, runtimeSeconds,
-// currentRetryCount → new retryCount / delay class"). Extracted so the two
-// round-2 fixes are testable without a real ffmpeg:
-//  a) a watchdog kill never consumes the supervisor retry budget, and
+// currentRetryCount → new retryCount / delay class"). Extracted so the fixes
+// are testable without a real ffmpeg:
+//  a) a watchdog kill never consumes the supervisor retry budget,
 //  b) a failure after a long stable run counts as a FIRST failure — the budget
-//     is no longer a lifetime death sentence.
+//     is no longer a lifetime death sentence, and
+//  c) the stable-runtime reset applies to the watchdog branch too: a kill after
+//     hours of healthy running clears historical counts instead of preserving
+//     them for the next organic failure to trip the stop.
+// runtimeSeconds is measured from the REAL ffmpeg start (StartedCommandEvent),
+// never from before the queue/semaphore waits.
 public class SupervisionRetryDecisionTests
 {
     // ---------- watchdog kill: corrective relaunch, budget untouched ----------
@@ -19,7 +24,7 @@ public class SupervisionRetryDecisionTests
     [InlineData(0)]
     [InlineData(4)]
     [InlineData(9)] // one short of the cap: a watchdog kill must NOT stop supervision
-    public void Watchdog_kill_never_consumes_the_retry_budget(int currentRetryCount)
+    public void Watchdog_kill_after_unstable_run_preserves_the_count(int currentRetryCount)
     {
         var decision = StreamingService.DecideRetry(
             watchdogKill: true, runtimeSeconds: 30, currentRetryCount);
@@ -30,11 +35,24 @@ public class SupervisionRetryDecisionTests
     }
 
     [Fact]
+    public void Watchdog_kill_after_stable_run_clears_the_historical_count()
+    {
+        // Killed after hours of healthy output: preserving a historical 9 would
+        // let the next rapid organic failure hit 10 and stop supervision.
+        var decision = StreamingService.DecideRetry(
+            watchdogKill: true, runtimeSeconds: 3600, currentRetryCount: 9);
+
+        decision.Kind.Should().Be(StreamingService.RetryKind.RelaunchAfterWatchdogKill);
+        decision.NewRetryCount.Should().Be(0);
+        decision.BaseDelaySeconds.Should().Be(StreamingService.WatchdogRelaunchDelaySeconds);
+    }
+
+    [Fact]
     public void Watchdog_kill_uses_short_corrective_delay_not_backoff()
     {
         // Even with a high retry count the relaunch is fast: the 12s minimum
         // restart interval inside LanzarProcesoFfmpeg is the storm protection.
-        var decision = StreamingService.DecideRetry(true, 600, 8);
+        var decision = StreamingService.DecideRetry(true, 30, 8);
 
         decision.BaseDelaySeconds.Should().Be(2);
         decision.Kind.Should().Be(StreamingService.RetryKind.RelaunchAfterWatchdogKill);

@@ -396,18 +396,18 @@ namespace ticolinea.stream.service
         // supervisado normal (LanzarProcesoFfmpeg): el circuit breaker conserva su
         // historial y aplican backoff + intervalo mínimo. El kill en sí NO cuenta
         // como fallo del breaker ni del contador de reintentos: se marca vía
-        // StreamingService.MarkWatchdogKill justo antes de CADA Kill() que
-        // realmente se intenta (la marca es un contador — pgrep puede devolver
-        // varios PIDs), y el manejo del exit consume UNA marca por exit. Si el
-        // Kill() lanza (o el PID resultó ya muerto), la marca se retira
-        // (RetractWatchdogKillMark): marcas vivas == kills entregados. Sólo el
-        // exit del proceso SUPERVISADO pasa por ese manejador, así que las marcas
-        // de PIDs duplicados/rogue quedan huérfanas — el TTL de 60s las purga sin
-        // que puedan consumirse. El watchdog ya tiene su propio presupuesto
-        // (WatchdogPolicy) y sin la marca 3 kills en <8 min disparaban el breaker
-        // y dejaban el canal caído. Tampoco se toca la BD: el ExitedCommandEvent
-        // ya dispara ActualizarCanalEstado y el relanzo ActualizaInfoCanal, igual
-        // que en cualquier caída de ffmpeg.
+        // StreamingService.MarkWatchdogKill(streamId, pid) justo antes de CADA
+        // Kill() que realmente se intenta — la marca está ligada al PID matado
+        // (pgrep puede devolver varios: el supervisado y duplicados rogue) y el
+        // manejo del exit sólo consume la marca del PID exacto que salió, así una
+        // marca de un PID rogue jamás clasifica un fallo real como kill del
+        // watchdog. Si el Kill() lanza (o el PID resultó ya muerto), la marca se
+        // retira (RetractWatchdogKillMark): marcas vivas == kills entregados; las
+        // huérfanas de PIDs rogue las purga el barrido por TTL de 60s. El watchdog
+        // ya tiene su propio presupuesto (WatchdogPolicy) y sin la marca 3 kills
+        // en <8 min disparaban el breaker y dejaban el canal caído. Tampoco se
+        // toca la BD: el ExitedCommandEvent ya dispara ActualizarCanalEstado y el
+        // relanzo ActualizaInfoCanal, igual que en cualquier caída de ffmpeg.
         public static async Task<bool> MatarProcesoParaWatchdog(int streamId)
         {
             bool killedAny = false;
@@ -430,9 +430,10 @@ namespace ticolinea.stream.service
                             var proc = Process.GetProcessById(pid);
                             if (proc.HasExited) continue;
 
-                            // Marca inmediatamente ANTES de cada kill intentado:
-                            // el exit != 0 resultante no debe contar como fallo.
-                            StreamingService.MarkWatchdogKill(streamId);
+                            // Marca inmediatamente ANTES de cada kill intentado,
+                            // ligada a ESTE pid: el exit != 0 resultante no debe
+                            // contar como fallo.
+                            StreamingService.MarkWatchdogKill(streamId, pid);
                             try
                             {
                                 proc.Kill(true);
@@ -441,7 +442,7 @@ namespace ticolinea.stream.service
                             {
                                 // El kill NO se entregó: retirar la marca para que
                                 // no enmascare un fallo real dentro del TTL.
-                                StreamingService.RetractWatchdogKillMark(streamId);
+                                StreamingService.RetractWatchdogKillMark(streamId, pid);
                                 throw;
                             }
                             killedAny = true;
