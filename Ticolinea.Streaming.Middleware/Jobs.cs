@@ -433,6 +433,19 @@ namespace ticolinea.stream.service
                             // Marca inmediatamente ANTES de cada kill intentado,
                             // ligada a ESTE pid: el exit != 0 resultante no debe
                             // contar como fallo.
+                            //
+                            // CARRERA ACEPTADA (no "arreglar" con locks): si el proceso
+                            // sale orgánicamente en los microsegundos entre esta marca y
+                            // el Kill(), su exit handler consume la marca y ese fallo real
+                            // se clasifica como kill del watchdog — UN fallo no contado,
+                            // una vez, en un proceso que el watchdog ya había condenado
+                            // (2 chequeos stale + double-read). El siguiente fallo
+                            // orgánico cuenta normal; no produce canal detenido ni loop.
+                            // Cerrarla exigiría sincronizar el exit handler (camino
+                            // caliente de TODOS los exits) con este kill — costo y
+                            // superficie de deadlock injustificados para una atribución
+                            // casi-correcta. Decisión: continuidad del canal por encima
+                            // de contabilidad perfecta (revisión 2026-07-18).
                             StreamingService.MarkWatchdogKill(streamId, pid);
                             try
                             {
