@@ -13,6 +13,9 @@
    tv.play-latino.com:27701 (restream source) and tv.play-latino.com:27702 (panel API) is unreachable.
 5. `./deploy/tico ports <slug>` — send the firewall request to the client.
 6. `./deploy/tico bootstrap <slug> [--schema path/to/schema.sql]` — provision. Safe to re-run.
+   Bootstrap also installs a nightly service restart (systemd timer, 03:00 America/Costa_Rica —
+   dead-audience window; boot sync refreshes the catalog as a side effect). Disable per node with
+   `sudo systemctl disable --now ticolinea-restart.timer` if a client objects.
    `--schema` is optional; without it, `deploy` applies the schema shipped in the release artifact.
    Note: re-running `bootstrap` rotates the DB password (it resets the MariaDB user, the on-box
    secret, and the rendered appsettings in one consistent run). After a re-run, redeploy/restart

@@ -184,6 +184,40 @@ systemctl enable ticolinea-streaming
 REMOTE
 }
 
+_setup_nightly_restart() {
+  log "Installing nightly-restart timer (03:00 America/Costa_Rica, idempotent)"
+  # A service can't cleanly restart itself from inside (Hangfire would be
+  # killing its own process) — systemd is the supervisor, so systemd owns the
+  # schedule. Explicit timezone: boxes run UTC, but the restart must land in
+  # the dead-audience window in Costa Rica regardless.
+  remote_sudo 'bash -s' <<'REMOTE'
+set -euo pipefail
+cat > /etc/systemd/system/ticolinea-restart.service <<'EOF'
+[Unit]
+Description=Nightly restart of ticolinea-streaming
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart ticolinea-streaming.service
+EOF
+cat > /etc/systemd/system/ticolinea-restart.timer <<'EOF'
+[Unit]
+Description=Restart ticolinea-streaming daily at 03:00 Costa Rica
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 America/Costa_Rica
+# If the box was down at 03:00, do NOT catch-up-restart at a random
+# time after boot — skip that day.
+Persistent=false
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now ticolinea-restart.timer
+REMOTE
+}
+
 _apply_schema() {
   log "Applying schema.sql (idempotent). Provide with --schema or place at releases dir on deploy."
   local schema="${TICO_SCHEMA_FILE:-}"
@@ -209,6 +243,7 @@ cmd_bootstrap() {
   _create_user_and_dirs
   _setup_mariadb
   _render_and_upload_config
+  _setup_nightly_restart
   _apply_schema
   log "Bootstrap complete for $PROVIDER. Next: tico deploy $PROVIDER --tag <version>"
 }

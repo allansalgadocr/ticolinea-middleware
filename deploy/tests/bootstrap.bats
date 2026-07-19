@@ -123,3 +123,18 @@ _loopback_die_check() {
 @test "db password is generated locally with an alphanumeric charset" {
   grep -q 'DB_PASSWORD:=\$(LC_ALL=C tr -dc .A-Za-z0-9. </dev/urandom' "$TICO_ROOT/lib/commands/bootstrap.sh"
 }
+
+@test "_setup_nightly_restart installs the 03:00 Costa Rica timer over stdin" {
+  # The units go over a quoted heredoc (no local expansion needed) and must
+  # enable the timer immediately. Recorded via the mock runner's stdin capture.
+  load_lib common.sh 2>/dev/null || true
+  mock_runner_reset 2>/dev/null || { MOCK_CALLS=(); }
+  TICO_RUNNER=mock_runner
+  SSH_USER=u SSH_HOST=h
+  _setup_nightly_restart
+  local calls; calls="$(mock_calls_joined)"
+  echo "$calls" | grep -q 'OnCalendar=\*-\*-\* 03:00:00 America/Costa_Rica'
+  echo "$calls" | grep -q 'systemctl enable --now ticolinea-restart.timer'
+  echo "$calls" | grep -q 'ExecStart=/usr/bin/systemctl restart ticolinea-streaming.service'
+  echo "$calls" | grep -q 'Persistent=false'
+}
