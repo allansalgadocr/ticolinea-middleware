@@ -100,6 +100,10 @@ namespace ticolinea.stream.service.Services
         // El intervalo mínimo de 12s (_minRestartInterval) lo sigue aplicando
         // LanzarProcesoFfmpeg — este delay corto sólo evita un loop caliente.
         public const int WatchdogRelaunchDelaySeconds = 2;
+        // Espera cuando el lanzamiento fue RECHAZADO sin correr nada (breaker
+        // abierto / StreamExecutionGuard): se acota lo que reporte el breaker.
+        public const int BreakerWaitMinSeconds = 5;
+        public const int BreakerWaitMaxSeconds = 480;
 
         public enum RetryKind
         {
@@ -108,29 +112,54 @@ namespace ticolinea.stream.service.Services
             // Fallo genuino con presupuesto restante: backoff exponencial (el jitter lo aplica el caller).
             BackoffAndRetry,
             // MaxSupervisionRetries fallos genuinos consecutivos y rápidos: parada final de seguridad.
-            StopSupervision
+            StopSupervision,
+            // Lanzamiento rechazado sin correr ffmpeg — breaker abierto (o guard de
+            // ejecución deshabilitado, misma naturaleza: estado del nodo, no fallo
+            // del canal). Esperar y volver a intentar SIN mover ningún contador.
+            WaitForBreaker
         }
+
+        // Regla compartida del "reset por corrida estable": única fuente para el
+        // presupuesto de reintentos (DecideRetry) y para el registro del breaker
+        // (NextBreakerFailureCount) — las dos capas no pueden divergir.
+        private static bool IsStableRuntime(double runtimeSeconds) =>
+            runtimeSeconds >= StableRuntimeResetSeconds;
 
         public readonly record struct RetryDecision(RetryKind Kind, int NewRetryCount, int BaseDelaySeconds);
 
         // Dado un exit != 0: ¿cuenta contra el presupuesto, cuánto esperar, o parar?
-        // - Reset por corrida estable PRIMERO, y aplica a AMBAS ramas: un proceso
-        //   que corrió sano ≥ StableRuntimeResetSeconds antes de caer (o de ser
-        //   matado por el watchdog) no debe conservar contadores históricos — el
-        //   próximo fallo es un PRIMER fallo, no el N-ésimo. Sin esto retryCount
-        //   se acumulaba de por vida — sólo exit 0 lo reseteaba y un canal en vivo
-        //   sano nunca sale con 0 — así que 10 fallos orgánicos repartidos en
-        //   semanas (cada uno recuperado) detenían la supervisión permanentemente;
-        //   y un kill de watchdog tras horas sanos preservaba el 9 histórico.
+        // - breakerRetryAfterSeconds != null: el lanzamiento fue RECHAZADO sin
+        //   correr ffmpeg (breaker abierto / guard deshabilitado). No es un fallo
+        //   del canal: esperar lo que falte (acotado a [BreakerWaitMin/Max]) SIN
+        //   mover el contador — antes cada rechazo del breaker incrementaba
+        //   retryCount y una ventana de 8 min podía sembrar la parada permanente
+        //   con sus propios rechazos.
+        // - Reset por corrida estable PRIMERO, y aplica a AMBAS ramas restantes:
+        //   un proceso que corrió sano ≥ StableRuntimeResetSeconds antes de caer
+        //   (o de ser matado por el watchdog) no debe conservar contadores
+        //   históricos — el próximo fallo es un PRIMER fallo, no el N-ésimo. Sin
+        //   esto retryCount se acumulaba de por vida — sólo exit 0 lo reseteaba y
+        //   un canal en vivo sano nunca sale con 0 — así que 10 fallos orgánicos
+        //   repartidos en semanas (cada uno recuperado) detenían la supervisión
+        //   permanentemente; y un kill de watchdog tras horas sanos preservaba el
+        //   9 histórico.
         // - watchdogKill: NO incrementa — el watchdog ya gasta su propio presupuesto
         //   (WatchdogPolicy) por cada kill; contarlo aquí también convertía reinicios
         //   correctivos en sentencia de muerte del canal.
         // El tope de MaxSupervisionRetries queda así reservado para fallos genuinos
         // RÁPIDOS y CONSECUTIVOS (con el circuit breaker también en juego): parada
         // final de seguridad aceptable.
-        public static RetryDecision DecideRetry(bool watchdogKill, double runtimeSeconds, int currentRetryCount)
+        public static RetryDecision DecideRetry(
+            bool watchdogKill, double runtimeSeconds, int currentRetryCount,
+            double? breakerRetryAfterSeconds = null)
         {
-            int count = runtimeSeconds >= StableRuntimeResetSeconds ? 0 : currentRetryCount;
+            if (breakerRetryAfterSeconds is double retryAfter)
+            {
+                int wait = (int)Math.Clamp(retryAfter, BreakerWaitMinSeconds, BreakerWaitMaxSeconds);
+                return new RetryDecision(RetryKind.WaitForBreaker, currentRetryCount, wait);
+            }
+
+            int count = IsStableRuntime(runtimeSeconds) ? 0 : currentRetryCount;
 
             if (watchdogKill)
                 return new RetryDecision(RetryKind.RelaunchAfterWatchdogKill, count, WatchdogRelaunchDelaySeconds);
@@ -145,16 +174,33 @@ namespace ticolinea.stream.service.Services
             return new RetryDecision(RetryKind.BackoffAndRetry, newCount, delay);
         }
 
+        // El MISMO defecto de contador vitalicio existía una capa más abajo, en
+        // _failureTracker: sólo se limpiaba con exit 0 (nunca ocurre en un canal
+        // en vivo) o en el lanzamiento cuando habían pasado ≥8 min desde el
+        // último fallo — pero durante una corrida sana larga NO hay lanzamientos,
+        // así que una entrada rancia (failures=2 de la semana pasada) sobrevivía
+        // y el siguiente fallo orgánico la incrementaba con timestamp FRESCO: 3
+        // fallos orgánicos en la vida del canal, separados por horas de servicio
+        // sano, disparaban el breaker de 8 min. Regla compartida con DecideRetry
+        // vía IsStableRuntime: un fallo tras corrida estable se REGISTRA como
+        // primero (1), no se incrementa.
+        public static int NextBreakerFailureCount(double runtimeSeconds, int currentFailures) =>
+            IsStableRuntime(runtimeSeconds) ? 1 : currentFailures + 1;
+
         // Resultado de una corrida completa de ffmpeg: el exit code, si ese exit
-        // fue provocado por un kill intencional del watchdog, y CUÁNDO arrancó de
+        // fue provocado por un kill intencional del watchdog, CUÁNDO arrancó de
         // verdad el proceso (StartedCommandEvent; null si nunca llegó a arrancar —
-        // guard, breaker, o fallo antes del start). SupervisarStream mide el
-        // runtime desde StartedAtUtc, no desde antes del await: las esperas de
-        // semáforo/intervalo mínimo no son "ejecución estable". La clasificación
-        // WatchdogKill sale del ÚNICO consumo de la marca del PID exacto que
-        // salió: ese consumo alimenta dos usos — saltar _failureTracker y esta
-        // señal para que SupervisarStream no gaste presupuesto de reintentos.
-        private readonly record struct FfmpegExitResult(int ExitCode, bool WatchdogKill, DateTime? StartedAtUtc);
+        // guard, breaker, o fallo antes del start), y RetryAfter != null cuando el
+        // lanzamiento fue RECHAZADO sin correr nada (breaker abierto o guard
+        // deshabilitado): cuánto conviene esperar antes de reintentar, sin que
+        // cuente contra ningún presupuesto. SupervisarStream mide el runtime desde
+        // StartedAtUtc, no desde antes del await: las esperas de semáforo/intervalo
+        // mínimo no son "ejecución estable". La clasificación WatchdogKill sale del
+        // ÚNICO consumo de la marca del PID exacto que salió: ese consumo alimenta
+        // dos usos — saltar _failureTracker y esta señal para que SupervisarStream
+        // no gaste presupuesto de reintentos.
+        private readonly record struct FfmpegExitResult(
+            int ExitCode, bool WatchdogKill, DateTime? StartedAtUtc, TimeSpan? RetryAfter = null);
 
         private class ProbeInfo
         {
@@ -272,7 +318,9 @@ namespace ticolinea.stream.service.Services
                         double runtimeSeconds = result.StartedAtUtc is DateTime startedAt
                             ? (DateTime.UtcNow - startedAt).TotalSeconds
                             : 0;
-                        var decision = DecideRetry(result.WatchdogKill, runtimeSeconds, retryCount);
+                        var decision = DecideRetry(
+                            result.WatchdogKill, runtimeSeconds, retryCount,
+                            result.RetryAfter?.TotalSeconds);
                         if (decision.NewRetryCount < retryCount)
                         {
                             _logger.Debug($"Stream {stream.StreamId}: contador de reintentos reseteado tras {runtimeSeconds:F0}s de ejecución estable.");
@@ -286,7 +334,15 @@ namespace ticolinea.stream.service.Services
                             break;
                         }
 
-                        if (decision.Kind == RetryKind.RelaunchAfterWatchdogKill)
+                        if (decision.Kind == RetryKind.WaitForBreaker)
+                        {
+                            // Lanzamiento rechazado sin correr ffmpeg (breaker abierto /
+                            // guard deshabilitado): esperar sin consumir presupuesto —
+                            // ni retryCount ni _failureTracker se mueven por un rechazo.
+                            _logger.Debug($"Stream {stream.StreamId}: lanzamiento rechazado; reintento en {decision.BaseDelaySeconds}s sin consumir presupuesto.");
+                            await Task.Delay(TimeSpan.FromSeconds(decision.BaseDelaySeconds), cancellationToken);
+                        }
+                        else if (decision.Kind == RetryKind.RelaunchAfterWatchdogKill)
                         {
                             // Correctivo, no fallo: relanzo rápido sin backoff exponencial
                             // y sin gastar presupuesto. El intervalo mínimo de 12s lo
@@ -364,7 +420,9 @@ namespace ticolinea.stream.service.Services
             if (!StreamExecutionGuard.CanStartFFmpegProcesses())
             {
                 _logger.Warn($"FFmpeg processes disabled - cannot launch FFmpeg for stream {stream.StreamId}");
-                return new FfmpegExitResult(-1, false, null); // Return error code to indicate failure
+                // Estado del NODO (operador deshabilitó ffmpeg), no fallo del canal:
+                // espera fija sin consumir presupuesto de reintentos.
+                return new FfmpegExitResult(-1, false, null, TimeSpan.FromSeconds(30));
             }
 
             var now = DateTime.UtcNow;
@@ -374,7 +432,9 @@ namespace ticolinea.stream.service.Services
                 {
                     var remainingTime = _circuitBreakerTimeout - (now - failureInfo.lastFailure);
                     _logger.Warn($"Stream {stream.StreamId}: Circuit breaker active, skipping restart for {remainingTime.TotalMinutes:F1} more minutes");
-                    return new FfmpegExitResult(-1, false, null);
+                    // Rechazo del breaker, no fallo nuevo: informar cuánto falta para
+                    // que SupervisarStream espere SIN consumir presupuesto.
+                    return new FfmpegExitResult(-1, false, null, remainingTime);
                 }
                 else if (now - failureInfo.lastFailure >= _circuitBreakerTimeout)
                 {
@@ -608,9 +668,21 @@ namespace ticolinea.stream.service.Services
                 }
                 else
                 {
+                    // Mismo "reset por corrida estable" que DecideRetry (regla
+                    // compartida IsStableRuntime/NextBreakerFailureCount): sin esto,
+                    // una entrada rancia del tracker sobrevivía corridas sanas de
+                    // horas (la limpieza de ≥8 min sólo corre en el LANZAMIENTO, y
+                    // durante una corrida sana no hay lanzamientos) y cada fallo
+                    // orgánico la incrementaba con timestamp fresco — 3 fallos en
+                    // la vida del canal disparaban el breaker. Un fallo tras
+                    // corrida estable se registra como PRIMERO. La limpieza de
+                    // lanzamiento se conserva: cubre huecos que sí cruzan relanzos.
+                    double failureRuntimeSeconds = startedAtUtc is DateTime startedAtFailure
+                        ? (failureTime - startedAtFailure).TotalSeconds
+                        : 0;
                     _failureTracker.AddOrUpdate(stream.StreamId,
                         (1, failureTime),
-                        (_, existing) => (existing.failures + 1, failureTime)
+                        (_, existing) => (NextBreakerFailureCount(failureRuntimeSeconds, existing.failures), failureTime)
                     );
 
                     var currentFailures = _failureTracker[stream.StreamId].failures;
