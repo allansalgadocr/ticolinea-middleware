@@ -54,6 +54,49 @@ public static class StreamRestartHelper
         };
     }
 
+    // Conjunto de canales para start-all (AdminController): habilitado=1,
+    // es_bajodemanda=0, tipo=1 — SIN filtrar por iniciado, a diferencia de
+    // Jobs.ObtenerStreamsActivos ("deberían estar produciendo"): un start-all
+    // debe poder levantar canales habilitados que están detenidos (iniciado=0).
+    // Column list and mapping identical to LoadStream / ObtenerStreamsActivos.
+    public static async Task<List<StreamDb>> LoadEnabledStreams()
+    {
+        var streams = new List<StreamDb>();
+
+        await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
+        await cnn.OpenAsync();
+        await using var cmd = cnn.CreateCommand();
+        cmd.CommandText = @"SELECT fuente_stream, stream_id, probesize_ondemand, es_bajodemanda,
+                                   transcode_audio, intervalo, segmentos, framerate, transcode,
+                                   resolucion, bitrate, proceso_id, cgop, gop
+                            FROM streams_tl a
+                            INNER JOIN streams_info b ON a.id = b.stream_id
+                            WHERE habilitado = 1 AND es_bajodemanda = 0 AND tipo = 1;";
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            streams.Add(new StreamDb
+            {
+                Fuente = reader.GetString(0),
+                StreamId = reader.GetInt32(1),
+                ProbeSize = reader.GetInt32(2),
+                EsBajoDemanda = reader.GetInt32(3),
+                TranscodeAudio = reader.GetString(4),
+                Intervalo = reader.GetInt16(5),
+                Segmentos = reader.GetInt16(6),
+                Framerate = reader.GetInt32(7),
+                Transcode = reader.GetInt32(8),
+                Resolucion = reader.GetString(9),
+                Bitrate = reader.GetString(10),
+                ProcesoId = reader.GetInt32(11),
+                CGOP = reader.GetInt32(12),
+                GOP = reader.GetInt32(13)
+            });
+        }
+        return streams;
+    }
+
     // The restart body itself: live-status refresh, pre-kill, forced start,
     // streams_info/streams_tl updates. Returns whether the process came up.
     public static async Task<bool> RestartAsync(StreamDb stream)

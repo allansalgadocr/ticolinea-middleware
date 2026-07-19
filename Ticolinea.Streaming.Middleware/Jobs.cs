@@ -1250,7 +1250,10 @@ namespace ticolinea.stream.service
             return (cpu, ram, disk);
         }
 
-        private static async Task<double> ObtenerUsoDiscoCarpeta(string folderPath)
+        // Público: además de MonitorearRecursosSistema/ObtenerInfoSalud, el
+        // AdminController (/api/admin/info) reporta el uso del volumen de la
+        // carpeta de streams con esta MISMA métrica.
+        public static async Task<double> ObtenerUsoDiscoCarpeta(string folderPath)
         {
             try
             {
