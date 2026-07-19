@@ -120,6 +120,81 @@ setup() {
   [[ "$output" != *"missing: 1 2 3 4 5 6"* ]]
 }
 
+@test "verify keeps waiting while recovery is still climbing past the min window" {
+  # False-rollback incident: a 97-channel node ramps ~100 ffmpegs through a
+  # 20-slot startup semaphore (2-4 min), and the fixed 60s window rolled back
+  # a HEALTHY deploy while recovery was visibly climbing (0 -> 37/97). The
+  # window must extend on progress: min_tries=2 and stagnant=2 are both long
+  # exceeded here, but every attempt recovers one more channel, so verify must
+  # keep waiting and succeed when the set completes at attempt 6.
+  deploy_health() { echo 200; }
+  deploy_recovered_ids() {
+    local f="$BATS_TEST_TMPDIR/calls" n i=1
+    n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 ))
+    printf '%s' "$n" > "$f"
+    while [ "$i" -le "$n" ] && [ "$i" -le 6 ]; do printf '%s\n' "$i"; i=$((i+1)); done
+  }
+  TICO_VERIFY_MIN_TRIES=2 TICO_VERIFY_STAGNANT=2 TICO_VERIFY_TRIES=20
+  run deploy_verify "1 2 3 4 5 6"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/calls")" -eq 6 ]
+  # The log carries the trend so an operator can tell ramping from wedged.
+  [[ "$output" == *"(+1)"* ]]
+}
+
+@test "verify fails on stagnation: partial recovery that stops climbing" {
+  # Recovered stuck at {A} of {A B C}: progress on attempt 1 (0->1), then
+  # stagnant 1, 2 — at attempt 3 BOTH floors are crossed (min_tries=3,
+  # stagnant=2) and verify fails well before the cap of 100.
+  deploy_health() { echo 200; }
+  deploy_recovered_ids() {
+    local f="$BATS_TEST_TMPDIR/calls" n
+    n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 ))
+    printf '%s' "$n" > "$f"
+    printf 'A\n'
+  }
+  TICO_VERIFY_MIN_TRIES=3 TICO_VERIFY_STAGNANT=2 TICO_VERIFY_TRIES=100
+  run deploy_verify "A B C"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/calls")" -eq 3 ]
+  [[ "$output" == *"recovered=1/3"* ]]
+}
+
+@test "verify hard cap: a never-recovering node fails exactly at TICO_VERIFY_TRIES" {
+  # With stagnation effectively disabled (limit 999), the cap is the only
+  # bound left — a truly stuck deploy must still fail (and roll back), at
+  # exactly `tries` attempts, never spin forever.
+  deploy_health() { echo 200; }
+  deploy_recovered_ids() {
+    local f="$BATS_TEST_TMPDIR/calls" n
+    n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 ))
+    printf '%s' "$n" > "$f"
+    :
+  }
+  TICO_VERIFY_MIN_TRIES=1 TICO_VERIFY_STAGNANT=999 TICO_VERIFY_TRIES=4
+  run deploy_verify "A B"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/calls")" -eq 4 ]
+}
+
+@test "verify cap wins over min/stagnant: TRIES=1 runs exactly one attempt" {
+  # Backward-compat contract for the instant-test fixtures: TICO_VERIFY_TRIES=1
+  # must run exactly one attempt then fail, even while recovery is actively
+  # progressing (attempt 1 recovers A, which resets the stagnation counter —
+  # under min/stagnant rules alone the loop would keep going).
+  deploy_health() { echo 200; }
+  deploy_recovered_ids() {
+    local f="$BATS_TEST_TMPDIR/calls" n
+    n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 ))
+    printf '%s' "$n" > "$f"
+    printf 'A\n'
+  }
+  TICO_VERIFY_TRIES=1 TICO_VERIFY_MIN_TRIES=12 TICO_VERIFY_STAGNANT=6
+  run deploy_verify "A B"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/calls")" -eq 1 ]
+}
+
 @test "deploy_missing_ids matches whole IDs, never substrings" {
   # ID 5 must not be satisfied by ID 55's segments (or vice versa).
   run deploy_missing_ids "5 55" "55"
@@ -386,4 +461,34 @@ setup() {
   grep -q "swap did not take" "$BATS_TEST_TMPDIR/err"
   # Exactly one ln -sfn (the attempted swap) — no second one for a rollback.
   [ "$(mock_calls_joined | grep -c 'ln -sfn')" -eq 1 ]
+}
+
+@test "verify zero-phase: no progress for a while then a late climb still succeeds" {
+  # Production edge: a 97-channel node showed ELEVEN zero attempts (boot +
+  # launch waves) before the first recovery landed at ~60s. Plain min+stagnant
+  # would fail at exactly the old window; the zero phase gets its own floor.
+  deploy_health() { echo 200; }
+  count_file="$BATS_TEST_TMPDIR/probes"; : > "$count_file"
+  deploy_recovered_ids() {
+    echo x >> "$count_file"
+    local n; n="$(wc -l < "$count_file" | tr -d ' ')"
+    if [ "$n" -le 3 ]; then :; elif [ "$n" -eq 4 ]; then printf 'A\n'; else printf 'A\nB\nC\n'; fi
+  }
+  TICO_VERIFY_TRIES=20 TICO_VERIFY_SLEEP=0 TICO_VERIFY_MIN_TRIES=2 \
+  TICO_VERIFY_STAGNANT=2 TICO_VERIFY_ZERO_TRIES=8 \
+  run deploy_verify "A B C"
+  [ "$status" -eq 0 ]
+  # 5 probes: 3 zero, 1 partial, 1 full
+  [ "$(wc -l < "$count_file" | tr -d ' ')" -eq 5 ]
+}
+
+@test "verify zero-phase: never leaving zero fails exactly at TICO_VERIFY_ZERO_TRIES" {
+  deploy_health() { echo 200; }
+  count_file="$BATS_TEST_TMPDIR/zprobes"; : > "$count_file"
+  deploy_recovered_ids() { echo x >> "$count_file"; :; }
+  TICO_VERIFY_TRIES=50 TICO_VERIFY_SLEEP=0 TICO_VERIFY_MIN_TRIES=2 \
+  TICO_VERIFY_STAGNANT=2 TICO_VERIFY_ZERO_TRIES=3 \
+  run deploy_verify "A B C"
+  [ "$status" -ne 0 ]
+  [ "$(wc -l < "$count_file" | tr -d ' ')" -eq 3 ]
 }

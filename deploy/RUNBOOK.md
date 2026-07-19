@@ -54,11 +54,30 @@
 ./deploy/tico deploy <slug> --tag <version> --artifact <dir>
 ```
 
-- The tool stages, swaps, restarts, and verifies streams recovered within ~60s,
-  logging `verify: health=... recovered=<n>/<baseline> missing: ...` per attempt
-  (the missing list is capped at 5 IDs). On failure it auto-rolls-back
-  (a first deploy has nothing to roll back to — the new release stays in place,
-  reported as unverified). Viewers absorb ~30s (the HLS buffer) if it recovers in time.
+- The tool stages, swaps, restarts, and verifies stream recovery with a
+  **progress-aware window**: it keeps waiting while the recovered count is still
+  climbing (a ~100-channel node restarts every ffmpeg through a 20-slot startup
+  gate, so full ramp is 2–4 min) and fails only once recovery stalls. Each attempt
+  logs `verify: health=... recovered=<n>/<baseline> (+<new>) missing: ...
+  (attempt a/cap, stagnant s/limit)` — the missing list is capped at 5 IDs, and
+  the `(+N)`/stagnant trend tells you ramping from wedged. On failure it
+  auto-rolls-back (a first deploy has nothing to roll back to — the new release
+  stays in place, reported as unverified). Viewers absorb ~30s (the HLS buffer)
+  if it recovers in time.
+
+### Verify knobs (env vars — defaults are right for every known node)
+
+| Var | Default | Meaning |
+|---|---|---|
+| `TICO_VERIFY_SLEEP` | 5 | Seconds between attempts. |
+| `TICO_VERIFY_MIN_TRIES` | 12 | Attempts that must elapse before any failure (the 60s floor). |
+| `TICO_VERIFY_STAGNANT` | 6 | Consecutive no-progress attempts (30s) that, past the floor, end the wait. Progress = recovered count strictly above the best seen so far; health != 200 counts as no progress. |
+- `TICO_VERIFY_ZERO_TRIES` (default 24 = 2 min): while NOTHING has recovered yet the node is booting+launching, not stalled — the stall rule only applies after the first recovered channel.
+| `TICO_VERIFY_TRIES` | 120 | Hard cap on attempts (10 min at 5s) — a truly stuck deploy still rolls back. |
+
+  Manual widening for large nodes (the old `TICO_VERIFY_TRIES=60 ./deploy/tico deploy ...`
+  workaround) is no longer needed: the window extends itself while recovery is climbing,
+  and success exits early, so a healthy deploy never waits longer than its actual ramp.
 - Verification is **per-channel**: every stream ID that had a segment in the minute
   before the swap must write at least one segment **after** the restart (a marker
   file is touched right after `systemctl restart`; `find -newer` gates on it).

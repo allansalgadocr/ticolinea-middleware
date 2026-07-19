@@ -18,5 +18,8 @@ cmd_status() {
   # shell expansion. Escaped so it survives this file's own shellcheck pass.
   # shellcheck disable=SC2016
   echo "uptime(s):     $(remote 'systemctl show ticolinea-streaming -p ActiveEnterTimestampMonotonic --value 2>/dev/null | awk "{print int(\$1/1000000)}"')"
-  echo "fresh streams: $(remote_fresh_stream_count)"
+  # Distinct channels with a segment in the last minute = channels actually
+  # producing. The raw file count (~10 segs/min/channel) reads as "983" on a
+  # 98-channel node and confused operators into thinking something was wrong.
+  echo "producing:     $(remote_fresh_stream_ids | grep -c . | tr -d ' ') channels ($(remote_fresh_stream_count) segments/min)"
 }

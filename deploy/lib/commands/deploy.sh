@@ -51,16 +51,31 @@ deploy_verify() { # baseline_ids (whitespace-separated; empty => health-only)
   # old zero-count rule, now set-based. The verify contract remains "streams
   # recovered to baseline", never "streams appeared".
   local baseline="${1:-}"
-  # Injectable so tests run instantly; production keeps the ~60s HLS window
-  # (12 tries * 5s) unless the caller overrides these.
-  local tries="${TICO_VERIFY_TRIES:-12}" interval="${TICO_VERIFY_SLEEP:-5}"
-  local attempt=0 code recovered missing total miss_n shown
+  # PROGRESS-AWARE WINDOW, not wall-clock. The old fixed 12x5s window rolled
+  # back a HEALTHY 97-channel deploy: the node restarts every ffmpeg through a
+  # 20-slot startup semaphore (connect+probe+first segment each), so full ramp
+  # is 2-4 min — recovery was visibly climbing (0 -> 37/97) when the 60s
+  # window expired. The window must extend while recovery is still making
+  # progress and close only once it stalls:
+  #   - succeed the moment every baseline ID has recovered (as before);
+  #   - fail only when BOTH (a) at least min_tries attempts elapsed (the old
+  #     60s floor) AND (b) the last stagnant_limit attempts brought no NEW
+  #     recovery (health != 200 counts as a no-progress attempt);
+  #   - tries is now a hard CAP (default 120 = 10 min at 5s), so a truly
+  #     stuck deploy still rolls back — just patiently. Early-exit on success
+  #     means a healthy deploy never waits longer than its actual ramp.
+  # All knobs injectable so tests run instantly and operators can override.
+  local tries="${TICO_VERIFY_TRIES:-120}" interval="${TICO_VERIFY_SLEEP:-5}"
+  local min_tries="${TICO_VERIFY_MIN_TRIES:-12}" stagnant_limit="${TICO_VERIFY_STAGNANT:-6}"
+  local zero_tries="${TICO_VERIFY_ZERO_TRIES:-24}"
+  local attempt=0 best=0 stagnant=0 delta code recovered recovered_n missing total miss_n shown
   # shellcheck disable=SC2086 # intentional word-split to count baseline IDs
   set -- $baseline
   total=$#
   while [ "$attempt" -lt "$tries" ]; do
     code="$(deploy_health)"
     missing=""
+    recovered_n=""
     if [ "$code" = "200" ]; then
       [ "$total" -eq 0 ] && return 0
       # Per-channel, marker-based: EVERY baseline ID must have written at
@@ -72,19 +87,46 @@ deploy_verify() { # baseline_ids (whitespace-separated; empty => health-only)
       recovered="$(deploy_recovered_ids)"
       missing="$(deploy_missing_ids "$baseline" "$recovered")"
       [ -z "$missing" ] && return 0
+      miss_n="$(printf '%s\n' "$missing" | grep -c .)"
+      recovered_n=$((total - miss_n))
     fi
     attempt=$((attempt + 1))
-    # Without this the verify window is a 60s silence ending in a bare failure —
+    # Progress = recovered count STRICTLY above the best seen so far. A merely
+    # non-empty recovered set is not progress — a node stuck at 37/97 must
+    # stagnate out, not wait for the cap.
+    if [ -n "$recovered_n" ] && [ "$recovered_n" -gt "$best" ]; then
+      delta=$((recovered_n - best))
+      best="$recovered_n"
+      stagnant=0
+    else
+      delta=0
+      stagnant=$((stagnant + 1))
+    fi
+    # Without this the verify window is a long silence ending in a bare failure —
     # indistinguishable from a hang, and no clue whether health or recovery lost.
+    # The (+N) trend and the stagnant counter tell the operator whether the node
+    # is ramping (deltas landing, stagnant resetting) or wedged (stagnant climbing).
     if [ "$code" = "200" ] && [ -n "$missing" ]; then
-      miss_n="$(printf '%s\n' "$missing" | grep -c .)"
       # Cap the missing list so one bad deploy of a large node can't flood the log.
       shown="$(printf '%s\n' "$missing" | head -5 | tr '\n' ' ')"
       shown="${shown% }"
       [ "$miss_n" -gt 5 ] && shown="$shown (+$((miss_n - 5)) more)"
-      log "verify: health=200 recovered=$((total - miss_n))/${total} missing: ${shown} (attempt ${attempt}/${tries})"
+      log "verify: health=200 recovered=${recovered_n}/${total} (+${delta}) missing: ${shown} (attempt ${attempt}/${tries}, stagnant ${stagnant}/${stagnant_limit})"
     else
-      log "verify: health=${code:-?} recovered=?/${total} (attempt ${attempt}/${tries})"
+      log "verify: health=${code:-?} recovered=?/${total} (attempt ${attempt}/${tries}, stagnant ${stagnant}/${stagnant_limit})"
+    fi
+    # Stall gate — two regimes. ZERO PHASE (best=0): the node is still in
+    # boot+launch (service start, boot sync, 20-slot ffmpeg waves); on a
+    # 97-channel node the FIRST post-marker segment legitimately arrived at
+    # ~attempt 12 in production, so plain min+stagnant would re-create the
+    # false rollback at exactly 60s. Zero phase gets its own longer floor
+    # (zero_tries, default 24 = 2 min). AFTER first progress: strict
+    # min+stagnant (ramped-then-stuck is a real failure). The cap-bounded
+    # loop condition still wins (TICO_VERIFY_TRIES=1 runs exactly 1 attempt).
+    if [ "$best" -eq 0 ]; then
+      [ "$attempt" -ge "$zero_tries" ] && return 1
+    elif [ "$attempt" -ge "$min_tries" ] && [ "$stagnant" -ge "$stagnant_limit" ]; then
+      return 1
     fi
     [ "$attempt" -lt "$tries" ] && sleep "$interval"
   done
