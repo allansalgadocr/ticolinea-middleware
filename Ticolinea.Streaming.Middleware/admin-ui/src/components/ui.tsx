@@ -158,6 +158,48 @@ export function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boo
   )
 }
 
+/** Transient confirmation. Auto-dismisses; `tone` carries whether the action
+ *  fully took effect, which for a source change is the thing the owner needs. */
+export function Toast({
+  message,
+  tone = 'ok',
+  onDone,
+}: {
+  message: string
+  tone?: 'ok' | 'warn'
+  onDone: () => void
+}) {
+  useEffect(() => {
+    // A warning stays longer — it tells the operator something is still pending.
+    const ms = tone === 'warn' ? 9000 : 5000
+    const t = setTimeout(onDone, ms)
+    return () => clearTimeout(t)
+  }, [tone, onDone, message])
+
+  const tones = {
+    ok: 'border-mint/30 bg-mint/10 text-mint',
+    warn: 'border-warn/30 bg-warn/10 text-warn',
+  }
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`fixed right-5 bottom-5 z-[60] max-w-sm rounded-xl border px-4 py-3 text-[13px] leading-snug shadow-[0_20px_40px_-15px_rgba(0,0,0,0.7)] backdrop-blur-sm ${tones[tone]}`}
+      style={{ animation: 'rise 0.3s cubic-bezier(0.22,1,0.36,1)' }}
+    >
+      {message}
+      <button
+        onClick={onDone}
+        aria-label="Cerrar aviso"
+        className="ml-3 align-middle opacity-60 transition-opacity hover:opacity-100"
+      >
+        <X size={13} />
+      </button>
+    </div>
+  )
+}
+
 export function EmptyState({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
   return (
     <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
