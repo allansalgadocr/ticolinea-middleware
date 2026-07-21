@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertCircle, Plus, Radio, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { Shell } from '../components/Shell'
-import { Button, EmptyState, Field, Modal, Pill, StatusDot, Toggle } from '../components/ui'
+import { Button, EmptyState, Field, Modal, Pill, StatusDot, Toast, Toggle } from '../components/ui'
 import { api, type ChannelPayload } from '../api'
 import { errorMessage, Spinner } from '../auth'
 import type { Category, Channel } from '../types'
@@ -24,6 +24,7 @@ export function Channels() {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ message: string; tone: 'ok' | 'warn' } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -66,8 +67,27 @@ export function Channels() {
       enabled: draft.enabled,
     }
     try {
-      if (draft.id == null) await api.createChannel(payload)
-      else await api.updateChannel(draft.id, payload)
+      if (draft.id == null) {
+        await api.createChannel(payload)
+        setToast({ message: 'Canal creado.', tone: 'ok' })
+      } else {
+        const r = await api.updateChannel(draft.id, payload)
+        // Changing the source is the one edit that does not take effect on its
+        // own: the running FFmpeg was launched from the old URL. The node tries
+        // to bounce the channel, and the owner needs to know whether it did —
+        // otherwise they cannot tell if viewers are on the new source or the old.
+        if (r?.sourceChanged && r.restarted) {
+          setToast({ message: 'Origen actualizado. El canal se reinició y ya transmite la nueva fuente.', tone: 'ok' })
+        } else if (r?.sourceChanged) {
+          setToast({
+            message:
+              'Origen guardado, pero el canal no se reinició (estaba detenido o había otra acción en curso). Tomará la nueva fuente al iniciar.',
+            tone: 'warn',
+          })
+        } else {
+          setToast({ message: 'Cambios guardados.', tone: 'ok' })
+        }
+      }
       setDraft(null)
       await load()
     } catch (e) {
@@ -104,6 +124,8 @@ export function Channels() {
         </Button>
       }
     >
+      {toast && <Toast message={toast.message} tone={toast.tone} onDone={() => setToast(null)} />}
+
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative min-w-[220px] flex-1">
           <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-tx-3" />
