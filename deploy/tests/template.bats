@@ -31,7 +31,8 @@ teardown() { rm -rf "$TMP"; }
          PANEL_API_URL="http://tv.play-latino.com:27702/api/v2" \
          DB_NAME=acme-streaming DB_USER=streamingservice DB_PASSWORD=s3cret \
          JWT_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----\nAAA\n-----END PUBLIC KEY-----\n' \
-         PANEL_API_KEY=apikey123
+         PANEL_API_KEY=apikey123 \
+         CONSOLE_SEED_PASSWORD=Seed123Password
   render_template "$TICO_ROOT/templates/appsettings.provider.json.tmpl" > "$TMP/out.json"
   run node -e "JSON.parse(require('fs').readFileSync('$TMP/out.json','utf8'))"
   [ "$status" -eq 0 ]
@@ -47,6 +48,9 @@ teardown() { rm -rf "$TMP"; }
   # Output-progress watchdog: enabled on provider nodes (OutputWatchdogService).
   run node -e "process.exit(JSON.parse(require('fs').readFileSync('$TMP/out.json','utf8')).Watchdog.Enabled===true?0:1)"
   [ "$status" -eq 0 ]
+  # Node console bootstrap credential — without it the owner cannot reach /admin,
+  # since ConsoleSchema falls back to a random password logged only once.
+  grep -q '"SeedPassword": "Seed123Password"' "$TMP/out.json"
   # FfmpegManagedDiscontinuities: enabled fleet-wide (operator decision 2026-07-18);
   # revert per node via its on-box appsettings if devices misbehave (see RUNBOOK).
   grep -q '"FfmpegManagedDiscontinuities": true' "$TMP/out.json"
