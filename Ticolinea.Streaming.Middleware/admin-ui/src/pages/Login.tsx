@@ -41,8 +41,8 @@ export function Login() {
       <section className="relative hidden flex-col justify-between overflow-hidden border-r border-line-soft p-10 lg:flex">
         <div
           aria-hidden
-          className="pointer-events-none absolute -top-24 -left-24 size-[520px] rounded-full opacity-45 blur-3xl"
-          style={{ background: 'radial-gradient(circle, rgba(45,212,191,0.20), transparent 65%)' }}
+          className="pointer-events-none absolute -top-24 -left-24 size-[520px] rounded-full opacity-60 blur-3xl"
+          style={{ background: 'radial-gradient(circle, rgba(13,148,136,0.13), transparent 65%)' }}
         />
         <div className="relative flex items-center gap-2.5">
           <div className="grid size-8 place-items-center rounded-lg bg-mint/12 ring-1 ring-mint/25">

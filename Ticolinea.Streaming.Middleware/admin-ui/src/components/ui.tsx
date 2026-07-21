@@ -7,11 +7,13 @@ const btnBase =
   'inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition-all duration-150 active:translate-y-px disabled:opacity-40 disabled:pointer-events-none whitespace-nowrap'
 
 const btnVariants: Record<BtnVariant, string> = {
+  // White on the teal fill measures 5.47:1 — the dark theme's light-mint fill
+  // with dark text would have been 1.6:1 here, i.e. unreadable.
   primary:
-    'bg-mint text-ink hover:bg-mint-glow shadow-[0_1px_0_rgba(255,255,255,0.25)_inset,0_6px_18px_-8px_rgba(45,212,191,0.9)]',
+    'bg-mint text-white hover:bg-mint-dim shadow-[0_1px_2px_rgba(16,30,48,0.10),0_6px_16px_-8px_rgba(15,118,110,0.55)]',
   ghost:
-    'border border-line text-tx-2 hover:text-tx hover:border-[#33424f] hover:bg-surface-2',
-  danger: 'border border-danger/35 text-danger hover:bg-danger/10',
+    'border border-line bg-surface text-tx-2 hover:text-tx hover:border-[#a9b8c8] hover:bg-surface-2',
+  danger: 'border border-danger/40 bg-surface text-danger hover:bg-danger/8',
   subtle: 'text-tx-3 hover:text-tx hover:bg-surface-2',
 }
 
@@ -87,16 +89,18 @@ export function Modal({
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pt-[8vh]">
+      {/* An explicit dark scrim, not a tint of the canvas: on a light theme
+          `bg-ink/80` would be light-on-light and the dialog would not separate. */}
       <div
-        className="fixed inset-0 bg-ink/80 backdrop-blur-[3px]"
-        style={{ animation: 'rise 0.2s ease-out' }}
+        className="fixed inset-0 backdrop-blur-[2px]"
+        style={{ background: 'rgba(20, 30, 44, 0.42)', animation: 'rise 0.2s ease-out' }}
         onClick={onClose}
       />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="panel relative z-10 w-full max-w-xl shadow-[0_40px_80px_-20px_rgba(0,0,0,0.85)]"
+        className="panel relative z-10 w-full max-w-xl shadow-[0_24px_60px_-12px_rgba(16,30,48,0.28)]"
         style={{ animation: 'rise 0.28s cubic-bezier(0.22,1,0.36,1)' }}
       >
         <header className="flex items-start justify-between border-b border-line-soft px-6 py-5">
@@ -176,16 +180,18 @@ export function Toast({
     return () => clearTimeout(t)
   }, [tone, onDone, message])
 
+  // Solid white ground rather than a translucent tint: over a light canvas a
+  // 10%-alpha fill leaves the text floating with almost no separation.
   const tones = {
-    ok: 'border-mint/30 bg-mint/10 text-mint',
-    warn: 'border-warn/30 bg-warn/10 text-warn',
+    ok: 'border-mint/35 bg-surface text-mint',
+    warn: 'border-warn/40 bg-surface text-warn',
   }
 
   return (
     <div
       role="status"
       aria-live="polite"
-      className={`fixed right-5 bottom-5 z-[60] max-w-sm rounded-xl border px-4 py-3 text-[13px] leading-snug shadow-[0_20px_40px_-15px_rgba(0,0,0,0.7)] backdrop-blur-sm ${tones[tone]}`}
+      className={`fixed right-5 bottom-5 z-[60] max-w-sm rounded-xl border px-4 py-3 text-[13px] leading-snug shadow-[0_16px_36px_-12px_rgba(16,30,48,0.30)] ${tones[tone]}`}
       style={{ animation: 'rise 0.3s cubic-bezier(0.22,1,0.36,1)' }}
     >
       {message}
