@@ -1,0 +1,169 @@
+import { type ReactNode, useEffect } from 'react'
+import { X } from 'lucide-react'
+
+type BtnVariant = 'primary' | 'ghost' | 'danger' | 'subtle'
+
+const btnBase =
+  'inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition-all duration-150 active:translate-y-px disabled:opacity-40 disabled:pointer-events-none whitespace-nowrap'
+
+const btnVariants: Record<BtnVariant, string> = {
+  primary:
+    'bg-mint text-ink hover:bg-mint-glow shadow-[0_1px_0_rgba(255,255,255,0.25)_inset,0_6px_18px_-8px_rgba(45,212,191,0.9)]',
+  ghost:
+    'border border-line text-tx-2 hover:text-tx hover:border-[#33424f] hover:bg-surface-2',
+  danger: 'border border-danger/35 text-danger hover:bg-danger/10',
+  subtle: 'text-tx-3 hover:text-tx hover:bg-surface-2',
+}
+
+export function Button({
+  children,
+  variant = 'ghost',
+  size = 'md',
+  ...rest
+}: {
+  children: ReactNode
+  variant?: BtnVariant
+  size?: 'sm' | 'md'
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  const sizing = size === 'sm' ? 'px-2.5 py-1.5 text-[13px]' : 'px-3.5 py-2'
+  return (
+    <button {...rest} className={`${btnBase} ${btnVariants[variant]} ${sizing} ${rest.className ?? ''}`}>
+      {children}
+    </button>
+  )
+}
+
+/** On-air indicator. The pulse is reserved for live channels only — if
+ *  everything animates, nothing communicates. */
+export function StatusDot({ on }: { on: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className="inline-block size-1.5 rounded-full"
+      style={
+        on
+          ? { background: 'var(--color-air)', animation: 'pulse-air 2.4s ease-in-out infinite' }
+          : { background: 'var(--color-tx-3)' }
+      }
+    />
+  )
+}
+
+export function Pill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'mint' | 'warn' }) {
+  const tones = {
+    neutral: 'border-line text-tx-3',
+    mint: 'border-mint/30 text-mint bg-mint/8',
+    warn: 'border-warn/30 text-warn bg-warn/8',
+  }
+  return (
+    <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.1em] uppercase ${tones[tone]}`}>
+      {children}
+    </span>
+  )
+}
+
+export function Modal({
+  open,
+  title,
+  subtitle,
+  onClose,
+  children,
+  footer,
+}: {
+  open: boolean
+  title: string
+  subtitle?: string
+  onClose: () => void
+  children: ReactNode
+  footer?: ReactNode
+}) {
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  if (!open) return null
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pt-[8vh]">
+      <div
+        className="fixed inset-0 bg-ink/80 backdrop-blur-[3px]"
+        style={{ animation: 'rise 0.2s ease-out' }}
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="panel relative z-10 w-full max-w-xl shadow-[0_40px_80px_-20px_rgba(0,0,0,0.85)]"
+        style={{ animation: 'rise 0.28s cubic-bezier(0.22,1,0.36,1)' }}
+      >
+        <header className="flex items-start justify-between border-b border-line-soft px-6 py-5">
+          <div>
+            <h2 className="font-display text-lg font-bold tracking-tight">{title}</h2>
+            {subtitle && <p className="mt-0.5 text-[13px] text-tx-3">{subtitle}</p>}
+          </div>
+          <button onClick={onClose} aria-label="Cerrar" className="rounded-md p-1 text-tx-3 transition-colors hover:bg-surface-2 hover:text-tx">
+            <X size={17} />
+          </button>
+        </header>
+        <div className="px-6 py-5">{children}</div>
+        {footer && <footer className="flex justify-end gap-2 border-t border-line-soft px-6 py-4">{footer}</footer>}
+      </div>
+    </div>
+  )
+}
+
+export function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string
+  hint?: string
+  children: ReactNode
+}) {
+  return (
+    <label className="block">
+      <span className="label">{label}</span>
+      {children}
+      {hint && <span className="mt-1.5 block font-mono text-[11px] text-tx-3">{hint}</span>}
+    </label>
+  )
+}
+
+export function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={() => onChange(!on)}
+      className="relative h-[22px] w-[38px] shrink-0 rounded-full border transition-colors duration-200"
+      style={{
+        background: on ? 'rgba(45,212,191,0.22)' : '#0a0e13',
+        borderColor: on ? 'var(--color-mint-dim)' : 'var(--color-line)',
+      }}
+    >
+      <span
+        className="absolute top-1/2 size-[14px] -translate-y-1/2 rounded-full transition-all duration-200"
+        style={{
+          left: on ? 20 : 3,
+          background: on ? 'var(--color-mint)' : 'var(--color-tx-3)',
+        }}
+      />
+    </button>
+  )
+}
+
+export function EmptyState({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
+      <div className="mb-3 text-tx-3">{icon}</div>
+      <p className="font-display text-base font-bold">{title}</p>
+      <p className="mt-1 max-w-sm text-[13px] text-tx-3">{body}</p>
+    </div>
+  )
+}
