@@ -1,0 +1,155 @@
+@import "tailwindcss";
+
+/*
+  Node console — deliberately a DARK broadcast-console aesthetic, distinct from
+  ticolinea.panel's light blue/teal admin. That difference is functional, not
+  decorative: an operator must never mistake a single client's node for the
+  main panel. The mint accent is the one deliberate tie back to the panel's
+  --color-secondary (#0d9488), pulled brighter to read on near-black.
+*/
+@theme {
+  --color-ink: #07090c;
+  --color-ink-2: #0c1015;
+  --color-surface: #11161d;
+  --color-surface-2: #161d26;
+  --color-line: #212b36;
+  --color-line-soft: #1a222c;
+
+  --color-mint: #2dd4bf;
+  --color-mint-dim: #14b8a6;
+  --color-mint-glow: #5eead4;
+
+  --color-air: #34d399;
+  --color-warn: #f59e0b;
+  --color-danger: #fb7185;
+
+  --color-tx: #e8eef5;
+  --color-tx-2: #9aa8b8;
+  --color-tx-3: #62717f;
+
+  --font-display: 'Bricolage Grotesque', ui-sans-serif, sans-serif;
+  --font-sans: 'Archivo', ui-sans-serif, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-ink);
+    color: var(--color-tx);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Atmosphere: a cold overhead wash + a faint mint bloom near the rail, so
+     the near-black never reads as a flat #000 rectangle. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(120vw 60vh at 18% -10%, rgba(45, 212, 191, 0.07), transparent 60%),
+      radial-gradient(80vw 50vh at 100% 0%, rgba(56, 89, 138, 0.10), transparent 55%);
+  }
+
+  /* Grain — keeps large dark surfaces from banding on cheap panels. */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.16;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+  }
+
+  ::selection {
+    background: rgba(45, 212, 191, 0.28);
+  }
+
+  *:focus-visible {
+    outline: 2px solid var(--color-mint);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  .panel {
+    background: linear-gradient(180deg, var(--color-surface) 0%, var(--color-ink-2) 100%);
+    border: 1px solid var(--color-line);
+    border-radius: 14px;
+  }
+
+  .field {
+    @apply w-full rounded-lg px-3 py-2.5 text-sm transition-colors duration-150;
+    background-color: #0a0e13;
+    border: 1px solid var(--color-line);
+    color: var(--color-tx);
+    font-family: var(--font-sans);
+  }
+  .field::placeholder {
+    color: var(--color-tx-3);
+  }
+  .field:hover {
+    border-color: #2b3947;
+  }
+  .field:focus {
+    outline: none;
+    border-color: var(--color-mint-dim);
+    box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.13);
+  }
+
+  .label {
+    @apply mb-1.5 block text-[11px] font-semibold tracking-[0.12em] uppercase;
+    color: var(--color-tx-3);
+  }
+
+  /* Row entrance — one orchestrated stagger on mount reads as intentional;
+     scattered per-element micro-animations read as noise. */
+  .stagger > * {
+    animation: rise 0.42s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+  .stagger > *:nth-child(1)  { animation-delay: 0.02s; }
+  .stagger > *:nth-child(2)  { animation-delay: 0.05s; }
+  .stagger > *:nth-child(3)  { animation-delay: 0.08s; }
+  .stagger > *:nth-child(4)  { animation-delay: 0.11s; }
+  .stagger > *:nth-child(5)  { animation-delay: 0.14s; }
+  .stagger > *:nth-child(6)  { animation-delay: 0.17s; }
+  .stagger > *:nth-child(7)  { animation-delay: 0.20s; }
+  .stagger > *:nth-child(8)  { animation-delay: 0.23s; }
+  .stagger > *:nth-child(9)  { animation-delay: 0.26s; }
+  .stagger > *:nth-child(10) { animation-delay: 0.29s; }
+  .stagger > *:nth-child(11) { animation-delay: 0.32s; }
+  .stagger > *:nth-child(12) { animation-delay: 0.35s; }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pulse-air {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); }
+  50%      { opacity: 0.75; box-shadow: 0 0 0 5px rgba(52, 211, 153, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -113,6 +113,11 @@ var app = builder.Build();
 // (Global.Initialize / TokenValidation.Initialize) are made available to them.
 Global.HttpClientFactory = app.Services.GetRequiredService<IHttpClientFactory>();
 
+// Node console: create its own tables (node-local, not part of the panel's
+// schema.sql) and seed the bootstrap admin the first time only. Awaited before
+// the app serves traffic so /admin can never hit a missing table.
+await ticolinea.stream.service.NodeConsole.ConsoleHosting.InitializeAsync(builder.Configuration);
+
 // Configure the HTTP request pipeline.
 /*if (app.Environment.IsDevelopment())
 {
@@ -161,6 +166,17 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
 });
 
+// Console SPA assets, then an EXPLICIT UseRouting.
+// WebApplication injects UseRouting at the very start of the pipeline unless the
+// app calls it itself. With the implicit one, routing matched the SPA fallback
+// before StaticFileMiddleware ever ran, and static files are skipped once an
+// endpoint is selected — so every JS/CSS asset came back as index.html.
+// Calling UseRouting here pins it after static files and keeps CORS/authorization
+// in their required position between routing and the endpoints.
+ticolinea.stream.service.NodeConsole.ConsoleHosting.UseConsoleStaticFiles(app);
+
+app.UseRouting();
+
 app.UseCors(policyBuilder => {
     policyBuilder.AllowAnyOrigin();
     policyBuilder.AllowAnyMethod();
@@ -170,5 +186,10 @@ app.UseCors(policyBuilder => {
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Node console SPA (wwwroot/admin, built by admin-ui). Served from this same
+// port so a client node needs no extra listener, firewall rule or vhost.
+// Registered AFTER MapControllers so it can never shadow an /api route.
+ticolinea.stream.service.NodeConsole.ConsoleHosting.MapConsoleSpa(app);
 
 await app.RunAsync();

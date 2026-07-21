@@ -30,4 +30,21 @@
     </None>
   </ItemGroup>
 
+  <!-- The node console SPA lives in admin-ui/ and builds into wwwroot/admin,
+       which the Web SDK then includes in the publish output automatically. It is
+       built on PUBLISH only, so a plain `dotnet build` (and the test project's
+       project reference) never pays the npm cost.
+       Set -p:SkipAdminUi=true on a machine without Node. -->
+  <Target Name="BuildAdminUi" BeforeTargets="BeforePublish" Condition="'$(SkipAdminUi)' != 'true'">
+    <Message Importance="high" Text="Building node console SPA (admin-ui) …" />
+    <Exec Command="npm ci --no-audit --no-fund" WorkingDirectory="$(MSBuildProjectDirectory)/admin-ui" />
+    <Exec Command="npm run build" WorkingDirectory="$(MSBuildProjectDirectory)/admin-ui" />
+  </Target>
+
+  <ItemGroup>
+    <!-- Never let node_modules or SPA sources reach the artifact or the watcher. -->
+    <Content Remove="admin-ui/**" />
+    <None Remove="admin-ui/node_modules/**" />
+  </ItemGroup>
+
 </Project>

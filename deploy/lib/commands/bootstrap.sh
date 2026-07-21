@@ -151,9 +151,47 @@ SQL
 REMOTE
 }
 
+# Credential for the node console's bootstrap 'admin' account, rendered into
+# appsettings as NodeConsole:SeedPassword. Generated on the controller and
+# mirrored into the secrets dir exactly like DB_PASSWORD, so the operator can
+# always retrieve it from the box.
+#
+# CRITICAL difference from DB_PASSWORD: re-running bootstrap does NOT rotate the
+# console login. The node consumes SeedPassword only while node_admin_users is
+# EMPTY (see ConsoleSchema.SeedFirstAdminAsync) — that is deliberate, so a
+# redeploy can never reset a password the owner has since changed. On a node
+# whose console is already initialised the rendered value is inert, and the
+# secret file below is kept only as a record of what the FIRST password was.
+_setup_console_credential() {
+  # Honour a value supplied via secrets/<provider>.env; otherwise generate one.
+  # Alphanumeric so it stays safe unescaped in shell, SQL and JSON.
+  : "${CONSOLE_SEED_PASSWORD:=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)}"
+  export CONSOLE_SEED_PASSWORD
+
+  # An operator-supplied value reaches TWO hostile contexts: single-quoted inside
+  # the remote `sudo bash` heredoc below, and a JSON string value in appsettings.
+  # A lone ' would break out of the remote quoting (command injection as root);
+  # a " or \ would produce invalid JSON and a node that cannot start. Restrict to
+  # a charset that is inert in both, and enforce the same minimum the console
+  # applies to every other password (ConsoleValidation.MinPassword = 12).
+  case "$CONSOLE_SEED_PASSWORD" in
+    *[!A-Za-z0-9._-]*)
+      die "CONSOLE_SEED_PASSWORD may only contain letters, digits, dot, underscore or hyphen (no quotes, spaces or backslashes)" ;;
+  esac
+  [ "${#CONSOLE_SEED_PASSWORD}" -ge 12 ] \
+    || die "CONSOLE_SEED_PASSWORD must be at least 12 characters (the console rejects shorter ones)"
+  remote_sudo 'bash -s' <<REMOTE
+set -euo pipefail
+SECRET=/opt/${PROVIDER}/secrets/console-admin-password
+printf '%s' '${CONSOLE_SEED_PASSWORD}' > "\$SECRET"
+chmod 600 "\$SECRET"; chown ticolinea:ticolinea "\$SECRET"
+REMOTE
+}
+
 _render_and_upload_config() {
   log "Rendering and uploading appsettings + nginx + systemd unit"
   _load_shared_secrets
+  [ -n "${CONSOLE_SEED_PASSWORD:-}" ] || die "CONSOLE_SEED_PASSWORD not set — _setup_console_credential must run before _render_and_upload_config"
   # DB_PASSWORD is generated and exported by _setup_mariadb, which cmd_bootstrap
   # always runs before this. It is deliberately NOT read back from the box: that
   # read went through a captured `remote_sudo`, which use_pty on Ubuntu 24.04
@@ -242,8 +280,15 @@ cmd_bootstrap() {
   _install_packages
   _create_user_and_dirs
   _setup_mariadb
+  _setup_console_credential
   _render_and_upload_config
   _setup_nightly_restart
   _apply_schema
   log "Bootstrap complete for $PROVIDER. Next: tico deploy $PROVIDER --tag <version>"
+  # Printed once, at the end, where it cannot scroll past unnoticed. Worded to
+  # be true on BOTH a fresh node and a re-bootstrap: on an already-initialised
+  # console this value is not the working password (see _setup_console_credential).
+  log "Console: https://<host>:27701/admin — user 'admin', first-run password: ${CONSOLE_SEED_PASSWORD}"
+  log "         Applies only if this node's console has never been initialised."
+  log "         Also stored on the box at /opt/${PROVIDER}/secrets/console-admin-password"
 }
