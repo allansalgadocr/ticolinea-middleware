@@ -2,6 +2,12 @@
 Description=Ticolinea Streaming Node (${PROVIDER})
 After=network-online.target mariadb.service
 Wants=network-online.target
+# The streams folder is a tmpfs (see _setup_streams_tmpfs). Without this, a
+# failed mount is SILENT: the node happily writes HLS segments into the
+# underlying directory on disk and nothing reports it — you only find out when
+# the root filesystem fills. RequiresMountsFor implies both Requires= and
+# After= on the generated .mount unit, so the node fails loudly instead.
+RequiresMountsFor=/srv/${PROVIDER}/streams
 
 [Service]
 Type=simple

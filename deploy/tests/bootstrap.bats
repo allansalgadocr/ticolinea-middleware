@@ -138,3 +138,90 @@ _loopback_die_check() {
   echo "$calls" | grep -q 'ExecStart=/usr/bin/systemctl restart ticolinea-streaming.service'
   echo "$calls" | grep -q 'Persistent=false'
 }
+
+# --- streams tmpfs ----------------------------------------------------------
+# The sizing policy is a pure function so it can be pinned without a live host.
+
+@test "_tico_tmpfs_size defaults to a quarter of RAM" {
+  run _tico_tmpfs_size 257000
+  [ "$status" -eq 0 ]
+  [ "$output" = "62G" ]
+}
+
+@test "_tico_tmpfs_size floors at 1G on a small box" {
+  run _tico_tmpfs_size 4096
+  [ "$status" -eq 0 ]
+  [ "$output" = "1G" ]
+}
+
+@test "_tico_tmpfs_size honours a valid operator override" {
+  run _tico_tmpfs_size 257000 64G
+  [ "$status" -eq 0 ]
+  [ "$output" = "64G" ]
+}
+
+@test "_tico_tmpfs_size refuses an override above half of RAM" {
+  # Filling it would OOM the box and take every channel down with it.
+  run _tico_tmpfs_size 257000 200G
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
+@test "_tico_tmpfs_size refuses a malformed override" {
+  run _tico_tmpfs_size 257000 64;    [ "$status" -ne 0 ]
+  run _tico_tmpfs_size 257000 64GB;  [ "$status" -ne 0 ]
+  run _tico_tmpfs_size 257000 0G;    [ "$status" -ne 0 ]
+  run _tico_tmpfs_size 257000 64M;   [ "$status" -ne 0 ]
+}
+
+@test "_tico_tmpfs_size refuses an unusable RAM reading" {
+  run _tico_tmpfs_size "";     [ "$status" -ne 0 ]
+  run _tico_tmpfs_size abc;    [ "$status" -ne 0 ]
+  run _tico_tmpfs_size 1024;   [ "$status" -ne 0 ]
+}
+
+@test "_setup_streams_tmpfs writes exactly one fstab entry and mounts it" {
+  mock_runner_reset
+  TICO_RUNNER=mock_runner
+  SSH_USER=u SSH_HOST=h PROVIDER=acme
+  STREAMS_TMPFS_SIZE=""
+  # One canned value stands in for MemTotal, uid and gid alike: 4096 MiB of RAM
+  # yields the 1G floor, and 4096 is a valid-looking uid/gid.
+  MOCK_OUT="4096"
+  _setup_streams_tmpfs
+  local calls; calls="$(mock_calls_joined)"
+  echo "$calls" | grep -qF 'tmpfs $MP tmpfs rw,nodev,nosuid,noexec,size=1G,mode=0755,uid=4096,gid=4096 0 0'
+  # Idempotency: existing entries for this target are stripped before appending.
+  echo "$calls" | grep -qF 'awk -v mp="$MP"'
+  # fstab is validated before being left in place, and rolled back if bad.
+  echo "$calls" | grep -qF 'findmnt --verify'
+  echo "$calls" | grep -qF 'cp /etc/fstab.tico.bak /etc/fstab'
+  # An already-mounted node resizes live instead of unmounting.
+  echo "$calls" | grep -qF 'mount -o remount,size=1G'
+}
+
+@test "_setup_streams_tmpfs dies rather than guess when uid/gid are unreadable" {
+  mock_runner_reset
+  TICO_RUNNER=mock_runner
+  SSH_USER=u SSH_HOST=h PROVIDER=acme
+  MOCK_OUT="sudo: a password is required"
+  run _setup_streams_tmpfs
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"uid/gid"* ]]
+}
+
+@test "the streaming unit refuses to start without the streams mount" {
+  # Without this the node silently writes segments to disk when the mount fails.
+  grep -qF 'RequiresMountsFor=/srv/${PROVIDER}/streams' \
+    "$TICO_ROOT/templates/ticolinea-streaming.service.tmpl"
+}
+
+@test "streams tmpfs is mounted after the dirs exist and before the unit is rendered" {
+  local dirs tmpfs render
+  dirs="$(grep -n '^  _create_user_and_dirs$'      "$TICO_ROOT/lib/commands/bootstrap.sh" | cut -d: -f1)"
+  tmpfs="$(grep -n '^  _setup_streams_tmpfs$'      "$TICO_ROOT/lib/commands/bootstrap.sh" | cut -d: -f1)"
+  render="$(grep -n '^  _render_and_upload_config$' "$TICO_ROOT/lib/commands/bootstrap.sh" | cut -d: -f1)"
+  [ -n "$dirs" ] && [ -n "$tmpfs" ] && [ -n "$render" ]
+  [ "$dirs" -lt "$tmpfs" ]
+  [ "$tmpfs" -lt "$render" ]
+}

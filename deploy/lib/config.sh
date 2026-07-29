@@ -30,6 +30,12 @@ config_load_file() { # file  -> exports all keys + derived
   # up whichever auth path was chosen. Key auth is the unchanged default.
   AUTH_METHOD="$(config_get_file "$file" AUTH_METHOD || true)"
   config_normalize_auth
+  # STREAMS_TMPFS_SIZE is optional too. Unset means "let bootstrap pick" (a
+  # quarter of the target's RAM); set it to pin a node to a specific cap, e.g.
+  # 64G. Validated against the box's actual RAM by _tico_tmpfs_size, not here —
+  # this file never talks to the target.
+  STREAMS_TMPFS_SIZE="$(config_get_file "$file" STREAMS_TMPFS_SIZE || true)"
+  export STREAMS_TMPFS_SIZE
   config_load_secrets
   config_setup_password_auth
 }

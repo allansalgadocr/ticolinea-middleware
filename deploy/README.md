@@ -31,8 +31,8 @@ Ticolinea origin ──(pull, outbound)──▶ Provider node ──(HLS, publi
 | **OS** | **Ubuntu 22.04 or 24.04** | Hard requirement — `bootstrap` refuses anything else. A fresh/clean install is ideal. |
 | **Architecture** | x86-64 (amd64) | The node runs a `linux-x64` .NET build. |
 | **CPU** | 4 cores to start | The node copies (`-c copy`), it does not transcode, so CPU is modest per channel — but it runs one FFmpeg process **per channel** plus serves HLS to many local viewers. Scale cores with channel count. |
-| **RAM** | 4 GB to start | ~150+ concurrent FFmpeg processes are expected at scale; size up with the package. |
-| **Disk** | 40 GB+, SSD strongly preferred | HLS segments are many small files written and deleted constantly (high IOPS). Segment data lives under `/srv/<slug>`. |
+| **RAM** | 8 GB to start | ~150+ concurrent FFmpeg processes are expected at scale, **and the HLS segments now live in RAM** — `bootstrap` mounts `/srv/<slug>/streams` as tmpfs. Budget ~30 MB of segment buffer per channel on top of the processes themselves. Swap is disabled, so RAM is a hard ceiling. |
+| **Disk** | 40 GB+, SSD preferred | Holds the OS, .NET releases, EPG and any VOD under `/srv/<slug>`. HLS segments no longer touch it — moving them to tmpfs removes the constant small-file write/delete churn that used to dominate this box's IOPS. |
 | **Bandwidth** | Sized to peak viewers × bitrate | This is the client's cost centre — every viewer streams from this box. A 2 Mbps channel × 500 concurrent viewers ≈ 1 Gbps egress. Provision accordingly. |
 | **Root / sudo** | Required | `bootstrap` installs packages, creates a service user, writes systemd/nginx config. |
 
@@ -56,6 +56,12 @@ Ubuntu 22.04 or 24.04 host:
 
 The node process itself binds `127.0.0.1:1234` and is **never** exposed directly — nginx is
 the only thing the outside world talks to.
+
+Bootstrap also mounts `/srv/<slug>/streams` as **tmpfs**, so HLS segments are written to RAM
+instead of disk, and adds the entry to `/etc/fstab` so it survives a reboot. The cap defaults to
+a quarter of the box's RAM; pin it per node with `STREAMS_TMPFS_SIZE` in the provider config.
+The systemd unit carries `RequiresMountsFor=` on that path, so if the mount ever fails the node
+refuses to start rather than silently filling the disk with segments.
 
 ## 3. Network — the firewall request
 
