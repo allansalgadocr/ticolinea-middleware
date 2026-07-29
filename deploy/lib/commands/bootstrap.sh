@@ -34,6 +34,35 @@ _assert_supported_os() {
     || die "target is '$TICO_OS_RELEASE'; this tool requires Ubuntu 22.04 or 24.04"
 }
 
+# Pure sizing policy for the streams tmpfs. Factored out of _setup_streams_tmpfs
+# so the policy is unit-testable with no live host (same seam as
+# _tico_os_supported). Echoes the fstab size= value ("62G"); returns non-zero
+# and echoes nothing when the input is unusable or an override is unsafe.
+#
+# Default is a quarter of RAM. size= is a CAP, not a reservation — tmpfs only
+# consumes what is actually written — so the number exists to bound a runaway,
+# not to be tight. Overrides above half of RAM are refused: filling one would
+# OOM the box and take every channel with it.
+_tico_tmpfs_size() { # total_mib [override]
+  local total_mib="$1" override="${2:-}" gib
+  case "$total_mib" in ''|*[!0-9]*) return 1 ;; esac
+  # Under 2 GiB there is no sane split between the node, MariaDB and a segment
+  # buffer. Refuse rather than emit a useless 0G.
+  [ "$total_mib" -ge 2048 ] || return 1
+
+  if [ -n "$override" ]; then
+    [[ "$override" =~ ^[1-9][0-9]*G$ ]] || return 1
+    gib="${override%G}"
+    [ $(( gib * 1024 * 2 )) -le "$total_mib" ] || return 1
+    printf '%sG' "$gib"
+    return 0
+  fi
+
+  gib=$(( total_mib / 4 / 1024 ))
+  [ "$gib" -ge 1 ] || gib=1
+  printf '%sG' "$gib"
+}
+
 _disable_swap() {
   log "Disabling swap (idempotent)"
   # A streaming node should never swap — it kills HLS timing. Turn swap off
@@ -103,6 +132,74 @@ mkdir -p /opt/${PROVIDER}/releases /opt/${PROVIDER}/config /opt/${PROVIDER}/ngin
 mkdir -p /srv/${PROVIDER}/streams /srv/${PROVIDER}/epg /srv/${PROVIDER}/movies /srv/${PROVIDER}/series /srv/${PROVIDER}/raw-movies /srv/${PROVIDER}/logs
 chown -R ticolinea:ticolinea /opt/${PROVIDER} /srv/${PROVIDER}
 chmod 700 /opt/${PROVIDER}/secrets
+REMOTE
+}
+
+# Back the streams folder with RAM instead of disk. HLS segments are many small
+# files written and deleted constantly (one FFmpeg ring buffer per channel), so
+# this takes a large, sustained IOPS load off the disk entirely. Swap is already
+# off by this point (_disable_swap), so these pages can never be paged back out.
+#
+# Must run after _create_user_and_dirs (needs the ticolinea uid/gid and the
+# directory) and before the unit is enabled, since the unit carries
+# RequiresMountsFor= on this path and will refuse to start without the mount.
+_setup_streams_tmpfs() {
+  local total_mib uid gid size
+
+  # `remote`, not `remote_sudo`: all three reads work unprivileged, and a
+  # captured sudo is polluted by `Defaults use_pty` on 24.04 (see _setup_mariadb).
+  total_mib="$(remote "awk '/^MemTotal:/{print int(\$2/1024)}' /proc/meminfo" | tr -d '\r')"
+  uid="$(remote 'id -u ticolinea' | tr -d '\r')"
+  gid="$(remote 'id -g ticolinea' | tr -d '\r')"
+  case "$uid$gid" in
+    ''|*[!0-9]*) die "could not read the ticolinea uid/gid from the target (uid='$uid' gid='$gid')" ;;
+  esac
+
+  size="$(_tico_tmpfs_size "$total_mib" "${STREAMS_TMPFS_SIZE:-}")" \
+    || die "cannot size the streams tmpfs: target reports '${total_mib}' MiB RAM, STREAMS_TMPFS_SIZE='${STREAMS_TMPFS_SIZE:-}' (must look like '64G' and be at most half of RAM)"
+  log "Mounting /srv/${PROVIDER}/streams as tmpfs, size ${size} (RAM ${total_mib} MiB, idempotent)"
+
+  remote_sudo 'bash -s' <<REMOTE
+set -euo pipefail
+MP=/srv/${PROVIDER}/streams
+LINE="tmpfs \$MP tmpfs rw,nodev,nosuid,noexec,size=${size},mode=0755,uid=${uid},gid=${gid} 0 0"
+mkdir -p "\$MP"
+
+# Idempotent rewrite: drop EVERY existing entry for this target, then append
+# exactly one. Appending unconditionally is what leaves a duplicate behind on a
+# re-bootstrap, and systemd's fstab-generator turns a duplicated target into a
+# "target specified more than once" warning plus two competing .mount units.
+# Comments (including the swap lines _disable_swap commented out) are preserved.
+cp /etc/fstab /etc/fstab.tico.bak
+awk -v mp="\$MP" '(\$0 ~ /^[[:space:]]*#/) || (\$2 != mp)' /etc/fstab > /etc/fstab.tico.new
+printf '%s\n' "\$LINE" >> /etc/fstab.tico.new
+mv /etc/fstab.tico.new /etc/fstab
+
+# A malformed fstab strands the box in emergency mode on the next boot, so prove
+# it parses before leaving it in place. --verify reports warnings as well as
+# errors; only the error count is fatal.
+if ! findmnt --verify 2>&1 | grep -qE '0 parse errors, 0 errors'; then
+  cp /etc/fstab.tico.bak /etc/fstab
+  echo "fstab failed validation — restored the original, nothing mounted" >&2
+  exit 1
+fi
+systemctl daemon-reload
+
+if mountpoint -q "\$MP"; then
+  # Already RAM-backed. tmpfs resizes live, so a re-bootstrap that changes the
+  # size costs no downtime and loses no segments.
+  mount -o remount,size=${size} "\$MP"
+else
+  # First mount. Anything already in the directory has to go: mounting over a
+  # populated directory HIDES those files while they keep consuming disk
+  # forever. Only HLS artefacts ever live here and they regenerate in seconds.
+  systemctl stop ticolinea-streaming.service 2>/dev/null || true
+  find "\$MP" -mindepth 1 -delete
+  mount "\$MP"
+fi
+
+chown ticolinea:ticolinea "\$MP"
+findmnt -n -T "\$MP" -o FSTYPE | grep -qx tmpfs
 REMOTE
 }
 
@@ -279,6 +376,7 @@ cmd_bootstrap() {
   _disable_swap
   _install_packages
   _create_user_and_dirs
+  _setup_streams_tmpfs
   _setup_mariadb
   _setup_console_credential
   _render_and_upload_config

@@ -75,6 +75,7 @@ PUBLIC_HOST=iptv.acme.cr
 PANEL_API_URL=http://tv.play-latino.com:27702/api/v2
 MAIN_FFMPEG_VERSION=4.4.2
 # AUTH_METHOD=key
+# STREAMS_TMPFS_SIZE=64G
 ```
 
 Important details:
@@ -85,6 +86,10 @@ Important details:
 - `PANEL_API_URL` must include `/api/v2`.
 - `MAIN_FFMPEG_VERSION` is the production comparison baseline used by `probe`; it does not choose
   which FFmpeg package bootstrap installs.
+- `STREAMS_TMPFS_SIZE` is **optional**. Bootstrap mounts `/srv/<slug>/streams` as tmpfs so HLS
+  segments live in RAM; leave this unset to get a quarter of the box's RAM, or pin it (`64G`).
+  Values above half of RAM are refused — filling one would OOM the node and drop every channel.
+  It is a cap, not a reservation: tmpfs only consumes what is actually written.
 - Provider configs and secret files are gitignored. Never force-add them to Git.
 
 For `AUTH_METHOD=password`, optionally store the passwords in the gitignored provider secret:
@@ -252,8 +257,27 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 Expect `200`. If possible, also play one assigned channel from the client network to verify the
 full playlist-and-segment path through ports `27701` and `27703`.
 
+Confirm the segments are in RAM and that the mount will survive a reboot:
+
+```bash
+# FSTYPE must be tmpfs, and USED should climb as channels start
+findmnt -T "/srv/${NODE_SLUG}/streams" -o TARGET,FSTYPE,SIZE,USED
+
+# exactly one fstab entry, and it must parse — a bad line boots to emergency mode
+grep -c "/srv/${NODE_SLUG}/streams" /etc/fstab      # expect 1
+findmnt --verify                                     # expect 0 errors
+
+# nginx (www-data) must still be able to read the mount, or every client 403s
+sudo -u www-data test -r "/srv/${NODE_SLUG}/streams" && echo "nginx can read"
+```
+
+You do not need to reboot to prove persistence — `systemctl cat "$(systemd-escape -p --suffix=mount
+"/srv/${NODE_SLUG}/streams")"` shows the unit systemd generated from `/etc/fstab`, and it will be
+mounted at boot as part of `local-fs.target`.
+
 Do not declare onboarding complete until the service is active, the release version is correct,
-channels are producing, the public health endpoint works, and an actual channel plays.
+channels are producing, the segments folder is tmpfs, the public health endpoint works, and an
+actual channel plays.
 
 ## First-deploy troubleshooting
 
