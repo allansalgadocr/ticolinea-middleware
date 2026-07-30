@@ -492,3 +492,69 @@ setup() {
   [ "$status" -ne 0 ]
   [ "$(wc -l < "$count_file" | tr -d ' ')" -eq 3 ]
 }
+
+# --- partial-recovery acceptance (TICO_VERIFY_PCT) --------------------------
+
+@test "pct policy: ceil boundary — 80% of 95 demands 76, not a truncated 75" {
+  run deploy_pct_met 76 95 80; [ "$status" -eq 0 ]
+  run deploy_pct_met 75 95 80; [ "$status" -ne 0 ]
+}
+
+@test "pct policy: 100 keeps the all-or-nothing contract; empty baseline passes" {
+  run deploy_pct_met 94 95 100; [ "$status" -ne 0 ]
+  run deploy_pct_met 95 95 100; [ "$status" -eq 0 ]
+  run deploy_pct_met 0 0 80;    [ "$status" -eq 0 ]
+}
+
+@test "verify accepts a stagnated 4/5 recovery when TICO_VERIFY_PCT=80" {
+  # The LogicSphere case in miniature: one channel dead at the provider end
+  # stalls at 4/5 (80%); with the threshold the deploy lands instead of
+  # rolling back a node whose users lost nothing.
+  deploy_health() { echo 200; }
+  deploy_recovered_ids() { printf 'A\nB\nC\nD\n'; }
+  TICO_VERIFY_MIN_TRIES=3 TICO_VERIFY_STAGNANT=2 TICO_VERIFY_TRIES=100 TICO_VERIFY_PCT=80
+  run deploy_verify "A B C D E"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ACCEPTED partial recovery 4/5"* ]]
+  [[ "$output" == *"missing: E"* ]]
+}
+
+@test "verify default stays strict: the same 4/5 stagnation still fails without PCT" {
+  deploy_health() { echo 200; }
+  deploy_recovered_ids() { printf 'A\nB\nC\nD\n'; }
+  TICO_VERIFY_MIN_TRIES=3 TICO_VERIFY_STAGNANT=2 TICO_VERIFY_TRIES=100
+  run deploy_verify "A B C D E"
+  [ "$status" -ne 0 ]
+}
+
+@test "verify threshold refuses to accept on a health flap at the decision point" {
+  # Acceptance gates on the CURRENT attempt being healthy: recovery hit 4/5
+  # earlier, but health is 503 when the stagnation exit fires — roll back.
+  deploy_health() {
+    local f="$BATS_TEST_TMPDIR/hcalls" n
+    n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$f"
+    [ "$n" -le 2 ] && echo 200 || echo 503
+  }
+  deploy_recovered_ids() { printf 'A\nB\nC\nD\n'; }
+  TICO_VERIFY_MIN_TRIES=3 TICO_VERIFY_STAGNANT=2 TICO_VERIFY_TRIES=100 TICO_VERIFY_PCT=80
+  run deploy_verify "A B C D E"
+  [ "$status" -ne 0 ]
+}
+
+@test "verify zero phase stays strict even with a permissive threshold" {
+  # "80% of dead is dead": no post-marker segment ever → fail at zero_tries,
+  # threshold or not.
+  deploy_health() { echo 200; }
+  deploy_recovered_ids() { :; }
+  TICO_VERIFY_ZERO_TRIES=2 TICO_VERIFY_TRIES=100 TICO_VERIFY_PCT=80
+  run deploy_verify "A B C D E"
+  [ "$status" -ne 0 ]
+}
+
+@test "verify pct guard: a typo'd threshold falls back to strict, not to an abort" {
+  deploy_health() { echo 200; }
+  deploy_recovered_ids() { printf 'A\nB\nC\nD\n'; }
+  TICO_VERIFY_MIN_TRIES=3 TICO_VERIFY_STAGNANT=2 TICO_VERIFY_TRIES=100 TICO_VERIFY_PCT="80%"
+  run deploy_verify "A B C D E"
+  [ "$status" -ne 0 ]
+}

@@ -354,6 +354,7 @@ nodes:
 | `TICO_VERIFY_STAGNANT` | 6 | Consecutive attempts with no additional recovered channel before failure. |
 | `TICO_VERIFY_ZERO_TRIES` | 24 | Attempts allowed before the first channel recovers. |
 | `TICO_VERIFY_TRIES` | 120 | Hard cap (10 minutes with the default sleep). |
+| `TICO_VERIFY_PCT` | 100 | Acceptance threshold for partial recovery. Verify still waits for 100% while recovery climbs; on the stagnation/cap exits, a healthy node at ≥ this percentage of the baseline is accepted instead of rolled back (the accepted-missing channels are logged). Use when a channel is known-dead at the provider end, e.g. `TICO_VERIFY_PCT=90`. Zero recovery always fails regardless. |
 
 ## Roll back a bad release
 

@@ -44,6 +44,17 @@ deploy_missing_ids() { # baseline_ids, recovered_ids
   done
 }
 
+# Pure, locally-testable acceptance policy: does recovered_n meet the
+# TICO_VERIFY_PCT threshold? need = ceil(total*pct/100), integer-only —
+# "80% of 95" must demand 76; plain truncation (75) would quietly accept one
+# channel fewer than the operator asked for. pct=100 keeps need=total, so the
+# default remains byte-for-byte the old all-or-nothing contract.
+deploy_pct_met() { # recovered_n, total, pct
+  local recovered="${1:-0}" total="${2:-0}" pct="${3:-100}"
+  [ "$total" -gt 0 ] || return 0
+  [ "$recovered" -ge $(( (total * pct + 99) / 100 )) ]
+}
+
 deploy_verify() { # baseline_ids (whitespace-separated; empty => health-only)
   # Empty baseline = the node was serving nothing before the swap: first
   # deploy, or any deploy inside the RUNBOOK spec B window (no channel rows
@@ -68,6 +79,17 @@ deploy_verify() { # baseline_ids (whitespace-separated; empty => health-only)
   local tries="${TICO_VERIFY_TRIES:-120}" interval="${TICO_VERIFY_SLEEP:-5}"
   local min_tries="${TICO_VERIFY_MIN_TRIES:-12}" stagnant_limit="${TICO_VERIFY_STAGNANT:-6}"
   local zero_tries="${TICO_VERIFY_ZERO_TRIES:-24}"
+  # TICO_VERIFY_PCT: acceptance threshold for PARTIAL recovery. Verify still
+  # waits for 100% while recovery climbs; the threshold only softens the two
+  # FAILURE exits (stagnation / hard cap): if the node is healthy (200) and the
+  # current recovered count meets the threshold, the deploy is accepted instead
+  # of rolled back. Motivation: one channel that is dead at the PROVIDER end
+  # (upstream paused) otherwise vetoes a 94/95 deploy and forces a rollback the
+  # node's users never benefit from. Default 100 = the old all-or-nothing rule.
+  # A typo'd value must not abort verify mid-swap (set -e would turn that into
+  # an accidental rollback): non-numeric or >100 falls back to strict 100.
+  local pct="${TICO_VERIFY_PCT:-100}"
+  case "$pct" in ''|*[!0-9]*) pct=100;; *) [ "$pct" -gt 100 ] && pct=100;; esac
   local attempt=0 best=0 stagnant=0 delta code recovered recovered_n missing total miss_n shown
   # shellcheck disable=SC2086 # intentional word-split to count baseline IDs
   set -- $baseline
@@ -124,12 +146,26 @@ deploy_verify() { # baseline_ids (whitespace-separated; empty => health-only)
     # min+stagnant (ramped-then-stuck is a real failure). The cap-bounded
     # loop condition still wins (TICO_VERIFY_TRIES=1 runs exactly 1 attempt).
     if [ "$best" -eq 0 ]; then
+      # Zero phase stays strict regardless of threshold: a node that has not
+      # produced a single post-marker segment is dead, and "80% of dead" is dead.
       [ "$attempt" -ge "$zero_tries" ] && return 1
     elif [ "$attempt" -ge "$min_tries" ] && [ "$stagnant" -ge "$stagnant_limit" ]; then
+      # Threshold acceptance gates on the CURRENT observation, not on `best`:
+      # the node must be healthy (200) on this very attempt — a run whose
+      # health flapped away at the decision point still rolls back.
+      if [ "$code" = "200" ] && deploy_pct_met "${recovered_n:-0}" "$total" "$pct"; then
+        log "verify: ACCEPTED partial recovery ${recovered_n}/${total} (threshold ${pct}%) — still missing: ${shown:-?}"
+        return 0
+      fi
       return 1
     fi
     [ "$attempt" -lt "$tries" ] && sleep "$interval"
   done
+  # Hard cap reached: same threshold acceptance as the stagnation exit.
+  if [ "$code" = "200" ] && deploy_pct_met "${recovered_n:-0}" "$total" "$pct"; then
+    log "verify: ACCEPTED partial recovery ${recovered_n}/${total} (threshold ${pct}%) — still missing: ${shown:-?}"
+    return 0
+  fi
   return 1
 }
 
