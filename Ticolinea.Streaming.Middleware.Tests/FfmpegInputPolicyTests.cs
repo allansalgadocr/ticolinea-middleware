@@ -63,4 +63,32 @@ public class FfmpegInputPolicyTests
         FfmpegInputPolicy.ExtraHlsArgs(ffmpegManagedDiscontinuities: false)
             .Should().BeEmpty();
     }
+
+    [Fact]
+    public void Stream_map_pins_first_video_and_first_audio_by_default()
+    {
+        // Production incident (LogicSphere, canal 467): fuente multi-programa con
+        // -c copy produjo segmentos con 2 video + 2 audio y ExoPlayer murió con
+        // ERROR_CODE_DECODING_FAILED. El mapeo explícito fija un solo programa.
+        FfmpegInputPolicy.StreamMapArgs(System.Array.Empty<string>())
+            .Should().Be("-map 0:v:0? -map 0:a:0?");
+    }
+
+    [Fact]
+    public void Stream_map_tokens_do_not_collide_with_reconnect_tokens()
+    {
+        // Los tokens de reconexión viven en el mismo campo (stream.Bitrate);
+        // su presencia no debe desactivar el mapeo.
+        FfmpegInputPolicy.StreamMapArgs(new[] { "reconnect", "rw_timeout" })
+            .Should().Be("-map 0:v:0? -map 0:a:0?");
+    }
+
+    [Fact]
+    public void Map_all_token_opts_a_channel_out_of_stream_mapping()
+    {
+        // Escape hatch por canal: conserva la estructura original de la fuente
+        // (comportamiento previo, sin -map).
+        FfmpegInputPolicy.StreamMapArgs(new[] { "map_all" })
+            .Should().BeEmpty();
+    }
 }

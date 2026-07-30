@@ -29,6 +29,23 @@ namespace ticolinea.stream.service.Helpers
         }
 
         /// <summary>
+        /// Mapeo explícito de streams para la salida. Sin -map, FFmpeg hereda la
+        /// estructura de la fuente: una fuente multi-programa (MPTS) o con PIDs que
+        /// cambian a mitad de corrida produce segmentos con MÁS de un video/audio,
+        /// y los decoders estrictos de Android (ExoPlayer MediaCodecVideoRenderer)
+        /// fallan con ERROR_CODE_DECODING_FAILED. Fijar "primer video + primer audio"
+        /// hace la salida determinista: un programa, siempre. El sufijo "?" mantiene
+        /// vivas las fuentes solo-audio o solo-video (un -map duro las mataría).
+        /// Opt-out por canal con el token "map_all" (mismo mecanismo que los tokens
+        /// de reconexión en stream.Bitrate) para fuentes donde se quiera conservar
+        /// la estructura original.
+        /// </summary>
+        public static string StreamMapArgs(string[] parameters)
+        {
+            return parameters.Contains("map_all") ? "" : "-map 0:v:0? -map 0:a:0?";
+        }
+
+        /// <summary>
         /// Argumentos HLS adicionales según el piloto de discontinuidades manejadas por FFmpeg
         /// (Streaming:FfmpegManagedDiscontinuities). Con el flag activo se agrega
         /// "-hls_start_number_source epoch": los media sequence numbers derivan del epoch y
