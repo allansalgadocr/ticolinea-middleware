@@ -48,6 +48,31 @@ namespace ticolinea.stream.service.Helpers
         public static JwtSettings? GetSettings() => _settings;
 
         /// <summary>
+        /// Identidad compacta y segura de un token para logs de RECHAZO: los claims
+        /// que identifican al cliente (sub/provider/mac/jti/exp), nunca el token
+        /// crudo — un JWT en el log es una credencial filtrada. Parsea SIN validar:
+        /// para diagnosticar un rechazo hay que saber QUIÉN lo intentó, no confirmar
+        /// su firma. Nunca lanza: un token ilegible devuelve su forma (largo/puntos)
+        /// para distinguir "JWT malformado" de "esto no era un JWT".
+        /// </summary>
+        public static string DescribeForLog(string? token)
+        {
+            if (string.IsNullOrWhiteSpace(token)) return "token=(empty)";
+            try
+            {
+                var handler = new JwtSecurityTokenHandler();
+                if (handler.CanReadToken(token))
+                {
+                    var jwt = handler.ReadJwtToken(token);
+                    string Claim(string t) => jwt.Claims.FirstOrDefault(c => c.Type == t)?.Value ?? "-";
+                    return $"sub={Claim("sub")} provider={Claim("providerId")} mac={Claim("mac")} jti={Claim("jti")} exp={jwt.ValidTo:yyyy-MM-dd'T'HH:mm:ss}Z";
+                }
+            }
+            catch { /* cae a la línea de forma */ }
+            return $"token=(unreadable len={token.Length} dots={token.Count(c => c == '.')})";
+        }
+
+        /// <summary>
         /// Validates a JWT access token and returns claims if valid
         /// </summary>
         public static TokenValidationResult? ValidateToken(string? token)
@@ -58,46 +83,22 @@ namespace ticolinea.stream.service.Helpers
                 return null;
             }
 
-            // Log token info for debugging (first and last 50 chars, length)
-            var tokenPreview = token.Length > 100 
-                ? $"{token.Substring(0, 50)}...{token.Substring(token.Length - 50)}" 
-                : token;
-            Console.WriteLine($"[TokenValidation] Token received - Length: {token.Length}, Preview: {tokenPreview}");
-            Console.WriteLine($"[TokenValidation] Token starts with: {(token.Length > 20 ? token.Substring(0, 20) : token)}");
-
+            // Éxito = SILENCIO. Las 7 líneas por request que vivían aquí (preview del
+            // token incluido — una credencial parcial en el log) llenaban syslog a
+            // ~7.5GB/día en main sin aportar nada: un token que valida no deja nada
+            // que diagnosticar. El detalle completo vive ahora en los caminos de
+            // RECHAZO, con DescribeForLog identificando al cliente. (Fix: 401s
+            // indiagnosticables del 2026-07-30 — sabíamos cuándo fallaba un token
+            // pero nunca de quién.)
             try
             {
-                // First, try to read the token without validation to see its claims
                 var tokenHandler = new JwtSecurityTokenHandler();
-                
+
                 if (!tokenHandler.CanReadToken(token))
                 {
-                    Console.WriteLine($"[TokenValidation] Token cannot be read - may be malformed or not a JWT");
-                    Console.WriteLine($"[TokenValidation] Token format check - Contains dots: {token.Contains('.')}, Dot count: {token.Count(c => c == '.')}");
-                    // JWT should have 3 parts separated by dots: header.payload.signature
-                    var parts = token.Split('.');
-                    Console.WriteLine($"[TokenValidation] Token parts count: {parts.Length} (expected 3)");
-                    if (parts.Length > 0)
-                    {
-                        Console.WriteLine($"[TokenValidation] First part (header) length: {parts[0].Length}");
-                    }
+                    Console.WriteLine($"[TokenValidation] Rechazado: no es un JWT legible ({DescribeForLog(token)})");
                     return null;
                 }
-                
-                var unvalidatedToken = tokenHandler.ReadJwtToken(token);
-                var tokenIssuer = unvalidatedToken.Issuer ?? "(null)";
-                var tokenAudiences = unvalidatedToken.Audiences != null ? string.Join(", ", unvalidatedToken.Audiences) : "(null)";
-                
-                Console.WriteLine($"[TokenValidation] Token issuer: '{tokenIssuer}' (length: {tokenIssuer.Length})");
-                Console.WriteLine($"[TokenValidation] Token audiences: '{tokenAudiences}'");
-                Console.WriteLine($"[TokenValidation] Expected issuer: '{_settings.Issuer}' (length: {_settings.Issuer?.Length ?? 0})");
-                Console.WriteLine($"[TokenValidation] Expected audience: '{_settings.Audience}' (length: {_settings.Audience?.Length ?? 0})");
-                
-                // Check for exact match (case-sensitive)
-                var issuerMatch = string.Equals(tokenIssuer, _settings.Issuer, StringComparison.Ordinal);
-                var audienceMatch = unvalidatedToken.Audiences != null && unvalidatedToken.Audiences.Contains(_settings.Audience, StringComparer.Ordinal);
-                
-                Console.WriteLine($"[TokenValidation] Issuer match: {issuerMatch}, Audience match: {audienceMatch}");
 
                 var validationParameters = new TokenValidationParameters
                 {
@@ -119,7 +120,12 @@ namespace ticolinea.stream.service.Helpers
                 // Check token type - must be access token
                 var tokenType = GetClaimValue(principal, "token_type");
                 if (tokenType == "refresh")
+                {
+                    // Rechazo silencioso hasta 2026-07-30: un cliente usando su refresh
+                    // token como access token veía 401 sin rastro alguno en el log.
+                    Console.WriteLine($"[TokenValidation] Rechazado: refresh token usado como access token ({DescribeForLog(token)})");
                     return null; // Refresh tokens cannot be used as access tokens
+                }
 
                 // Extract claims
                 var result = new TokenValidationResult
@@ -156,34 +162,33 @@ namespace ticolinea.stream.service.Helpers
             }
             catch (SecurityTokenExpiredException ex)
             {
-                Console.WriteLine($"[TokenValidation] Token expired: {ex.Message}");
+                Console.WriteLine($"[TokenValidation] Token expired ({DescribeForLog(token)}): {ex.Message}");
                 return null; // Token expired
             }
             catch (SecurityTokenInvalidSignatureException ex)
             {
-                Console.WriteLine($"[TokenValidation] Invalid signature - Key mismatch? Issuer: {_settings?.Issuer}, Audience: {_settings?.Audience}");
-                Console.WriteLine($"[TokenValidation] Signature error details: {ex.Message}");
+                Console.WriteLine($"[TokenValidation] Invalid signature ({DescribeForLog(token)}) - Key mismatch? Issuer: {_settings?.Issuer}, Audience: {_settings?.Audience}: {ex.Message}");
                 return null; // Invalid signature - likely key mismatch
             }
             catch (SecurityTokenInvalidIssuerException ex)
             {
-                Console.WriteLine($"[TokenValidation] Invalid issuer. Expected: {_settings?.Issuer}, Got: {ex.InvalidIssuer}");
+                Console.WriteLine($"[TokenValidation] Invalid issuer ({DescribeForLog(token)}). Expected: {_settings?.Issuer}, Got: {ex.InvalidIssuer}");
                 return null; // Invalid issuer
             }
             catch (SecurityTokenInvalidAudienceException ex)
             {
                 var invalidAudiences = ex.InvalidAudience != null ? string.Join(", ", ex.InvalidAudience) : "(none)";
-                Console.WriteLine($"[TokenValidation] Invalid audience. Expected: {_settings?.Audience}, Got: {invalidAudiences}");
+                Console.WriteLine($"[TokenValidation] Invalid audience ({DescribeForLog(token)}). Expected: {_settings?.Audience}, Got: {invalidAudiences}");
                 return null; // Invalid audience
             }
             catch (SecurityTokenException ex)
             {
-                Console.WriteLine($"[TokenValidation] Security token exception: {ex.GetType().Name} - {ex.Message}");
+                Console.WriteLine($"[TokenValidation] Security token exception ({DescribeForLog(token)}): {ex.GetType().Name} - {ex.Message}");
                 return null; // Invalid token
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[TokenValidation] Unexpected exception: {ex.GetType().Name} - {ex.Message}");
+                Console.WriteLine($"[TokenValidation] Unexpected exception ({DescribeForLog(token)}): {ex.GetType().Name} - {ex.Message}");
                 Console.WriteLine($"[TokenValidation] Stack trace: {ex.StackTrace}");
                 return null;
             }
@@ -332,28 +337,23 @@ namespace ticolinea.stream.service.Helpers
         /// </summary>
         public static string? ExtractToken(HttpRequest request)
         {
-            // Try query parameter first
+            // Try query parameter first. Éxito en silencio — el camino feliz corría
+            // por cada request de cada dispositivo y era relleno puro de syslog.
             if (request.Query.TryGetValue("token", out var queryToken) && !string.IsNullOrEmpty(queryToken))
             {
-                Console.WriteLine($"[TokenValidation] Token extracted from query parameter - Length: {queryToken.ToString().Length}");
                 // URL decode the token in case it's encoded
-                var decoded = WebUtility.UrlDecode(queryToken.ToString());
-                if (decoded != queryToken.ToString())
-                {
-                    Console.WriteLine($"[TokenValidation] Token was URL encoded, decoded length: {decoded.Length}");
-                }
-                return decoded;
+                return WebUtility.UrlDecode(queryToken.ToString());
             }
 
             // Try Authorization header
             var authHeader = request.Headers["Authorization"].FirstOrDefault();
             if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             {
-                var token = authHeader.Substring(7).Trim();
-                Console.WriteLine($"[TokenValidation] Token extracted from Authorization header - Length: {token.Length}");
-                return token;
+                return authHeader.Substring(7).Trim();
             }
 
+            // Este sí se queda: "sin token" es un rechazo inminente y la única pista
+            // de si el cliente intentó query, header, o nada.
             Console.WriteLine($"[TokenValidation] No token found in request - Query has 'token': {request.Query.ContainsKey("token")}, Auth header present: {!string.IsNullOrEmpty(authHeader)}");
             return null;
         }
