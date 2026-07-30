@@ -572,6 +572,10 @@ namespace ticolinea.stream.service.Services
                     .Add($"-analyzeduration {analyzeDuration}", false) // ✅ Moved before -i
                     .Add($"-probesize {stream.ProbeSize}", false) // ✅ Moved before -i
                     .Add($"-i \"{stream.Fuente}\"", false)
+                    // Un solo programa en la salida (ver FfmpegInputPolicy.StreamMapArgs):
+                    // sin esto, fuentes multi-programa duplican video/audio en el segmento
+                    // y los decoders Android fallan. Opt-out por canal: token "map_all".
+                    .Add(FfmpegInputPolicy.StreamMapArgs(parameters), false)
                     .Add("-c:v copy", false)
                     .Add($"{transcodeAudio}", false)
                     .Add($"{pixFmt}", false)
