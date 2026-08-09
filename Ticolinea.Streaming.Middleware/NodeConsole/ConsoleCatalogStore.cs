@@ -8,6 +8,15 @@ public static class ConsoleCatalogStore
 {
     private const int LiveType = 1;
 
+    // streams_tl.id is NOT auto-increment — the panel owns the id space and hands
+    // each channel MAX(id)+1 over its own catalog (StreamService.CreateStream), so
+    // an insert here must supply one. Allocating from a high reserved band keeps
+    // node-local ids permanently out of the panel's reach: MAX(id)+1 on the node
+    // would hand out precisely the id the panel assigns next, and PackageSyncService
+    // upserts by panel id with ON DUPLICATE KEY UPDATE — the collision would
+    // overwrite the local channel and flip it to sincronizado=1.
+    private const int LocalIdBase = 1_000_000;
+
     // ---------- categories ----------
 
     public static async Task<List<ConsoleCategory>> ListCategoriesAsync()
@@ -139,7 +148,25 @@ ORDER BY orden ASC, id ASC;";
         await using var tx = await cnn.BeginTransactionAsync();
         try
         {
-            int id;
+            // Next id in the local band, and the next global orden, in one pass.
+            // Read up front instead of as a subquery inside the INSERT because the
+            // id is needed again below for streams_info and for the response, and
+            // LAST_INSERT_ID() returns 0 on a table with no auto-increment.
+            int id, orden;
+            await using (var next = cnn.CreateCommand())
+            {
+                next.Transaction = (MySqlTransaction)tx;
+                next.CommandText = @"
+SELECT COALESCE(MAX(CASE WHEN id >= @base THEN id END), @base - 1) + 1,
+       COALESCE(MAX(orden), 0) + 1
+FROM streams_tl;";
+                next.Parameters.AddWithValue("@base", LocalIdBase);
+                await using var r = (MySqlDataReader)await next.ExecuteReaderAsync();
+                await r.ReadAsync();
+                id = r.GetInt32(0);
+                orden = r.GetInt32(1);
+            }
+
             await using (var cmd = cnn.CreateCommand())
             {
                 cmd.Transaction = (MySqlTransaction)tx;
@@ -147,18 +174,21 @@ ORDER BY orden ASC, id ASC;";
                 // is contractually forbidden from touching these rows.
                 // Playback defaults mirror PanelController's insert path so a
                 // console-created channel behaves like a panel-created one.
+                // canal_id stays 0 on purpose — Bouquet.cs reads a non-zero
+                // canal_id as "operator-pinned playlist position".
                 cmd.CommandText = @"
 INSERT INTO streams_tl
-  (nombre_stream, fuente_stream, imagen_stream, id_categoria, orden, agregado,
+  (id, nombre_stream, fuente_stream, imagen_stream, id_categoria, orden, agregado,
    probesize_ondemand, es_bajodemanda, tipo, contenedor, habilitado, transcode_audio,
    intervalo, segmentos, framerate, transcode, resolucion, bitrate, canal_epg,
    cgop, gop, canal_id, sincronizado)
 VALUES
-  (@n, @f, @img, @cat, (SELECT COALESCE(MAX(x.orden), 0) + 1 FROM streams_tl x), @added,
+  (@id, @n, @f, @img, @cat, @orden, @added,
    512000, 0, 1, '', @hab, 'aac',
    6, 5, 25, 0, '', '1500k', @epg,
-   0, 0, 0, 0);
-SELECT LAST_INSERT_ID();";
+   0, 0, 0, 0);";
+                cmd.Parameters.AddWithValue("@id", id);
+                cmd.Parameters.AddWithValue("@orden", orden);
                 cmd.Parameters.AddWithValue("@n", input.Name!.Trim());
                 cmd.Parameters.AddWithValue("@f", input.Source!.Trim());
                 cmd.Parameters.AddWithValue("@img", input.Logo?.Trim() ?? "");
@@ -166,7 +196,7 @@ SELECT LAST_INSERT_ID();";
                 cmd.Parameters.AddWithValue("@added", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 cmd.Parameters.AddWithValue("@hab", input.Enabled);
                 cmd.Parameters.AddWithValue("@epg", input.EpgId?.Trim() ?? "");
-                id = Convert.ToInt32(await cmd.ExecuteScalarAsync());
+                await cmd.ExecuteNonQueryAsync();
             }
 
             // Without a streams_info row the supervision query
@@ -191,6 +221,7 @@ WHERE NOT EXISTS (SELECT 1 FROM streams_info WHERE stream_id = @id);";
                 Source = input.Source!.Trim(),
                 Logo = input.Logo?.Trim() ?? "",
                 CategoryId = input.CategoryId,
+                Order = orden,
                 EpgId = input.EpgId?.Trim() ?? "",
                 Enabled = input.Enabled,
                 Seeded = false,
