@@ -332,7 +332,22 @@ Do not update during prime-time viewing hours. Check the current state first:
 ./deploy/tico status "$NODE_SLUG"
 ```
 
-Download and validate the new release as described above, preview it, and then deploy it:
+Then preview and run the update. `update` downloads the GitHub Release for the version, validates
+that the artifact carries both `schema.sql` and the published dll, and hands it to `deploy`:
+
+```bash
+./deploy/tico update "$NODE_SLUG" --dry-run
+./deploy/tico update "$NODE_SLUG"
+```
+
+With no `--version`, it ships the version in this checkout's `VERSION` file — bump, commit, push,
+wait for CI to publish `node-v<version>`, then run the two commands above. Pass `--version 1.5.3`
+to pin a specific release, or `--artifact <dir>` to reuse an already-unpacked one (that directory
+is left in place afterwards; a downloaded one is cleaned up on success and deliberately kept, and
+named, on failure).
+
+`update` requires the GitHub CLI. Without it, download the artifact by hand as described above and
+call `deploy` directly — the two are equivalent, and `deploy` owns the swap either way:
 
 ```bash
 ./deploy/tico deploy "$NODE_SLUG" --tag "$NODE_VERSION" --artifact "$NODE_ARTIFACT_DIR" --dry-run

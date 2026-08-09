@@ -132,6 +132,14 @@ cp deploy/secrets/shared.env.example deploy/secrets/shared.env  # JWT public key
 ./deploy/tico status    <slug>   # health, current release, stream count
 ```
 
+To ship a later release to a node that is already running, `update` fetches the artifact for you
+and hands it to `deploy` (defaults to this checkout's `VERSION`):
+
+```bash
+./deploy/tico update    <slug> --dry-run
+./deploy/tico update    <slug>
+```
+
 Once package sync is deployed, the node pulls its assigned channel catalog from the panel
 (on boot and every 6 hours) and populates its local database automatically — no manual channel
 seeding.
