@@ -39,8 +39,11 @@ teardown() { rm -rf "$FAKEBIN"; }
   # strictly newer than the marker, never an -mmin window (which would still
   # see the OLD process's segments during the verify window), then reduce
   # basenames ({StreamId}_{seq}.ts) to the distinct stream-ID set. It carries
-  # the same pipefail + dir-assert as the baseline capture (consistency;
-  # errors surface) even though its failure direction is fail-safe.
+  # the same pipefail + dir-assert as the baseline capture, but UNLIKE the
+  # baseline it tolerates find's own failure: this side runs every 5s against a
+  # live tmpfs where HLS rotates segments away mid-walk, and its failure
+  # direction is fail-safe, so swallowing that race is correct here and would
+  # not be on the baseline.
   SSH_USER=u SSH_HOST=h PROVIDER=acme run remote_recovered_stream_ids
   [ "$status" -eq 0 ]
   [[ "$output" == *"set -o pipefail"* ]]
@@ -50,9 +53,15 @@ teardown() { rm -rf "$FAKEBIN"; }
   [[ "$output" == *"-printf '%f\\n'"* ]]
   [[ "$output" == *"sed 's/_.*//'"* ]]
   [[ "$output" == *"sort -u"* ]]
+  # Must tolerate a segment rotating away mid-walk: on tmpfs that happens
+  # constantly, and under pipefail it emptied the recovered set — a healthy
+  # node read as recovered=0 and burned a stagnation tick toward rollback.
+  [[ "$output" == *"2>/dev/null || true"* ]]
   [[ "$output" != *"-mmin"* ]]
   [[ "$output" != *"wc -l"* ]]
-  [[ "$output" != *"2>/dev/null"* ]]
+  # The tolerance is scoped to find alone — the dir assert must still be able
+  # to fail the call, so the suppression may not wrap the whole command.
+  [[ "$output" == *"|| exit 9"* ]]
 }
 
 @test "remote_fresh_stream_ids fails closed: pipefail, dir assert, no error suppression" {

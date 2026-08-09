@@ -210,6 +210,15 @@ remote_recovered_stream_ids() {
   # + dir assert mirror remote_fresh_stream_ids for consistency and so real
   # errors still surface in the tool output.
   local out
-  out="$(remote "set -o pipefail; [ -d /srv/${PROVIDER}/streams ] || exit 9; if [ -f /srv/${PROVIDER}/.tico-deploy-marker ]; then find /srv/${PROVIDER}/streams -name '*.ts' -newer /srv/${PROVIDER}/.tico-deploy-marker -printf '%f\n' | sed 's/_.*//' | sort -u; fi")" || return
+  # `{ find ... 2>/dev/null || true; }` is load-bearing, not hygiene. Segments
+  # live on tmpfs and HLS rotates them constantly, so find routinely races a
+  # file between readdir and stat: it prints "No such file or directory" and
+  # exits nonzero. Under pipefail that failed the whole pipeline, the helper
+  # returned early with NO output, and deploy_verify read a thriving node as
+  # "recovered=0" — one wasted attempt and one stagnant tick per occurrence.
+  # Six unlucky attempts in a row would roll back a perfectly healthy deploy.
+  # Tolerating it is consistent with this side's documented fail-safe contract;
+  # the dir assert above still catches the structural errors that matter.
+  out="$(remote "set -o pipefail; [ -d /srv/${PROVIDER}/streams ] || exit 9; if [ -f /srv/${PROVIDER}/.tico-deploy-marker ]; then { find /srv/${PROVIDER}/streams -name '*.ts' -newer /srv/${PROVIDER}/.tico-deploy-marker -printf '%f\n' 2>/dev/null || true; } | sed 's/_.*//' | sort -u; fi")" || return
   printf '%s\n' "$out" | tr -d '\r'
 }

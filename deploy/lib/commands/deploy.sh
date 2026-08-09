@@ -90,7 +90,7 @@ deploy_verify() { # baseline_ids (whitespace-separated; empty => health-only)
   # an accidental rollback): non-numeric or >100 falls back to strict 100.
   local pct="${TICO_VERIFY_PCT:-100}"
   case "$pct" in ''|*[!0-9]*) pct=100;; *) [ "$pct" -gt 100 ] && pct=100;; esac
-  local attempt=0 best=0 stagnant=0 delta code recovered recovered_n missing total miss_n shown
+  local attempt=0 best=0 stagnant=0 delta code recovered recovered_n missing total miss_n shown gate
   # shellcheck disable=SC2086 # intentional word-split to count baseline IDs
   set -- $baseline
   total=$#
@@ -126,16 +126,28 @@ deploy_verify() { # baseline_ids (whitespace-separated; empty => health-only)
     fi
     # Without this the verify window is a long silence ending in a bare failure —
     # indistinguishable from a hang, and no clue whether health or recovery lost.
-    # The (+N) trend and the stagnant counter tell the operator whether the node
-    # is ramping (deltas landing, stagnant resetting) or wedged (stagnant climbing).
+    # The (+N) trend and the gate counter tell the operator whether the node
+    # is ramping (deltas landing, counter resetting) or wedged (counter climbing).
+    #
+    # Report the gate that is actually GOVERNING, not both. While best=0 the
+    # stall decision is `attempt >= zero_tries`; the stagnant counter is running
+    # but inert. Printing "stagnant 7/6" there reads as "already past the limit,
+    # rollback imminent" to an operator watching a node that is merely still
+    # ramping — which is exactly how it was misread in production on a
+    # 78-channel deploy at ~35s in.
+    if [ "$best" -eq 0 ]; then
+      gate="warmup ${attempt}/${zero_tries}"
+    else
+      gate="stagnant ${stagnant}/${stagnant_limit}"
+    fi
     if [ "$code" = "200" ] && [ -n "$missing" ]; then
       # Cap the missing list so one bad deploy of a large node can't flood the log.
       shown="$(printf '%s\n' "$missing" | head -5 | tr '\n' ' ')"
       shown="${shown% }"
       [ "$miss_n" -gt 5 ] && shown="$shown (+$((miss_n - 5)) more)"
-      log "verify: health=200 recovered=${recovered_n}/${total} (+${delta}) missing: ${shown} (attempt ${attempt}/${tries}, stagnant ${stagnant}/${stagnant_limit})"
+      log "verify: health=200 recovered=${recovered_n}/${total} (+${delta}) missing: ${shown} (attempt ${attempt}/${tries}, ${gate})"
     else
-      log "verify: health=${code:-?} recovered=?/${total} (attempt ${attempt}/${tries}, stagnant ${stagnant}/${stagnant_limit})"
+      log "verify: health=${code:-?} recovered=?/${total} (attempt ${attempt}/${tries}, ${gate})"
     fi
     # Stall gate — two regimes. ZERO PHASE (best=0): the node is still in
     # boot+launch (service start, boot sync, 20-slot ffmpeg waves); on a
