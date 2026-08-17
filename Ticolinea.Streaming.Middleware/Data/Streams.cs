@@ -254,7 +254,7 @@ namespace ticolinea.stream.service.Data
                                         FROM streams_tl a
                                         INNER JOIN stream_categories b ON a.id_categoria = b.id
                                         WHERE a.habilitado = 1 AND a.tipo = 1 AND a.canal_id = 0
-                                        ORDER BY a.orden ASC; ";
+                                        ORDER BY a.id ASC; ";
 
                     if (!string.IsNullOrEmpty(idPaqueteId))
                     {
@@ -265,7 +265,7 @@ namespace ticolinea.stream.service.Data
                                     INNER JOIN paquete_tv pp ON p.id_paquete_tv = pp.id_paquete_tv
                                     WHERE a.habilitado = 1 AND a.tipo = 1 AND a.canal_id = 0
                                     AND p.id_paquete_tv = @IdPaqueteTV and pp.activo = 1
-                                    ORDER BY a.orden ASC; ";
+                                    ORDER BY a.id ASC; ";
                     }
 
 

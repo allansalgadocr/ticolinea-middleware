@@ -1,4 +1,5 @@
 using MySqlConnector;
+using ticolinea.stream.service.Helpers;
 
 namespace ticolinea.stream.service.NodeConsole;
 
@@ -119,11 +120,11 @@ SELECT LAST_INSERT_ID();";
         await using var cmd = cnn.CreateCommand();
         // No join to stream_categories: a channel whose category was deleted must
         // still be visible here, precisely so the owner can fix it.
+        // Order is canal_id, the fixed device position (0 = no fixed order).
         cmd.CommandText = @"
-SELECT id, nombre_stream, fuente_stream, imagen_stream, id_categoria, orden, canal_epg, habilitado, sincronizado
+SELECT id, nombre_stream, fuente_stream, imagen_stream, id_categoria, canal_id, canal_epg, habilitado, sincronizado
 FROM streams_tl
-WHERE tipo = 1
-ORDER BY orden ASC, id ASC;";
+WHERE tipo = 1;";
         await using var r = (MySqlDataReader)await cmd.ExecuteReaderAsync();
         while (await r.ReadAsync())
             list.Add(new ConsoleChannel
@@ -138,7 +139,10 @@ ORDER BY orden ASC, id ASC;";
                 Enabled = !r.IsDBNull(7) && r.GetBoolean(7),
                 Seeded = !r.IsDBNull(8) && r.GetBoolean(8),
             });
-        return list;
+
+        // Show the owner the exact order the device will render, using the same
+        // rule the playlist uses: pins at their slot, everything else by id.
+        return PlaylistOrdering.ByFixedPosition(list, c => c.Id, c => c.Order);
     }
 
     public static async Task<ConsoleChannel> CreateChannelAsync(ChannelInput input)
@@ -167,6 +171,11 @@ FROM streams_tl;";
                 orden = r.GetInt32(1);
             }
 
+            // canal_id is the fixed device position; non-positive means "no fixed
+            // order" (0), which the playlist renders in id order. StreamsController
+            // reads a non-zero canal_id as the operator-pinned slot.
+            var canalId = input.Order is > 0 ? input.Order.Value : 0;
+
             await using (var cmd = cnn.CreateCommand())
             {
                 cmd.Transaction = (MySqlTransaction)tx;
@@ -174,8 +183,6 @@ FROM streams_tl;";
                 // is contractually forbidden from touching these rows.
                 // Playback defaults mirror PanelController's insert path so a
                 // console-created channel behaves like a panel-created one.
-                // canal_id stays 0 on purpose — Bouquet.cs reads a non-zero
-                // canal_id as "operator-pinned playlist position".
                 cmd.CommandText = @"
 INSERT INTO streams_tl
   (id, nombre_stream, fuente_stream, imagen_stream, id_categoria, orden, agregado,
@@ -186,9 +193,10 @@ VALUES
   (@id, @n, @f, @img, @cat, @orden, @added,
    512000, 0, 1, '', @hab, 'aac',
    6, 5, 25, 0, '', '1500k', @epg,
-   0, 0, 0, 0);";
+   0, 0, @canalId, 0);";
                 cmd.Parameters.AddWithValue("@id", id);
                 cmd.Parameters.AddWithValue("@orden", orden);
+                cmd.Parameters.AddWithValue("@canalId", canalId);
                 cmd.Parameters.AddWithValue("@n", input.Name!.Trim());
                 cmd.Parameters.AddWithValue("@f", input.Source!.Trim());
                 cmd.Parameters.AddWithValue("@img", input.Logo?.Trim() ?? "");
@@ -221,7 +229,7 @@ WHERE NOT EXISTS (SELECT 1 FROM streams_info WHERE stream_id = @id);";
                 Source = input.Source!.Trim(),
                 Logo = input.Logo?.Trim() ?? "",
                 CategoryId = input.CategoryId,
-                Order = orden,
+                Order = canalId,
                 EpgId = input.EpgId?.Trim() ?? "",
                 Enabled = input.Enabled,
                 Seeded = false,
@@ -250,12 +258,15 @@ WHERE NOT EXISTS (SELECT 1 FROM streams_info WHERE stream_id = @id);";
             previous = scalar == DBNull.Value ? null : (string)scalar;
         }
 
+        // Non-positive means "no fixed order" (canal_id = 0), same rule as create.
+        var canalId = input.Order is > 0 ? input.Order.Value : 0;
+
         await using (var cmd = cnn.CreateCommand())
         {
             cmd.CommandText = @"
 UPDATE streams_tl SET
   nombre_stream = @n, fuente_stream = @f, imagen_stream = @img,
-  id_categoria = @cat, canal_epg = @epg, habilitado = @hab
+  id_categoria = @cat, canal_epg = @epg, habilitado = @hab, canal_id = @canalId
 WHERE id = @id;";
             cmd.Parameters.AddWithValue("@n", input.Name!.Trim());
             cmd.Parameters.AddWithValue("@f", input.Source!.Trim());
@@ -263,6 +274,7 @@ WHERE id = @id;";
             cmd.Parameters.AddWithValue("@cat", (object?)input.CategoryId ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@epg", input.EpgId?.Trim() ?? "");
             cmd.Parameters.AddWithValue("@hab", input.Enabled);
+            cmd.Parameters.AddWithValue("@canalId", canalId);
             cmd.Parameters.AddWithValue("@id", id);
             await cmd.ExecuteNonQueryAsync();
         }

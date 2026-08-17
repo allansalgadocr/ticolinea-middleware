@@ -9,7 +9,7 @@ import type { Category, Channel } from '../types'
 type Draft = ChannelPayload & { id: number | null; seeded: boolean }
 
 const blank: Draft = {
-  id: null, name: '', source: '', logo: '', categoryId: null, epgId: '', enabled: true, seeded: false,
+  id: null, name: '', source: '', logo: '', categoryId: null, epgId: '', enabled: true, order: null, seeded: false,
 }
 
 export function Channels() {
@@ -65,6 +65,7 @@ export function Channels() {
       categoryId: draft.categoryId,
       epgId: draft.epgId,
       enabled: draft.enabled,
+      order: draft.order,
     }
     try {
       if (draft.id == null) {
@@ -190,7 +191,8 @@ export function Channels() {
                     setSaveError(null)
                     setDraft({
                       id: c.id, name: c.name, source: c.source, logo: c.logo,
-                      categoryId: c.categoryId, epgId: c.epgId, enabled: c.enabled, seeded: c.seeded,
+                      categoryId: c.categoryId, epgId: c.epgId, enabled: c.enabled,
+                      order: c.order > 0 ? c.order : null, seeded: c.seeded,
                     })
                   }}
                   className="grid w-full grid-cols-[42px_1fr] items-center gap-3 px-5 py-3 text-left transition-colors duration-150 hover:bg-surface-2/70 md:grid-cols-[42px_1fr_150px_120px_92px]"
@@ -200,6 +202,7 @@ export function Channels() {
                   <span className="min-w-0">
                     <span className="flex items-center gap-2">
                       <span className="truncate text-[14px] font-semibold">{c.name}</span>
+                      {c.order > 0 && <Pill tone="neutral">Pos. {c.order}</Pill>}
                       {!c.seeded && <Pill tone="mint">local</Pill>}
                     </span>
                     <span className="mt-0.5 block truncate font-mono text-[11px] text-tx-3">{c.source}</span>
@@ -298,6 +301,22 @@ export function Channels() {
                 />
               </Field>
             </div>
+
+            <Field
+              label="Posición"
+              hint="Posición fija en el dispositivo (ej. Teletica = 7). Vacío = orden automático por ID."
+            >
+              <input
+                type="number"
+                min={1}
+                className="field !font-mono !text-[12px]"
+                value={draft.order ?? ''}
+                onChange={(e) =>
+                  setDraft({ ...draft, order: e.target.value === '' ? null : Number(e.target.value) })
+                }
+                placeholder="Automático"
+              />
+            </Field>
 
             <Field label="Logo (URL)">
               <input
