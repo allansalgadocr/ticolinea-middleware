@@ -47,17 +47,8 @@ namespace ticolinea.stream.service.Controllers
             List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
             List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
-            // Merge lists: custom ordered channels take priority
-            int maxCustomOrder = bouquetCustom.Any() ? bouquetCustom.Max(c => c.CanalId) : 0;
-            int autoOrder = maxCustomOrder + 1;
-            foreach (var canal in bouquet)
-            {
-                if (canal.CanalId == 0)
-                    canal.CanalId = autoOrder++;
-            }
-
-            bouquet.AddRange(bouquetCustom);
-            bouquet = bouquet.OrderBy(c => c.CanalId).ToList();
+            // Pins land at their fixed slot (canal_id); everything else flows by id.
+            bouquet = PlaylistOrdering.MergeByFixedPosition(bouquet, bouquetCustom);
 
             // Include movies if allowed by token claims
             if (validation.MoviesAllowed)
@@ -118,16 +109,8 @@ namespace ticolinea.stream.service.Controllers
             List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
             List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
-            int maxCustomOrder = bouquetCustom.Any() ? bouquetCustom.Max(c => c.CanalId) : 0;
-            int autoOrder = maxCustomOrder + 1;
-            foreach (var canal in bouquet)
-            {
-                if (canal.CanalId == 0)
-                    canal.CanalId = autoOrder++;
-            }
-
-            bouquet.AddRange(bouquetCustom);
-            bouquet = bouquet.OrderBy(c => c.CanalId).ToList();
+            // Pins land at their fixed slot (canal_id); everything else flows by id.
+            bouquet = PlaylistOrdering.MergeByFixedPosition(bouquet, bouquetCustom);
 
             if (validation.MoviesAllowed)
             {
@@ -216,17 +199,8 @@ namespace ticolinea.stream.service.Controllers
             List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paquetetvId);
             List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paquetetvId);
 
-            foreach (var canal in bouquetCustom)
-            {
-                if (canal.CanalId < bouquet.Count() - 1)
-                {
-                    bouquet.Insert(canal.CanalId - 1, canal);
-                }
-                else
-                {
-                    bouquet.Add(canal);
-                }
-            }
+            // Pins land at their fixed slot (canal_id); everything else flows by id.
+            bouquet = PlaylistOrdering.MergeByFixedPosition(bouquet, bouquetCustom);
 
             //Peliculas
             if ((paquete != null && paquete.Activo == 1 && paquete.Peliculas == 1) || string.IsNullOrEmpty(usuariodb.PaqueteTV))
@@ -275,17 +249,8 @@ namespace ticolinea.stream.service.Controllers
             List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paquetetvId);
             List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paquetetvId);
 
-            foreach (var canal in bouquetCustom)
-            {
-                if (canal.CanalId < bouquet.Count() - 1)
-                {
-                    bouquet.Insert(canal.CanalId - 1, canal);
-                }
-                else
-                {
-                    bouquet.Add(canal);
-                }
-            }
+            // Pins land at their fixed slot (canal_id); everything else flows by id.
+            bouquet = PlaylistOrdering.MergeByFixedPosition(bouquet, bouquetCustom);
 
             //Peliculas
             if ((paquete != null && paquete.Activo == 1 && paquete.Peliculas == 1) || string.IsNullOrEmpty(usuariodb.PaqueteTV))
@@ -341,19 +306,8 @@ namespace ticolinea.stream.service.Controllers
             List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
             List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
-            // Merge lists: custom ordered channels take priority, then fill with unordered channels
-            // Assign high CanalId to unordered channels so they appear after ordered ones
-            int maxCustomOrder = bouquetCustom.Any() ? bouquetCustom.Max(c => c.CanalId) : 0;
-            int autoOrder = maxCustomOrder + 1;
-            foreach (var canal in bouquet)
-            {
-                if (canal.CanalId == 0)
-                    canal.CanalId = autoOrder++;
-            }
-            
-            // Combine and sort by CanalId
-            bouquet.AddRange(bouquetCustom);
-            bouquet = bouquet.OrderBy(c => c.CanalId).ToList();
+            // Pins land at their fixed slot (canal_id); everything else flows by id.
+            bouquet = PlaylistOrdering.MergeByFixedPosition(bouquet, bouquetCustom);
 
             // Include movies if client has access (check package for movies access)
             if (string.IsNullOrEmpty(paqueteTvId))
@@ -421,18 +375,8 @@ namespace ticolinea.stream.service.Controllers
             List<Modelos.Bouquet> bouquet = await Data.Streams.ObtenerCanalesSinOrdenAsync(paqueteTvId);
             List<Modelos.Bouquet> bouquetCustom = await Data.Streams.ObtenerCanalesConOrdenAsync(paqueteTvId);
 
-            // Merge lists: custom ordered channels take priority, then fill with unordered channels
-            int maxCustomOrder = bouquetCustom.Any() ? bouquetCustom.Max(c => c.CanalId) : 0;
-            int autoOrder = maxCustomOrder + 1;
-            foreach (var canal in bouquet)
-            {
-                if (canal.CanalId == 0)
-                    canal.CanalId = autoOrder++;
-            }
-            
-            // Combine and sort by CanalId
-            bouquet.AddRange(bouquetCustom);
-            bouquet = bouquet.OrderBy(c => c.CanalId).ToList();
+            // Pins land at their fixed slot (canal_id); everything else flows by id.
+            bouquet = PlaylistOrdering.MergeByFixedPosition(bouquet, bouquetCustom);
 
             // Include movies if client has access (check package for movies access)
             if (string.IsNullOrEmpty(paqueteTvId))
@@ -530,17 +474,9 @@ namespace ticolinea.stream.service.Controllers
                             });
                         }
 
-                    foreach (var canal in bouquetCustom)
-                    {
-                        if (canal.CanalId < bouquet.Count() - 1)
-                        {
-                            bouquet.Insert(canal.CanalId - 1, canal);
-                        }
-                        else
-                        {
-                            bouquet.Add(canal);
-                        }
-                    }
+                    // Pins land at their fixed slot (canal_id); everything else flows by id.
+                    bouquet = PlaylistOrdering.ByFixedPosition(
+                        bouquet.Concat(bouquetCustom).ToList(), c => c.StreamId, c => c.CanalId);
 
                     contenido.Canales = bouquet;
                 }
@@ -716,17 +652,8 @@ namespace ticolinea.stream.service.Controllers
                         }
                 }
 
-                foreach (var canal in bouquetCustom)
-                {
-                    if (canal.CanalId < bouquet.Count() - 1)
-                    {
-                        bouquet.Insert(canal.CanalId - 1, canal);
-                    }
-                    else
-                    {
-                        bouquet.Add(canal);
-                    }
-                }
+                // Pins land at their fixed slot (canal_id); everything else flows by id.
+                bouquet = PlaylistOrdering.MergeByFixedPosition(bouquet, bouquetCustom);
 
                 using (var cmdPeliculas = cnn.CreateCommand())
                 {

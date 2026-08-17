@@ -83,9 +83,28 @@ Console.WriteLine("========================================");
 builder.Logging.ClearProviders();
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
+// Apagado ordenado. El default del host genérico es 5s, PERO el default de
+// Hangfire (BackgroundJobServerOptions.ShutdownTimeout) es 15s: el host cancelaba
+// el drenaje de Hangfire a los 5s, StopAsync lanzaba OperationCanceledException
+// sin capturar, y .NET abortaba el proceso — SIGABRT + core dump en CADA parada
+// (visto en producción: "Main process exited, code=dumped, status=6/ABRT" en el
+// reinicio nocturno de las 03:00 y en cada deploy).
+//
+// El core dump no era cosmético: mataba los ~95 ffmpeg de golpe y todos volvían a
+// hacer handshake a la vez, justo el patrón que el borde de red del cliente no
+// aguanta. Host 30s > Hangfire 15s deja que el drenaje termine dentro de su
+// ventana; el orden entre ambos es lo que importa, no los valores exactos.
+builder.Services.Configure<HostOptions>(options =>
+{
+    options.ShutdownTimeout = TimeSpan.FromSeconds(30);
+});
+
 // Add services to the container.
 builder.Services.AddHangfire(x => x.UseInMemoryStorage());
-builder.Services.AddHangfireServer();
+builder.Services.AddHangfireServer(options =>
+{
+    options.ShutdownTimeout = TimeSpan.FromSeconds(15);
+});
 builder.Services.AddHealthChecks();
 
 builder.Services.AddControllers();
@@ -192,4 +211,19 @@ app.MapControllers();
 // Registered AFTER MapControllers so it can never shadow an /api route.
 ticolinea.stream.service.NodeConsole.ConsoleHosting.MapConsoleSpa(app);
 
-await app.RunAsync();
+// Defensa en profundidad para el apagado. El timeout de arriba resuelve la causa
+// (host 30s > Hangfire 15s), pero si algún hosted service llegara a pasarse igual,
+// la excepción sale sin capturar de RunAsync y .NET aborta el proceso: SIGABRT,
+// core dump, y systemd reporta 'core-dump' en vez de una parada limpia.
+//
+// Un drenaje lento en el apagado no es una falla del nodo — el trabajo ya terminó.
+// Se registra y se sale con 0: systemd ve una parada normal, el reinicio nocturno
+// no queda marcado como fallo, y no se escribe un core de un proceso de ~17 GB.
+try
+{
+    await app.RunAsync();
+}
+catch (OperationCanceledException)
+{
+    Console.WriteLine("[Shutdown] Un hosted service excedió la ventana de apagado; saliendo limpio.");
+}

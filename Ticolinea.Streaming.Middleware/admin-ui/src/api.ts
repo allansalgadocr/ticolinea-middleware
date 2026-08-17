@@ -67,6 +67,8 @@ export interface ChannelPayload {
   categoryId: number | null
   epgId: string
   enabled: boolean
+  /** Fixed device position (canal_id). null / 0 = no fixed order. */
+  order: number | null
 }
 
 export interface NewUserPayload {

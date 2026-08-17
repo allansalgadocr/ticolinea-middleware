@@ -22,6 +22,8 @@ public class ChannelInput
     public int? CategoryId { get; set; }
     public string? EpgId { get; set; }
     public bool Enabled { get; set; } = true;
+    /// <summary>Fixed device position (canal_id). null / 0 / negative all mean "no fixed order".</summary>
+    public int? Order { get; set; }
 }
 
 public class ConsoleCategory
