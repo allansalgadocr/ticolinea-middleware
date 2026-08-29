@@ -62,6 +62,12 @@ namespace ticolinea.stream.service.Controllers
             foreach (var chn in bouquet)
             {
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.EsPlaceholder)
+                {
+                    // Synthetic slot-filler: plays the static "no channel" slate.
+                    sb.AppendLine($"{providerBaseUrl}/Live/Placeholder.m3u8\r\n");
+                    continue;
+                }
                 if (chn.Tipo == 1)
                 {
                     sb.AppendLine($"{providerBaseUrl}/Live/StreamingByToken/{chn.Id}.m3u8{tokenSuffix}\r\n");
@@ -122,6 +128,12 @@ namespace ticolinea.stream.service.Controllers
             foreach (var chn in bouquet)
             {
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.EsPlaceholder)
+                {
+                    // Synthetic slot-filler: plays the static "no channel" slate.
+                    sb.AppendLine($"{providerBaseUrl}/Live/Placeholder.m3u8\r\n");
+                    continue;
+                }
                 if (chn.Tipo == 1)
                 {
                     sb.AppendLine($"{providerBaseUrl}/Live/StreamingMovilByToken/{chn.Id}{tokenSuffix}\r\n");
@@ -212,6 +224,12 @@ namespace ticolinea.stream.service.Controllers
             foreach (var chn in bouquet)
             {
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.EsPlaceholder)
+                {
+                    // Synthetic slot-filler: plays the static "no channel" slate.
+                    sb.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/Live/Placeholder.m3u8\r\n");
+                    continue;
+                }
                 if (chn.Tipo == 1)
                 {
                     sb.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/Live/StreamingMovil/{chn.Id}/{usuario}/{password}/{macAddress}\r\n");
@@ -262,6 +280,12 @@ namespace ticolinea.stream.service.Controllers
             foreach (var chn in bouquet)
             {
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.EsPlaceholder)
+                {
+                    // Synthetic slot-filler: plays the static "no channel" slate.
+                    sb.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/Live/Placeholder.m3u8\r\n");
+                    continue;
+                }
                 if (chn.Tipo == 1)
                 {
                     sb.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/Live/Streaming/{chn.Id}/{usuario}/{password}.m3u8\r\n");
@@ -329,6 +353,12 @@ namespace ticolinea.stream.service.Controllers
             foreach (var chn in bouquet)
             {
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.EsPlaceholder)
+                {
+                    // Synthetic slot-filler: plays the static "no channel" slate.
+                    sb.AppendLine($"{providerBaseUrl}/Live/Placeholder.m3u8\r\n");
+                    continue;
+                }
                 if (chn.Tipo == 1)
                 {
                     // Use provider URL for live streaming
@@ -398,6 +428,12 @@ namespace ticolinea.stream.service.Controllers
             foreach (var chn in bouquet)
             {
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.EsPlaceholder)
+                {
+                    // Synthetic slot-filler: plays the static "no channel" slate.
+                    sb.AppendLine($"{providerBaseUrl}/Live/Placeholder.m3u8\r\n");
+                    continue;
+                }
                 if (chn.Tipo == 1)
                 {
                     // Use provider URL for live streaming
@@ -685,6 +721,12 @@ namespace ticolinea.stream.service.Controllers
             foreach (var chn in bouquet)
             {
                 sb.AppendLine($"#EXTINF:-1 tvg-id=\"{chn.CanalEPG}\" tvg-name=\"{chn.Nombre}\" tvg-logo=\"{chn.Imagen}\" group-title=\"{chn.Categoria}\",{chn.Nombre}\r\n");
+                if (chn.EsPlaceholder)
+                {
+                    // Synthetic slot-filler: plays the static "no channel" slate.
+                    sb.AppendLine($"{Constantes.Global.SEGMENT_BASE_URL}/Live/Placeholder.m3u8\r\n");
+                    continue;
+                }
                 if (chn.Tipo == 1)
                 {
 #if !DEBUG

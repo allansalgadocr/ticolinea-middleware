@@ -10,5 +10,9 @@
         public string Contenedor { get; set; } = "";
         public string CanalEPG { get; set; } = "";
         public int CanalId { get; set; } = 0;
+
+        // True for synthetic slot-filler entries emitted by PlaylistOrdering so a
+        // pinned channel can sit exactly on its number. Never persisted.
+        public bool EsPlaceholder { get; set; } = false;
     }
 }

@@ -51,7 +51,7 @@ public class ConsoleCatalogController : ControllerBase
     [HttpPost("channels")]
     public async Task<IActionResult> CreateChannel([FromBody] ChannelInput input)
     {
-        var error = ConsoleValidation.Channel(input?.Name, input?.Source);
+        var error = ConsoleValidation.Channel(input?.Name, input?.Source, input?.Order);
         if (error != null) return BadRequest(new { message = error });
 
         var created = await ConsoleCatalogStore.CreateChannelAsync(input!);
@@ -62,11 +62,13 @@ public class ConsoleCatalogController : ControllerBase
     [HttpPut("channels/{id:int}")]
     public async Task<IActionResult> UpdateChannel(int id, [FromBody] ChannelInput input)
     {
-        var error = ConsoleValidation.Channel(input?.Name, input?.Source);
+        var error = ConsoleValidation.Channel(input?.Name, input?.Source, input?.Order);
         if (error != null) return BadRequest(new { message = error });
 
-        var (found, previousSource) = await ConsoleCatalogStore.UpdateChannelAsync(id, input!);
+        var (found, previousSource, swappedWithId) = await ConsoleCatalogStore.UpdateChannelAsync(id, input!);
         if (!found) return NotFound(new { message = "El canal no existe." });
+        if (swappedWithId != null)
+            _log.Info($"Console: channel {id} took position {input!.Order} from channel {swappedWithId} (auto-swap) by {Actor()}.");
 
         // A source change only reaches the DB; the running FFmpeg process was
         // launched from the OLD fuente and keeps serving it until restarted.
@@ -78,7 +80,7 @@ public class ConsoleCatalogController : ControllerBase
             _log.Info($"Console: channel {id} source changed by {Actor()}; restart {(restarted ? "ok" : "skipped/failed")}.");
         }
 
-        return Ok(new { sourceChanged = previousSource != null, restarted });
+        return Ok(new { sourceChanged = previousSource != null, restarted, swappedWith = swappedWithId });
     }
 
     [HttpDelete("channels/{id:int}")]

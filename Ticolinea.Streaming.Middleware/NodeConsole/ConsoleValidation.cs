@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using ticolinea.stream.service.Helpers;
 
 namespace ticolinea.stream.service.NodeConsole;
 
@@ -19,8 +20,11 @@ public static class ConsoleValidation
     public const int MaxCategoryName = 60;
     public const int MinPassword = 12;
 
-    public static string? Channel(string? name, string? source)
+    public static string? Channel(string? name, string? source, int? order = null)
     {
+        if (order > PlaylistOrdering.MaxPosition)
+            return $"La posición máxima es {PlaylistOrdering.MaxPosition}.";
+
         var n = (name ?? "").Trim();
         if (n.Length == 0) return "El nombre del canal es obligatorio.";
         if (n.Length > MaxChannelName) return $"El nombre del canal no puede superar {MaxChannelName} caracteres.";

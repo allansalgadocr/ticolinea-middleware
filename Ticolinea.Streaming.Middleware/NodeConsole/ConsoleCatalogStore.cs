@@ -243,26 +243,38 @@ WHERE NOT EXISTS (SELECT 1 FROM streams_info WHERE stream_id = @id);";
     }
 
     /// <summary>Returns the previous source when the update changed it, so the caller can bounce the stream.</summary>
-    public static async Task<(bool Found, string? PreviousSource)> UpdateChannelAsync(int id, ChannelInput input)
+    public static async Task<(bool Found, string? PreviousSource, int? SwappedWithId)> UpdateChannelAsync(int id, ChannelInput input)
     {
         await using var cnn = new MySqlConnection(Constantes.Global.MARIADB_CONN);
         await cnn.OpenAsync();
+        await using var tx = await cnn.BeginTransactionAsync();
 
         string? previous;
+        int oldCanalId;
         await using (var read = cnn.CreateCommand())
         {
-            read.CommandText = "SELECT fuente_stream FROM streams_tl WHERE id = @id AND tipo = 1;";
+            read.Transaction = (MySqlTransaction)tx;
+            read.CommandText = "SELECT fuente_stream, canal_id FROM streams_tl WHERE id = @id AND tipo = 1;";
             read.Parameters.AddWithValue("@id", id);
-            var scalar = await read.ExecuteScalarAsync();
-            if (scalar == null) return (false, null);
-            previous = scalar == DBNull.Value ? null : (string)scalar;
+            await using var r = (MySqlDataReader)await read.ExecuteReaderAsync();
+            if (!await r.ReadAsync()) { await tx.RollbackAsync(); return (false, null, null); }
+            previous = r.IsDBNull(0) ? null : r.GetString(0);
+            oldCanalId = r.IsDBNull(1) ? 0 : r.GetInt32(1);
         }
 
         // Non-positive means "no fixed order" (canal_id = 0), same rule as create.
         var canalId = input.Order is > 0 ? input.Order.Value : 0;
 
+        // Auto-swap: taking a POSICIÓN another channel holds gives that channel
+        // this one's old number (or unpins it) — like a set-top box renumber.
+        // Keeps positions unique so every pin can land exactly.
+        var swappedWithId = canalId > 0 && canalId != oldCanalId
+            ? await SwapPositionOwnerAsync(cnn, (MySqlTransaction)tx, id, canalId, oldCanalId)
+            : null;
+
         await using (var cmd = cnn.CreateCommand())
         {
+            cmd.Transaction = (MySqlTransaction)tx;
             cmd.CommandText = @"
 UPDATE streams_tl SET
   nombre_stream = @n, fuente_stream = @f, imagen_stream = @img,
@@ -279,8 +291,35 @@ WHERE id = @id;";
             await cmd.ExecuteNonQueryAsync();
         }
 
+        await tx.CommitAsync();
         var changed = !string.Equals(previous?.Trim(), input.Source!.Trim(), StringComparison.Ordinal);
-        return (true, changed ? previous : null);
+        return (true, changed ? previous : null, swappedWithId);
+    }
+
+    // If another live channel already holds @canalId, hand it @oldCanalId
+    // (0 unpins it) and report its id; null when the slot was free.
+    private static async Task<int?> SwapPositionOwnerAsync(
+        MySqlConnection cnn, MySqlTransaction tx, int id, int canalId, int oldCanalId)
+    {
+        int? ownerId = null;
+        await using (var find = cnn.CreateCommand())
+        {
+            find.Transaction = tx;
+            find.CommandText = "SELECT id FROM streams_tl WHERE tipo = 1 AND canal_id = @canalId AND id <> @id LIMIT 1;";
+            find.Parameters.AddWithValue("@canalId", canalId);
+            find.Parameters.AddWithValue("@id", id);
+            var scalar = await find.ExecuteScalarAsync();
+            if (scalar != null && scalar != DBNull.Value) ownerId = Convert.ToInt32(scalar);
+        }
+        if (ownerId == null) return null;
+
+        await using var give = cnn.CreateCommand();
+        give.Transaction = tx;
+        give.CommandText = "UPDATE streams_tl SET canal_id = @oldCanalId WHERE id = @ownerId;";
+        give.Parameters.AddWithValue("@oldCanalId", oldCanalId);
+        give.Parameters.AddWithValue("@ownerId", ownerId.Value);
+        await give.ExecuteNonQueryAsync();
+        return ownerId;
     }
 
     public static async Task<bool> DeleteChannelAsync(int id)

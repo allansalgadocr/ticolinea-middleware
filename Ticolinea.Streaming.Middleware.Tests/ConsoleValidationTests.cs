@@ -94,4 +94,21 @@ public class ConsoleValidationTests
     {
         ConsoleValidation.NewUser("operaciones", "unaClaveLarga123").Should().BeNull();
     }
+
+    [Fact]
+    public void Channel_rejects_a_position_beyond_the_cap()
+    {
+        var error = ConsoleValidation.Channel("ESPN", "http://x/a.m3u8",
+            ticolinea.stream.service.Helpers.PlaylistOrdering.MaxPosition + 1);
+        error.Should().NotBeNull();
+        error.Should().Contain("posición");
+    }
+
+    [Fact]
+    public void Channel_accepts_a_position_at_the_cap_and_none_at_all()
+    {
+        ConsoleValidation.Channel("ESPN", "http://x/a.m3u8",
+            ticolinea.stream.service.Helpers.PlaylistOrdering.MaxPosition).Should().BeNull();
+        ConsoleValidation.Channel("ESPN", "http://x/a.m3u8", null).Should().BeNull();
+    }
 }

@@ -366,6 +366,25 @@ namespace ticolinea.stream.service.Controllers
             return playlistOutput;
         }
 
+        // ---- Placeholder slate --------------------------------------------
+        // Empty numbered slots in the device playlist point here. Serves a
+        // static 4s "no channel" clip; unauthenticated on purpose — it is not
+        // content, and the entries exist only to keep channel numbers exact.
+
+        [ResponseCache(Location = ResponseCacheLocation.Any, Duration = 3600)]
+        [HttpGet("/Live/Placeholder.m3u8")]
+        public IActionResult PlaceholderPlaylist()
+            => Content(Helpers.PlaceholderSlate.PlaylistBody, "application/x-mpegurl", Encoding.UTF8);
+
+        [ResponseCache(Location = ResponseCacheLocation.Any, Duration = 3600)]
+        [HttpGet("/Live/Placeholder0.ts")]
+        public async Task<IActionResult> PlaceholderSegment()
+        {
+            if (!await Helpers.PlaceholderSlate.EnsureSegmentAsync())
+                return NotFound();
+            return PhysicalFile(Helpers.PlaceholderSlate.SegmentPath, "video/mp2t");
+        }
+
         private void ActualizarActividadMovil(int chID, string usuario, string password, Modelos.Usuario? usuariodb, string macAddress)
         {
             var ip = "";
