@@ -867,6 +867,7 @@ namespace ticolinea.stream.service
 
                 var files = Directory.GetFiles(streamsFolder)
                     .Select(f => new FileInfo(f))
+                    .Where(f => !Helpers.StreamFileCleanup.IsProtected(f.Name))
                     .Where(f => 
                         // Delete files older than 20 minutes using LastWriteTime (more reliable than CreationTime)
                         f.LastWriteTime < DateTime.Now.AddMinutes(-20) ||

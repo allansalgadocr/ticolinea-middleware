@@ -111,4 +111,10 @@ public class ConsoleValidationTests
             ticolinea.stream.service.Helpers.PlaylistOrdering.MaxPosition).Should().BeNull();
         ConsoleValidation.Channel("ESPN", "http://x/a.m3u8", null).Should().BeNull();
     }
+
+    [Fact]
+    public void Channel_rejects_a_negative_position()
+    {
+        ConsoleValidation.Channel("ESPN", "http://x/a.m3u8", -5).Should().NotBeNull();
+    }
 }

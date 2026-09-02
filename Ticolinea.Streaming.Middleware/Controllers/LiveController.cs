@@ -376,12 +376,14 @@ namespace ticolinea.stream.service.Controllers
         public IActionResult PlaceholderPlaylist()
             => Content(Helpers.PlaceholderSlate.PlaylistBody, "application/x-mpegurl", Encoding.UTF8);
 
-        [ResponseCache(Location = ResponseCacheLocation.Any, Duration = 3600)]
         [HttpGet("/Live/Placeholder0.ts")]
         public async Task<IActionResult> PlaceholderSegment()
         {
+            // Cache header only on success — a cached 404/failure would pin a
+            // transient generation error at the edge for an hour.
             if (!await Helpers.PlaceholderSlate.EnsureSegmentAsync())
                 return NotFound();
+            Response.Headers.CacheControl = "public, max-age=3600, immutable";
             return PhysicalFile(Helpers.PlaceholderSlate.SegmentPath, "video/mp2t");
         }
 

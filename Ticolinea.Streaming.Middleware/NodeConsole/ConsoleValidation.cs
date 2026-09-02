@@ -24,6 +24,8 @@ public static class ConsoleValidation
     {
         if (order > PlaylistOrdering.MaxPosition)
             return $"La posición máxima es {PlaylistOrdering.MaxPosition}.";
+        if (order < 0)
+            return "La posición no puede ser negativa.";
 
         var n = (name ?? "").Trim();
         if (n.Length == 0) return "El nombre del canal es obligatorio.";

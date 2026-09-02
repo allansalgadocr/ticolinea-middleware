@@ -44,13 +44,17 @@ public static class PlaceholderSlate
 
     private static async Task<bool> GenerateAsync(string videoGraph)
     {
+        // Encode to a temp name and move atomically: File.Exists(SegmentPath)
+        // is the fast-path check outside the gate, so the final path must only
+        // ever hold a COMPLETE file (a half-written one would be served — and
+        // cached — as the slate).
+        var tmp = SegmentPath + ".tmp";
+        Process? proc = null;
         try
         {
             var psi = new ProcessStartInfo
             {
                 FileName = Constantes.Global.FFMPEG_PATH,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
                 UseShellExecute = false,
             };
             foreach (var a in new[]
@@ -58,19 +62,32 @@ public static class PlaceholderSlate
                 "-y", "-f", "lavfi", "-i", videoGraph,
                 "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
                 "-t", "4", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "32k", "-f", "mpegts", SegmentPath,
+                "-c:a", "aac", "-b:a", "32k", "-f", "mpegts", tmp,
             }) psi.ArgumentList.Add(a);
 
-            using var proc = Process.Start(psi);
+            proc = Process.Start(psi);
             if (proc == null) return false;
-            await proc.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token);
-            return proc.ExitCode == 0 && File.Exists(SegmentPath);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await proc.WaitForExitAsync(timeout.Token);
+            if (proc.ExitCode != 0 || !File.Exists(tmp)) { TryDelete(tmp); return false; }
+            File.Move(tmp, SegmentPath, overwrite: true);
+            return true;
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[PlaceholderSlate] generation failed: {ex.Message}");
-            try { if (File.Exists(SegmentPath)) File.Delete(SegmentPath); } catch { }
+            try { if (proc is { HasExited: false }) proc.Kill(entireProcessTree: true); } catch { }
+            TryDelete(tmp);
             return false;
         }
+        finally
+        {
+            proc?.Dispose();
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
 }

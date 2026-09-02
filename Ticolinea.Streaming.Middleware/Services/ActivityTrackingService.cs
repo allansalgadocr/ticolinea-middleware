@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using ticolinea.stream.service.Helpers;
@@ -10,7 +9,7 @@ public class ActivityTrackingService : IDisposable
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly string _panelApiUrl;
     private readonly string _panelApiKey;
-    private readonly ConcurrentDictionary<string, long> _lastReportTimes = new();
+    private readonly Helpers.ReportThrottle _throttle = new(ThrottleSeconds);
     private readonly Timer _evictionTimer;
     private const int ThrottleSeconds = 30;
     private const int EvictionIntervalMs = 300_000; // 5 minutes
@@ -42,13 +41,12 @@ public class ActivityTrackingService : IDisposable
         if (!int.TryParse(validation.Sub, out var clientId) || clientId <= 0)
             return;
 
-        var key = $"{clientId}:{streamId}";
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-        if (_lastReportTimes.TryGetValue(key, out var lastTime) && (now - lastTime) < ThrottleSeconds)
+        // Per-client throttle: heartbeats are limited, channel CHANGES always
+        // report immediately (including flip-backs within the window).
+        if (!_throttle.ShouldReport(clientId, streamId, now, validation.Mac))
             return;
-
-        _lastReportTimes[key] = now;
 
         // Extract request data synchronously (before request is disposed)
         var clientIp = "";
@@ -75,13 +73,10 @@ public class ActivityTrackingService : IDisposable
         if (validation.ClientId <= 0)
             return;
 
-        var key = $"{validation.ClientId}:{streamId}";
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-        if (_lastReportTimes.TryGetValue(key, out var lastTime) && (now - lastTime) < ThrottleSeconds)
+        if (!_throttle.ShouldReport(validation.ClientId, streamId, now, macAddress))
             return;
-
-        _lastReportTimes[key] = now;
 
         var clientIp = "";
         if (request.Headers.TryGetValue("X-Real-IP", out var realIp))
@@ -133,18 +128,7 @@ public class ActivityTrackingService : IDisposable
 
     private void EvictStaleEntries(object? state)
     {
-        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var evicted = 0;
-
-        foreach (var kvp in _lastReportTimes)
-        {
-            if ((now - kvp.Value) > EvictionMaxAgeSeconds)
-            {
-                _lastReportTimes.TryRemove(kvp.Key, out _);
-                evicted++;
-            }
-        }
-
+        var evicted = _throttle.Evict(DateTimeOffset.UtcNow.ToUnixTimeSeconds(), EvictionMaxAgeSeconds);
         if (evicted > 0)
             Console.WriteLine($"[ActivityTracking] Evicted {evicted} stale throttle entries");
     }

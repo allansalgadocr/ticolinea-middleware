@@ -176,6 +176,12 @@ FROM streams_tl;";
             // reads a non-zero canal_id as the operator-pinned slot.
             var canalId = input.Order is > 0 ? input.Order.Value : 0;
 
+            // Same auto-swap as UpdateChannelAsync: creating a channel on an
+            // occupied POSICIÓN unpins the previous holder (new row id is not
+            // assigned yet in the table, so exclude nothing extra: @id below).
+            if (canalId > 0)
+                await SwapPositionOwnerAsync(cnn, (MySqlTransaction)tx, id, canalId, oldCanalId: 0);
+
             await using (var cmd = cnn.CreateCommand())
             {
                 cmd.Transaction = (MySqlTransaction)tx;
@@ -254,7 +260,7 @@ WHERE NOT EXISTS (SELECT 1 FROM streams_info WHERE stream_id = @id);";
         await using (var read = cnn.CreateCommand())
         {
             read.Transaction = (MySqlTransaction)tx;
-            read.CommandText = "SELECT fuente_stream, canal_id FROM streams_tl WHERE id = @id AND tipo = 1;";
+            read.CommandText = "SELECT fuente_stream, canal_id FROM streams_tl WHERE id = @id AND tipo = 1 FOR UPDATE;";
             read.Parameters.AddWithValue("@id", id);
             await using var r = (MySqlDataReader)await read.ExecuteReaderAsync();
             if (!await r.ReadAsync()) { await tx.RollbackAsync(); return (false, null, null); }
@@ -305,7 +311,7 @@ WHERE id = @id;";
         await using (var find = cnn.CreateCommand())
         {
             find.Transaction = tx;
-            find.CommandText = "SELECT id FROM streams_tl WHERE tipo = 1 AND canal_id = @canalId AND id <> @id LIMIT 1;";
+            find.CommandText = "SELECT id FROM streams_tl WHERE tipo = 1 AND canal_id = @canalId AND id <> @id LIMIT 1 FOR UPDATE;";
             find.Parameters.AddWithValue("@canalId", canalId);
             find.Parameters.AddWithValue("@id", id);
             var scalar = await find.ExecuteScalarAsync();
